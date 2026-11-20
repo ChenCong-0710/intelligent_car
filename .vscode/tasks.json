@@ -1,0 +1,11 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {"label":"Build Debug","type":"process","command":"powershell.exe","args":["-NoProfile","-ExecutionPolicy","Bypass","-File","${workspaceFolder}/tools/build.ps1","-Configuration","Debug"],"group":{"kind":"build","isDefault":true},"problemMatcher":["$gcc"]},
+    {"label":"Build Release","type":"process","command":"powershell.exe","args":["-NoProfile","-ExecutionPolicy","Bypass","-File","${workspaceFolder}/tools/build.ps1","-Configuration","Release"],"problemMatcher":["$gcc"]},
+    {"label":"Test Controller","type":"process","command":"powershell.exe","args":["-NoProfile","-ExecutionPolicy","Bypass","-File","${workspaceFolder}/tools/build.ps1","-Test"],"problemMatcher":["$gcc"]},
+    {"label":"Flash Debug (ST-LINK)","type":"process","command":"powershell.exe","args":["-NoProfile","-ExecutionPolicy","Bypass","-File","${workspaceFolder}/tools/build.ps1","-Configuration","Debug","-Flash"],"problemMatcher":["$gcc"]},
+    {"label":"Flash Release (ST-LINK)","type":"process","command":"powershell.exe","args":["-NoProfile","-ExecutionPolicy","Bypass","-File","${workspaceFolder}/tools/build.ps1","-Configuration","Release","-Flash"],"problemMatcher":["$gcc"]},
+    {"label":"Launch Bluetooth Host Station","type":"process","command":"python","args":["${workspaceFolder}/tools/host_station.py"]}
+  ]
+}

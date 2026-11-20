@@ -1,0 +1,19 @@
+{
+  "date": "2026-11-16",
+  "mcu": "STM32G474VET6",
+  "project_uuid": "a0feb5775ad144edbab8de7fdf011c6c",
+  "schematic_uuid": "16af513a13c79f74",
+  "source": "EasyEDA live main expansion schematic; read only export",
+  "netlist_sha256": "38b424a8ebf3a895ef40058a23af06b5698345f00495dcc7e63c46e8395f4d13",
+  "core_header_reference": "DataSheet/STM32G474VET6V1.1原理图.pdf; physical header labels cross-checked using prior header CSV",
+  "left_encoder": "PB6/PB7 TIM4",
+  "right_encoder": "PA6/PA7 TIM3",
+  "driver_sleep": "POR_OK (not PC1)",
+  "ir_enable": "POR_OK (not MCU GPIO)",
+  "firmware_flash_or_motor_run_performed": false,
+  "wheel_assumptions": {
+    "diameter_mm": 43,
+    "counts_per_rev": 840,
+    "origin": "workspace task/design documents, physical calibration still required"
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "source_archive": "C:\\Users\\Seraphina\\STM32Cube\\Repository\\stm32cube_fw_g4_v162.zip",
+  "archive_sha256": "073fc9e0b8b0b7836220c23515a896bf19261f623f1662e539836465b8cd484a",
+  "archive_root": "STM32Cube_FW_G4_V1.6.0/",
+  "files_selected": 120,
+  "official_sources": [
+    "https://github.com/STMicroelectronics/STM32CubeG4",
+    "https://github.com/STMicroelectronics/stm32g4xx-hal-driver"
+  ],
+  "cmsis_core_source": "C:\\Users\\Seraphina\\STM32Cube\\Repository\\STM32Cube_FW_F1_V1.8.7\\Drivers\\CMSIS",
+  "cmsis_core_note": "Architecture-independent CMSIS Core headers copied from installed official STM32CubeF1 package; G4 archive omits Core headers.",
+  "local_normalization": [
+    {
+      "file": "Drivers\\CMSIS\\Device\\ST\\STM32G4xx\\Include\\stm32g4xx.h",
+      "change": "CP1252 comment punctuation converted to UTF-8 for clangd; executable tokens unchanged",
+      "original_sha256": "493603c55af538bc431713b4f9880b5e242447cea232ca7459d3ca59c71dd48d",
+      "normalized_sha256": "6409fbcfcc6738cf9cbf7cbbb95fa16b1373e713c721eaba61d2721b8dad34ab"
+    }
+  ]
+}

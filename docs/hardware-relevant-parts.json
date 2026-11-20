@@ -1,0 +1,1790 @@
+{
+  "J_CORE1": {
+    "props": {
+      "Add into BOM": "yes",
+      "Convert to PCB": "yes",
+      "Symbol": "0383cc418ec2b52e",
+      "Designator": "J_C1",
+      "Device": "c3bc5d7e4c201170",
+      "Footprint": "6a10510cc5b0674d",
+      "Name": "={Manufacturer Part}",
+      "Unique ID": "MAIN_J_CORE1",
+      "LCSC Part Name": "",
+      "Supplier Part": "HC-PM254-8.5H-2X22PZ",
+      "Manufacturer": "HC(虹成电子)",
+      "Manufacturer Part": "HC-PM254-8.5H-2x22PZ",
+      "Supplier Footprint": "",
+      "JLCPCB Part Class": "",
+      "Datasheet": "",
+      "Supplier": "LCSC",
+      "Holes Structure": "",
+      "Pitch": "",
+      "Row Spacing": "",
+      "Circular Hole / Square Hole": "",
+      "Mounting Type": "",
+      "Number of Rows": "",
+      "Number of Positions": "",
+      "Current Rating": "",
+      "Voltage Rating (Max)": "",
+      "Holes Direction": "",
+      "Insulation Height": "",
+      "Contact Material": "",
+      "Contact Plating": "",
+      "Operating Temperature": "",
+      "PIN Length": "",
+      "Description": "",
+      "3D Model": "8628157f506e414985f81877c3f45c3f",
+      "3D Model Title": "HDR-TH_44P-P2.54-F-LI-2X22P",
+      "3D Model Transform": "2199.99552,200,0,0,0,0,0,0,-118.11",
+      "Supplementary Features": "",
+      "Value": "HC-PM254-8.5H-2x22PZ",
+      "Group ID": "",
+      "Channel ID": "$2I2",
+      "Reuse Block": "",
+      "DeviceName": "HC-PM254-8.5H-2x22PZ",
+      "FootprintName": "HDR-TH_44P-P2.54-V-F-R2-C22-S2.54"
+    },
+    "pinInfoMap": {
+      "1": {
+        "name": "1",
+        "number": "1",
+        "net": "SYS_5V",
+        "props": {
+          "Pin Number": "1"
+        }
+      },
+      "2": {
+        "name": "2",
+        "number": "2",
+        "net": "SYS_5V",
+        "props": {
+          "Pin Number": "2"
+        }
+      },
+      "3": {
+        "name": "3",
+        "number": "3",
+        "net": "MCU_3V3",
+        "props": {
+          "Pin Number": "3"
+        }
+      },
+      "4": {
+        "name": "4",
+        "number": "4",
+        "net": "MCU_3V3",
+        "props": {
+          "Pin Number": "4"
+        }
+      },
+      "5": {
+        "name": "5",
+        "number": "5",
+        "net": "",
+        "props": {
+          "Pin Number": "5"
+        }
+      },
+      "6": {
+        "name": "6",
+        "number": "6",
+        "net": "MCU_US_ECHO",
+        "props": {
+          "Pin Number": "6"
+        }
+      },
+      "7": {
+        "name": "7",
+        "number": "7",
+        "net": "MCU_SERVO_PWR_EN",
+        "props": {
+          "Pin Number": "7"
+        }
+      },
+      "8": {
+        "name": "8",
+        "number": "8",
+        "net": "MCU_LASER_EN",
+        "props": {
+          "Pin Number": "8"
+        }
+      },
+      "9": {
+        "name": "9",
+        "number": "9",
+        "net": "MCU_BUZZER",
+        "props": {
+          "Pin Number": "9"
+        }
+      },
+      "10": {
+        "name": "10",
+        "number": "10",
+        "net": "BT_KEY_MCU",
+        "props": {
+          "Pin Number": "10"
+        }
+      },
+      "11": {
+        "name": "11",
+        "number": "11",
+        "net": "BT_RXD_MCU",
+        "props": {
+          "Pin Number": "11"
+        }
+      },
+      "12": {
+        "name": "12",
+        "number": "12",
+        "net": "BT_TXD_MCU",
+        "props": {
+          "Pin Number": "12"
+        }
+      },
+      "13": {
+        "name": "13",
+        "number": "13",
+        "net": "",
+        "props": {
+          "Pin Number": "13"
+        }
+      },
+      "14": {
+        "name": "14",
+        "number": "14",
+        "net": "",
+        "props": {
+          "Pin Number": "14"
+        }
+      },
+      "15": {
+        "name": "15",
+        "number": "15",
+        "net": "MCU_SERVO_PWM",
+        "props": {
+          "Pin Number": "15"
+        }
+      },
+      "16": {
+        "name": "16",
+        "number": "16",
+        "net": "BT_STATUS_MCU",
+        "props": {
+          "Pin Number": "16"
+        }
+      },
+      "17": {
+        "name": "17",
+        "number": "17",
+        "net": "",
+        "props": {
+          "Pin Number": "17"
+        }
+      },
+      "18": {
+        "name": "18",
+        "number": "18",
+        "net": "",
+        "props": {
+          "Pin Number": "18"
+        }
+      },
+      "19": {
+        "name": "19",
+        "number": "19",
+        "net": "KEY_TRACK_MCU",
+        "props": {
+          "Pin Number": "19"
+        }
+      },
+      "20": {
+        "name": "20",
+        "number": "20",
+        "net": "KEY_PROBE_MCU",
+        "props": {
+          "Pin Number": "20"
+        }
+      },
+      "21": {
+        "name": "21",
+        "number": "21",
+        "net": "MCU_MOTOR_EN",
+        "props": {
+          "Pin Number": "21"
+        }
+      },
+      "22": {
+        "name": "22",
+        "number": "22",
+        "net": "",
+        "props": {
+          "Pin Number": "22"
+        }
+      },
+      "23": {
+        "name": "23",
+        "number": "23",
+        "net": "",
+        "props": {
+          "Pin Number": "23"
+        }
+      },
+      "24": {
+        "name": "24",
+        "number": "24",
+        "net": "",
+        "props": {
+          "Pin Number": "24"
+        }
+      },
+      "25": {
+        "name": "25",
+        "number": "25",
+        "net": "",
+        "props": {
+          "Pin Number": "25"
+        }
+      },
+      "26": {
+        "name": "26",
+        "number": "26",
+        "net": "",
+        "props": {
+          "Pin Number": "26"
+        }
+      },
+      "27": {
+        "name": "27",
+        "number": "27",
+        "net": "LCD_SCL_MCU",
+        "props": {
+          "Pin Number": "27"
+        }
+      },
+      "28": {
+        "name": "28",
+        "number": "28",
+        "net": "",
+        "props": {
+          "Pin Number": "28"
+        }
+      },
+      "29": {
+        "name": "29",
+        "number": "29",
+        "net": "LCD_SDA_MCU",
+        "props": {
+          "Pin Number": "29"
+        }
+      },
+      "30": {
+        "name": "30",
+        "number": "30",
+        "net": "ENC_L_A",
+        "props": {
+          "Pin Number": "30"
+        }
+      },
+      "31": {
+        "name": "31",
+        "number": "31",
+        "net": "ENC_L_B",
+        "props": {
+          "Pin Number": "31"
+        }
+      },
+      "32": {
+        "name": "32",
+        "number": "32",
+        "net": "",
+        "props": {
+          "Pin Number": "32"
+        }
+      },
+      "33": {
+        "name": "33",
+        "number": "33",
+        "net": "MCU_US_TRIG",
+        "props": {
+          "Pin Number": "33"
+        }
+      },
+      "34": {
+        "name": "34",
+        "number": "34",
+        "net": "",
+        "props": {
+          "Pin Number": "34"
+        }
+      },
+      "35": {
+        "name": "35",
+        "number": "35",
+        "net": "",
+        "props": {
+          "Pin Number": "35"
+        }
+      },
+      "36": {
+        "name": "36",
+        "number": "36",
+        "net": "",
+        "props": {
+          "Pin Number": "36"
+        }
+      },
+      "37": {
+        "name": "37",
+        "number": "37",
+        "net": "",
+        "props": {
+          "Pin Number": "37"
+        }
+      },
+      "38": {
+        "name": "38",
+        "number": "38",
+        "net": "",
+        "props": {
+          "Pin Number": "38"
+        }
+      },
+      "39": {
+        "name": "39",
+        "number": "39",
+        "net": "",
+        "props": {
+          "Pin Number": "39"
+        }
+      },
+      "40": {
+        "name": "40",
+        "number": "40",
+        "net": "",
+        "props": {
+          "Pin Number": "40"
+        }
+      },
+      "41": {
+        "name": "41",
+        "number": "41",
+        "net": "",
+        "props": {
+          "Pin Number": "41"
+        }
+      },
+      "42": {
+        "name": "42",
+        "number": "42",
+        "net": "",
+        "props": {
+          "Pin Number": "42"
+        }
+      },
+      "43": {
+        "name": "43",
+        "number": "43",
+        "net": "",
+        "props": {
+          "Pin Number": "43"
+        }
+      },
+      "44": {
+        "name": "44",
+        "number": "44",
+        "net": "",
+        "props": {
+          "Pin Number": "44"
+        }
+      }
+    }
+  },
+  "J_CORE2": {
+    "props": {
+      "Add into BOM": "yes",
+      "Convert to PCB": "yes",
+      "Symbol": "0383cc418ec2b52e",
+      "Designator": "J_C2",
+      "Device": "c3bc5d7e4c201170",
+      "Footprint": "6a10510cc5b0674d",
+      "Name": "={Manufacturer Part}",
+      "Unique ID": "MAIN_J_CORE2",
+      "LCSC Part Name": "",
+      "Supplier Part": "HC-PM254-8.5H-2X22PZ",
+      "Manufacturer": "HC(虹成电子)",
+      "Manufacturer Part": "HC-PM254-8.5H-2x22PZ",
+      "Supplier Footprint": "",
+      "JLCPCB Part Class": "",
+      "Datasheet": "",
+      "Supplier": "LCSC",
+      "Holes Structure": "",
+      "Pitch": "",
+      "Row Spacing": "",
+      "Circular Hole / Square Hole": "",
+      "Mounting Type": "",
+      "Number of Rows": "",
+      "Number of Positions": "",
+      "Current Rating": "",
+      "Voltage Rating (Max)": "",
+      "Holes Direction": "",
+      "Insulation Height": "",
+      "Contact Material": "",
+      "Contact Plating": "",
+      "Operating Temperature": "",
+      "PIN Length": "",
+      "Description": "",
+      "3D Model": "8628157f506e414985f81877c3f45c3f",
+      "3D Model Title": "HDR-TH_44P-P2.54-F-LI-2X22P",
+      "3D Model Transform": "2199.99552,200,0,0,0,0,0,0,-118.11",
+      "Supplementary Features": "",
+      "Value": "HC-PM254-8.5H-2x22PZ",
+      "Group ID": "",
+      "Channel ID": "$2I3",
+      "Reuse Block": "",
+      "DeviceName": "HC-PM254-8.5H-2x22PZ",
+      "FootprintName": "HDR-TH_44P-P2.54-V-F-R2-C22-S2.54"
+    },
+    "pinInfoMap": {
+      "1": {
+        "name": "1",
+        "number": "1",
+        "net": "GND",
+        "props": {
+          "Pin Number": "1"
+        }
+      },
+      "2": {
+        "name": "2",
+        "number": "2",
+        "net": "GND",
+        "props": {
+          "Pin Number": "2"
+        }
+      },
+      "3": {
+        "name": "3",
+        "number": "3",
+        "net": "GND",
+        "props": {
+          "Pin Number": "3"
+        }
+      },
+      "4": {
+        "name": "4",
+        "number": "4",
+        "net": "GND",
+        "props": {
+          "Pin Number": "4"
+        }
+      },
+      "5": {
+        "name": "5",
+        "number": "5",
+        "net": "",
+        "props": {
+          "Pin Number": "5"
+        }
+      },
+      "6": {
+        "name": "6",
+        "number": "6",
+        "net": "MCU_PRESENT_n",
+        "props": {
+          "Pin Number": "6"
+        }
+      },
+      "7": {
+        "name": "7",
+        "number": "7",
+        "net": "LCD_BL_MCU",
+        "props": {
+          "Pin Number": "7"
+        }
+      },
+      "8": {
+        "name": "8",
+        "number": "8",
+        "net": "",
+        "props": {
+          "Pin Number": "8"
+        }
+      },
+      "9": {
+        "name": "9",
+        "number": "9",
+        "net": "LCD_CS_MCU",
+        "props": {
+          "Pin Number": "9"
+        }
+      },
+      "10": {
+        "name": "10",
+        "number": "10",
+        "net": "LCD_DC_MCU",
+        "props": {
+          "Pin Number": "10"
+        }
+      },
+      "11": {
+        "name": "11",
+        "number": "11",
+        "net": "",
+        "props": {
+          "Pin Number": "11"
+        }
+      },
+      "12": {
+        "name": "12",
+        "number": "12",
+        "net": "LCD_RES_MCU",
+        "props": {
+          "Pin Number": "12"
+        }
+      },
+      "13": {
+        "name": "13",
+        "number": "13",
+        "net": "",
+        "props": {
+          "Pin Number": "13"
+        }
+      },
+      "14": {
+        "name": "14",
+        "number": "14",
+        "net": "MCU_PARK_LAMP",
+        "props": {
+          "Pin Number": "14"
+        }
+      },
+      "15": {
+        "name": "15",
+        "number": "15",
+        "net": "",
+        "props": {
+          "Pin Number": "15"
+        }
+      },
+      "16": {
+        "name": "16",
+        "number": "16",
+        "net": "",
+        "props": {
+          "Pin Number": "16"
+        }
+      },
+      "17": {
+        "name": "17",
+        "number": "17",
+        "net": "",
+        "props": {
+          "Pin Number": "17"
+        }
+      },
+      "18": {
+        "name": "18",
+        "number": "18",
+        "net": "",
+        "props": {
+          "Pin Number": "18"
+        }
+      },
+      "19": {
+        "name": "19",
+        "number": "19",
+        "net": "",
+        "props": {
+          "Pin Number": "19"
+        }
+      },
+      "20": {
+        "name": "20",
+        "number": "20",
+        "net": "",
+        "props": {
+          "Pin Number": "20"
+        }
+      },
+      "21": {
+        "name": "21",
+        "number": "21",
+        "net": "MCU_BIN1",
+        "props": {
+          "Pin Number": "21"
+        }
+      },
+      "22": {
+        "name": "22",
+        "number": "22",
+        "net": "MCU_BIN2",
+        "props": {
+          "Pin Number": "22"
+        }
+      },
+      "23": {
+        "name": "23",
+        "number": "23",
+        "net": "MCU_AIN2",
+        "props": {
+          "Pin Number": "23"
+        }
+      },
+      "24": {
+        "name": "24",
+        "number": "24",
+        "net": "",
+        "props": {
+          "Pin Number": "24"
+        }
+      },
+      "25": {
+        "name": "25",
+        "number": "25",
+        "net": "MCU_AIN1",
+        "props": {
+          "Pin Number": "25"
+        }
+      },
+      "26": {
+        "name": "26",
+        "number": "26",
+        "net": "",
+        "props": {
+          "Pin Number": "26"
+        }
+      },
+      "27": {
+        "name": "27",
+        "number": "27",
+        "net": "",
+        "props": {
+          "Pin Number": "27"
+        }
+      },
+      "28": {
+        "name": "28",
+        "number": "28",
+        "net": "",
+        "props": {
+          "Pin Number": "28"
+        }
+      },
+      "29": {
+        "name": "29",
+        "number": "29",
+        "net": "",
+        "props": {
+          "Pin Number": "29"
+        }
+      },
+      "30": {
+        "name": "30",
+        "number": "30",
+        "net": "",
+        "props": {
+          "Pin Number": "30"
+        }
+      },
+      "31": {
+        "name": "31",
+        "number": "31",
+        "net": "",
+        "props": {
+          "Pin Number": "31"
+        }
+      },
+      "32": {
+        "name": "32",
+        "number": "32",
+        "net": "",
+        "props": {
+          "Pin Number": "32"
+        }
+      },
+      "33": {
+        "name": "33",
+        "number": "33",
+        "net": "ENC_R_B",
+        "props": {
+          "Pin Number": "33"
+        }
+      },
+      "34": {
+        "name": "34",
+        "number": "34",
+        "net": "DRV_nFAULT",
+        "props": {
+          "Pin Number": "34"
+        }
+      },
+      "35": {
+        "name": "35",
+        "number": "35",
+        "net": "",
+        "props": {
+          "Pin Number": "35"
+        }
+      },
+      "36": {
+        "name": "36",
+        "number": "36",
+        "net": "ENC_R_A",
+        "props": {
+          "Pin Number": "36"
+        }
+      },
+      "37": {
+        "name": "37",
+        "number": "37",
+        "net": "IR_ADC_3",
+        "props": {
+          "Pin Number": "37"
+        }
+      },
+      "38": {
+        "name": "38",
+        "number": "38",
+        "net": "",
+        "props": {
+          "Pin Number": "38"
+        }
+      },
+      "39": {
+        "name": "39",
+        "number": "39",
+        "net": "IR_ADC_1",
+        "props": {
+          "Pin Number": "39"
+        }
+      },
+      "40": {
+        "name": "40",
+        "number": "40",
+        "net": "IR_ADC_2",
+        "props": {
+          "Pin Number": "40"
+        }
+      },
+      "41": {
+        "name": "41",
+        "number": "41",
+        "net": "",
+        "props": {
+          "Pin Number": "41"
+        }
+      },
+      "42": {
+        "name": "42",
+        "number": "42",
+        "net": "IR_ADC_0",
+        "props": {
+          "Pin Number": "42"
+        }
+      },
+      "43": {
+        "name": "43",
+        "number": "43",
+        "net": "",
+        "props": {
+          "Pin Number": "43"
+        }
+      },
+      "44": {
+        "name": "44",
+        "number": "44",
+        "net": "",
+        "props": {
+          "Pin Number": "44"
+        }
+      }
+    }
+  },
+  "J_IR": {
+    "props": {
+      "Add into BOM": "yes",
+      "Convert to PCB": "yes",
+      "Symbol": "d17e1f668c47eb0e",
+      "Designator": "J_IR",
+      "Device": "404f9685d18796ab",
+      "Unique ID": "MAIN_J_IR",
+      "LCSC Part Name": "",
+      "Supplier Part": "HC-PHD-2*8A.1",
+      "Manufacturer": "BOOMELE",
+      "Manufacturer Part": "DC3-2.54-16PAS",
+      "Supplier Footprint": "",
+      "JLCPCB Part Class": "",
+      "Datasheet": "",
+      "Supplier": "LCSC",
+      "Footprint": "64dc73b3dee8cce7",
+      "3D Model": "a07e15b136ff47a0b582c028b6619ca6",
+      "3D Model Title": "CONN-TH_16P-P2.00_HCTL_HC-PHD",
+      "3D Model Transform": "708.66,196.85,0,180,0,0,0,0,-118.11",
+      "Pitch": "",
+      "Current Rating": "",
+      "Row Spacing": "",
+      "Number of Rows": "",
+      "Number of PINs Per Row": "",
+      "Contact Material": "",
+      "Contact Plating": "",
+      "Operating Temperature": "",
+      "Name": "DC3-2.54-16PAS",
+      "Description": "",
+      "Pins Structure": "",
+      "Mounting Type": "",
+      "Reference Series": "",
+      "Number of Pins": "",
+      "Voltage Rating": "",
+      "Plastic Material": "",
+      "Flame Retardant Rating": "",
+      "Supplementary Features": "",
+      "Color": "",
+      "Z-Height of the Board": "",
+      "X-Length of Bottom Edge on Board (Spacing Line)": "",
+      "Y-Width of Bottom Edge on Board": "",
+      "Value": "DC3-2.54-16PAS",
+      "Group ID": "",
+      "Channel ID": "$6I2",
+      "Reuse Block": "",
+      "DeviceName": "HC-PHD-2*8A",
+      "FootprintName": "CONN-TH_16P-P2.00_HCTL_HC-PHD"
+    },
+    "pinInfoMap": {
+      "1": {
+        "name": "1",
+        "number": "1",
+        "net": "IR_5V",
+        "props": {
+          "Pin Number": "1"
+        }
+      },
+      "2": {
+        "name": "2",
+        "number": "2",
+        "net": "GND",
+        "props": {
+          "Pin Number": "2"
+        }
+      },
+      "3": {
+        "name": "3",
+        "number": "3",
+        "net": "IR_5V",
+        "props": {
+          "Pin Number": "3"
+        }
+      },
+      "4": {
+        "name": "4",
+        "number": "4",
+        "net": "GND",
+        "props": {
+          "Pin Number": "4"
+        }
+      },
+      "5": {
+        "name": "5",
+        "number": "5",
+        "net": "GND",
+        "props": {
+          "Pin Number": "5"
+        }
+      },
+      "6": {
+        "name": "6",
+        "number": "6",
+        "net": "IR_ENABLE",
+        "props": {
+          "Pin Number": "6"
+        }
+      },
+      "7": {
+        "name": "7",
+        "number": "7",
+        "net": "IR_TRACK_0",
+        "props": {
+          "Pin Number": "7"
+        }
+      },
+      "8": {
+        "name": "8",
+        "number": "8",
+        "net": "GND",
+        "props": {
+          "Pin Number": "8"
+        }
+      },
+      "9": {
+        "name": "9",
+        "number": "9",
+        "net": "IR_TRACK_1",
+        "props": {
+          "Pin Number": "9"
+        }
+      },
+      "10": {
+        "name": "10",
+        "number": "10",
+        "net": "GND",
+        "props": {
+          "Pin Number": "10"
+        }
+      },
+      "11": {
+        "name": "11",
+        "number": "11",
+        "net": "IR_TRACK_2",
+        "props": {
+          "Pin Number": "11"
+        }
+      },
+      "12": {
+        "name": "12",
+        "number": "12",
+        "net": "GND",
+        "props": {
+          "Pin Number": "12"
+        }
+      },
+      "13": {
+        "name": "13",
+        "number": "13",
+        "net": "IR_TRACK_3",
+        "props": {
+          "Pin Number": "13"
+        }
+      },
+      "14": {
+        "name": "14",
+        "number": "14",
+        "net": "",
+        "props": {
+          "Pin Number": "14"
+        }
+      },
+      "15": {
+        "name": "15",
+        "number": "15",
+        "net": "GND",
+        "props": {
+          "Pin Number": "15"
+        }
+      },
+      "16": {
+        "name": "16",
+        "number": "16",
+        "net": "GND",
+        "props": {
+          "Pin Number": "16"
+        }
+      }
+    }
+  },
+  "U_DRV": {
+    "props": {
+      "Add into BOM": "yes",
+      "Convert to PCB": "yes",
+      "Symbol": "35e5ecc1be35de0a",
+      "Designator": "U5",
+      "Device": "7eebfc8f799e1007",
+      "Footprint": "74503866586c5884",
+      "Name": "DRV8833PWPR",
+      "Unique ID": "MAIN_U_DRV",
+      "Reuse Block": "",
+      "Group ID": "",
+      "Channel ID": "$3I18",
+      "Supplier Part": "DRV8833PWP",
+      "LCSC Part Name": "",
+      "Supplier Footprint": "",
+      "JLCPCB Part Class": "",
+      "Datasheet": "",
+      "Control Voltage": "",
+      "Motor Drive Voltage(Vm)": "",
+      "Output Current": "",
+      "Number of H-bridges": "",
+      "Drive Type": "",
+      "Step Resolution": "",
+      "Interface": "",
+      "Technology": "",
+      "RDS(on)": "",
+      "Operating Temperature": "",
+      "Features": "",
+      "Description": "",
+      "Value": "DRV8833PWPR",
+      "Manufacturer": "TI(德州仪器)",
+      "Manufacturer Part": "DRV8833PWPR",
+      "Supplier": "LCSC",
+      "3D Model": "e184b9ae7def452b81228c95a013214c|0819f05c4eef4c71ace90d822a990e87",
+      "3D Model Title": "TSSOP-16_L5.0-W4.4-H1.0-LS6.4-P0.65",
+      "3D Model Transform": "252.188,196.85,0,90,0,0,0,0,0",
+      "DeviceName": "DRV8833PWPR",
+      "FootprintName": "TSSOP-16_L5.0-W4.4-P0.65-LS6.4-BL-EP"
+    },
+    "pinInfoMap": {
+      "1": {
+        "name": "nSleep",
+        "number": "1",
+        "net": "DRV_nSLEEP",
+        "props": {
+          "Pin Number": "1"
+        }
+      },
+      "2": {
+        "name": "AOUT1",
+        "number": "2",
+        "net": "MOT_L_P",
+        "props": {
+          "Pin Number": "2"
+        }
+      },
+      "3": {
+        "name": "AISEN",
+        "number": "3",
+        "net": "ISEN_A",
+        "props": {
+          "Pin Number": "3"
+        }
+      },
+      "4": {
+        "name": "AOUT2",
+        "number": "4",
+        "net": "MOT_L_N",
+        "props": {
+          "Pin Number": "4"
+        }
+      },
+      "5": {
+        "name": "BOUT2",
+        "number": "5",
+        "net": "MOT_R_P",
+        "props": {
+          "Pin Number": "5"
+        }
+      },
+      "6": {
+        "name": "BISEN",
+        "number": "6",
+        "net": "ISEN_B",
+        "props": {
+          "Pin Number": "6"
+        }
+      },
+      "7": {
+        "name": "BOUT1",
+        "number": "7",
+        "net": "MOT_R_N",
+        "props": {
+          "Pin Number": "7"
+        }
+      },
+      "8": {
+        "name": "nFault",
+        "number": "8",
+        "net": "DRV_nFAULT",
+        "props": {
+          "Pin Number": "8"
+        }
+      },
+      "9": {
+        "name": "BIN1",
+        "number": "9",
+        "net": "DRV_BIN1",
+        "props": {
+          "Pin Number": "9"
+        }
+      },
+      "10": {
+        "name": "BIN2",
+        "number": "10",
+        "net": "DRV_BIN2",
+        "props": {
+          "Pin Number": "10"
+        }
+      },
+      "11": {
+        "name": "VCP",
+        "number": "11",
+        "net": "DRV_VCP",
+        "props": {
+          "Pin Number": "11"
+        }
+      },
+      "12": {
+        "name": "VM",
+        "number": "12",
+        "net": "VM_BAT",
+        "props": {
+          "Pin Number": "12"
+        }
+      },
+      "13": {
+        "name": "GND",
+        "number": "13",
+        "net": "GND",
+        "props": {
+          "Pin Number": "13"
+        }
+      },
+      "14": {
+        "name": "VINT",
+        "number": "14",
+        "net": "DRV_VINT",
+        "props": {
+          "Pin Number": "14"
+        }
+      },
+      "15": {
+        "name": "AIN2",
+        "number": "15",
+        "net": "DRV_AIN2",
+        "props": {
+          "Pin Number": "15"
+        }
+      },
+      "16": {
+        "name": "AIN1",
+        "number": "16",
+        "net": "DRV_AIN1",
+        "props": {
+          "Pin Number": "16"
+        }
+      },
+      "17": {
+        "name": "GND",
+        "number": "17",
+        "net": "GND",
+        "props": {
+          "Pin Number": "17"
+        }
+      }
+    }
+  },
+  "U_DRV_MUX": {
+    "props": {
+      "Add into BOM": "yes",
+      "Convert to PCB": "yes",
+      "Symbol": "19786c30e16bbf49",
+      "Designator": "U4",
+      "Device": "e0e424601ac568a0",
+      "Footprint": "57622a3f7ef3da85",
+      "Name": "SN74AHCT157PWR",
+      "Unique ID": "MAIN_U_DRV_MUX",
+      "Reuse Block": "",
+      "Group ID": "",
+      "Channel ID": "$3I2",
+      "Supplier Part": "SN74AHCT157PWR",
+      "LCSC Part Name": "",
+      "Supplier Footprint": "",
+      "JLCPCB Part Class": "",
+      "Datasheet": "",
+      "Type": "",
+      "Voltage Supply Source": "",
+      "Voltage - Supply": "",
+      "Number of lines": "",
+      "Current - Output Low(IOL)": "",
+      "Current - Output High(IOH)": "",
+      "Operating temperature": "",
+      "Propagation Delay": "",
+      "Quiescent Current": "",
+      "Function": "",
+      "Series": "",
+      "Description": "",
+      "Value": "SN74AHCT157PWR",
+      "Manufacturer": "TI(德州仪器)",
+      "Manufacturer Part": "SN74AHCT157PWR",
+      "Supplier": "LCSC",
+      "3D Model": "e184b9ae7def452b81228c95a013214c|0819f05c4eef4c71ace90d822a990e87",
+      "3D Model Title": "TSSOP-16_L5.0-W4.4-H1.0-LS6.4-P0.65",
+      "3D Model Transform": "252.188,196.85,0,90,0,0,0,0.005,0",
+      "DeviceName": "SN74AHCT157PWR",
+      "FootprintName": "TSSOP-16_L5.0-W4.4-P0.65-LS6.4-BL"
+    },
+    "pinInfoMap": {
+      "1": {
+        "name": "A#/B",
+        "number": "1",
+        "net": "MODE_MCU",
+        "props": {
+          "Pin Number": "1"
+        }
+      },
+      "2": {
+        "name": "1A",
+        "number": "2",
+        "net": "ANA_PWM_L",
+        "props": {
+          "Pin Number": "2"
+        }
+      },
+      "3": {
+        "name": "1B",
+        "number": "3",
+        "net": "MCU_AIN1",
+        "props": {
+          "Pin Number": "3"
+        }
+      },
+      "4": {
+        "name": "1Y",
+        "number": "4",
+        "net": "DRV_AIN1",
+        "props": {
+          "Pin Number": "4"
+        }
+      },
+      "5": {
+        "name": "2A",
+        "number": "5",
+        "net": "GND",
+        "props": {
+          "Pin Number": "5"
+        }
+      },
+      "6": {
+        "name": "2B",
+        "number": "6",
+        "net": "MCU_AIN2",
+        "props": {
+          "Pin Number": "6"
+        }
+      },
+      "7": {
+        "name": "2Y",
+        "number": "7",
+        "net": "DRV_AIN2",
+        "props": {
+          "Pin Number": "7"
+        }
+      },
+      "8": {
+        "name": "GND",
+        "number": "8",
+        "net": "GND",
+        "props": {
+          "Pin Number": "8"
+        }
+      },
+      "9": {
+        "name": "3Y",
+        "number": "9",
+        "net": "DRV_BIN1",
+        "props": {
+          "Pin Number": "9"
+        }
+      },
+      "10": {
+        "name": "3B",
+        "number": "10",
+        "net": "MCU_BIN1",
+        "props": {
+          "Pin Number": "10"
+        }
+      },
+      "11": {
+        "name": "3A",
+        "number": "11",
+        "net": "ANA_PWM_R",
+        "props": {
+          "Pin Number": "11"
+        }
+      },
+      "12": {
+        "name": "4Y",
+        "number": "12",
+        "net": "DRV_BIN2",
+        "props": {
+          "Pin Number": "12"
+        }
+      },
+      "13": {
+        "name": "4B",
+        "number": "13",
+        "net": "MCU_BIN2",
+        "props": {
+          "Pin Number": "13"
+        }
+      },
+      "14": {
+        "name": "4A",
+        "number": "14",
+        "net": "GND",
+        "props": {
+          "Pin Number": "14"
+        }
+      },
+      "15": {
+        "name": "G#",
+        "number": "15",
+        "net": "MOTOR_nENABLE",
+        "props": {
+          "Pin Number": "15"
+        }
+      },
+      "16": {
+        "name": "VCC",
+        "number": "16",
+        "net": "SYS_5V",
+        "props": {
+          "Pin Number": "16"
+        }
+      }
+    }
+  },
+  "U_US_SEL": {
+    "props": {
+      "Add into BOM": "yes",
+      "Convert to PCB": "yes",
+      "Symbol": "19786c30e16bbf49",
+      "Designator": "U18",
+      "Device": "e0e424601ac568a0",
+      "Footprint": "57622a3f7ef3da85",
+      "Name": "SN74AHCT157PWR",
+      "Unique ID": "MAIN_U_US_SEL",
+      "Reuse Block": "",
+      "Group ID": "",
+      "Channel ID": "$5I112",
+      "Supplier Part": "SN74AHCT157PWR",
+      "LCSC Part Name": "",
+      "Supplier Footprint": "",
+      "JLCPCB Part Class": "",
+      "Datasheet": "",
+      "Type": "",
+      "Voltage Supply Source": "",
+      "Voltage - Supply": "",
+      "Number of lines": "",
+      "Current - Output Low(IOL)": "",
+      "Current - Output High(IOH)": "",
+      "Operating temperature": "",
+      "Propagation Delay": "",
+      "Quiescent Current": "",
+      "Function": "",
+      "Series": "",
+      "Description": "",
+      "Value": "SN74AHCT157PWR",
+      "Manufacturer": "TI(德州仪器)",
+      "Manufacturer Part": "SN74AHCT157PWR",
+      "Supplier": "LCSC",
+      "3D Model": "e184b9ae7def452b81228c95a013214c|0819f05c4eef4c71ace90d822a990e87",
+      "3D Model Title": "TSSOP-16_L5.0-W4.4-H1.0-LS6.4-P0.65",
+      "3D Model Transform": "252.188,196.85,0,90,0,0,0,0.005,0",
+      "DeviceName": "SN74AHCT157PWR",
+      "FootprintName": "TSSOP-16_L5.0-W4.4-P0.65-LS6.4-BL"
+    },
+    "pinInfoMap": {
+      "1": {
+        "name": "A#/B",
+        "number": "1",
+        "net": "MODE_MCU",
+        "props": {
+          "Pin Number": "1"
+        }
+      },
+      "2": {
+        "name": "1A",
+        "number": "2",
+        "net": "US_TRIG_Q",
+        "props": {
+          "Pin Number": "2"
+        }
+      },
+      "3": {
+        "name": "1B",
+        "number": "3",
+        "net": "MCU_US_TRIG",
+        "props": {
+          "Pin Number": "3"
+        }
+      },
+      "4": {
+        "name": "1Y",
+        "number": "4",
+        "net": "HC_TRIG",
+        "props": {
+          "Pin Number": "4"
+        }
+      },
+      "5": {
+        "name": "2A",
+        "number": "5",
+        "net": "ANA_MOTOR_RUN",
+        "props": {
+          "Pin Number": "5"
+        }
+      },
+      "6": {
+        "name": "2B",
+        "number": "6",
+        "net": "MCU_MOTOR_EN",
+        "props": {
+          "Pin Number": "6"
+        }
+      },
+      "7": {
+        "name": "2Y",
+        "number": "7",
+        "net": "MOTOR_ENABLE",
+        "props": {
+          "Pin Number": "7"
+        }
+      },
+      "8": {
+        "name": "GND",
+        "number": "8",
+        "net": "GND",
+        "props": {
+          "Pin Number": "8"
+        }
+      },
+      "9": {
+        "name": "3Y",
+        "number": "9",
+        "net": "PARK_LAMP_EN",
+        "props": {
+          "Pin Number": "9"
+        }
+      },
+      "10": {
+        "name": "3B",
+        "number": "10",
+        "net": "MCU_PARK_LAMP",
+        "props": {
+          "Pin Number": "10"
+        }
+      },
+      "11": {
+        "name": "3A",
+        "number": "11",
+        "net": "ANA_OBSTACLE_LATCH",
+        "props": {
+          "Pin Number": "11"
+        }
+      },
+      "12": {
+        "name": "4Y",
+        "number": "12",
+        "net": "BUZZER_EN",
+        "props": {
+          "Pin Number": "12"
+        }
+      },
+      "13": {
+        "name": "4B",
+        "number": "13",
+        "net": "MCU_BUZZER",
+        "props": {
+          "Pin Number": "13"
+        }
+      },
+      "14": {
+        "name": "4A",
+        "number": "14",
+        "net": "ANA_BUZZER_1S",
+        "props": {
+          "Pin Number": "14"
+        }
+      },
+      "15": {
+        "name": "G#",
+        "number": "15",
+        "net": "GND",
+        "props": {
+          "Pin Number": "15"
+        }
+      },
+      "16": {
+        "name": "VCC",
+        "number": "16",
+        "net": "SYS_5V",
+        "props": {
+          "Pin Number": "16"
+        }
+      }
+    }
+  },
+  "U_INV": {
+    "props": {
+      "Add into BOM": "yes",
+      "Convert to PCB": "yes",
+      "Symbol": "235aaff69d957494",
+      "Designator": "U3",
+      "Device": "d16c137b52f232ef",
+      "Footprint": "6fd6a5b5cbc195ba",
+      "Name": "SN74AHCT14PWR",
+      "Unique ID": "MAIN_U_INV",
+      "Reuse Block": "",
+      "Group ID": "",
+      "Channel ID": "$2I14",
+      "Supplier Part": "SN74AHCT14PWR",
+      "LCSC Part Name": "",
+      "Supplier Footprint": "",
+      "JLCPCB Part Class": "",
+      "Datasheet": "",
+      "Input Type": "",
+      "Voltage - Supply": "",
+      "Quiescent Current(Iq)": "",
+      "Number of Circuits": "",
+      "Current - Output Low(IOL)": "",
+      "Current - Output High(IOH)": "",
+      "Input Logic Level - High": "",
+      "Input Logic Level -Low": "",
+      "Output Logic Level - High": "",
+      "Output Logic Level - Low": "",
+      "Propagation Delay": "",
+      "Series": "",
+      "Operating Temperature": "",
+      "Features": "",
+      "output type": "",
+      "Description": "",
+      "Value": "SN74AHCT14PWR",
+      "Manufacturer": "TI(德州仪器)",
+      "Manufacturer Part": "SN74AHCT14PWR",
+      "Supplier": "LCSC",
+      "3D Model": "02f1f60386074b2ca8e111040ac061f2|0819f05c4eef4c71ace90d822a990e87",
+      "3D Model Title": "TSSOP-14_L5.0-W4.4-H1.0-LS6.4-P0.65",
+      "3D Model Transform": "237.007,196.85,0,90,0,0,0,0,0",
+      "DeviceName": "SN74AHCT14PWR",
+      "FootprintName": "TSSOP-14_L5.0-W4.4-P0.65-LS6.4-BL"
+    },
+    "pinInfoMap": {
+      "1": {
+        "name": "1A",
+        "number": "1",
+        "net": "PRESENT_FILTER",
+        "props": {
+          "Pin Number": "1"
+        }
+      },
+      "2": {
+        "name": "1Y",
+        "number": "2",
+        "net": "MODE_MCU",
+        "props": {
+          "Pin Number": "2"
+        }
+      },
+      "3": {
+        "name": "2A",
+        "number": "3",
+        "net": "ECHO_5V_IN",
+        "props": {
+          "Pin Number": "3"
+        }
+      },
+      "4": {
+        "name": "2Y",
+        "number": "4",
+        "net": "ECHO_N",
+        "props": {
+          "Pin Number": "4"
+        }
+      },
+      "5": {
+        "name": "3A",
+        "number": "5",
+        "net": "MOTOR_ENABLE",
+        "props": {
+          "Pin Number": "5"
+        }
+      },
+      "6": {
+        "name": "3Y",
+        "number": "6",
+        "net": "MOTOR_nENABLE",
+        "props": {
+          "Pin Number": "6"
+        }
+      },
+      "7": {
+        "name": "GND",
+        "number": "7",
+        "net": "GND",
+        "props": {
+          "Pin Number": "7"
+        }
+      },
+      "8": {
+        "name": "4Y",
+        "number": "8",
+        "net": "KEY_TRACK_P",
+        "props": {
+          "Pin Number": "8"
+        }
+      },
+      "9": {
+        "name": "4A",
+        "number": "9",
+        "net": "KEY_TRACK_N",
+        "props": {
+          "Pin Number": "9"
+        }
+      },
+      "10": {
+        "name": "5Y",
+        "number": "10",
+        "net": "POR_RST_H",
+        "props": {
+          "Pin Number": "10"
+        }
+      },
+      "11": {
+        "name": "5A",
+        "number": "11",
+        "net": "POR_RC_N",
+        "props": {
+          "Pin Number": "11"
+        }
+      },
+      "12": {
+        "name": "6Y",
+        "number": "12",
+        "net": "POR_OK",
+        "props": {
+          "Pin Number": "12"
+        }
+      },
+      "13": {
+        "name": "6A",
+        "number": "13",
+        "net": "POR_RST_H",
+        "props": {
+          "Pin Number": "13"
+        }
+      },
+      "14": {
+        "name": "VCC",
+        "number": "14",
+        "net": "SYS_5V",
+        "props": {
+          "Pin Number": "14"
+        }
+      }
+    }
+  },
+  "SW_TRACK": {
+    "props": {
+      "Add into BOM": "yes",
+      "Convert to PCB": "yes",
+      "Symbol": "fd89aa2769e31fb5",
+      "Designator": "SW2",
+      "Device": "f45f113db668020e",
+      "Footprint": "02a9f2c7f03ac2f2",
+      "Name": "TRACK KEY",
+      "Unique ID": "MAIN_SW_TRACK",
+      "Reuse Block": "",
+      "Group ID": "",
+      "Channel ID": "$6I65",
+      "Supplier Part": "TS-1088-AR02016",
+      "LCSC Part Name": "",
+      "Supplier Footprint": "",
+      "JLCPCB Part Class": "",
+      "Datasheet": "",
+      "Circuit": "",
+      "Actuator Style": "",
+      "Operating Force": "",
+      "Mounting Type": "",
+      "Length": "",
+      "Width": "",
+      "Switch Height": "",
+      "with Bracket": "",
+      "Contact Current": "",
+      "Voltage Rating": "",
+      "Actuator/Cap Color": "",
+      "With Lamp": "",
+      "IP Rating": "",
+      "Termination Style": "",
+      "Life": "",
+      "Operating Temperature": "",
+      "Description": "",
+      "Value": "TRACK KEY",
+      "Manufacturer": "XUNPU(讯普)",
+      "Manufacturer Part": "TS-1088-AR02016",
+      "Supplier": "LCSC",
+      "3D Model": "b26698b69f274ffabef8a26c7d0e5dd1|0819f05c4eef4c71ace90d822a990e87",
+      "3D Model Title": "SW-SMD_L3.9-W2.9-H2.0-LS4.8",
+      "3D Model Transform": "188.976,114.174,0,0,0,0,0,0,0",
+      "DeviceName": "TS-1088-AR02016",
+      "FootprintName": "SW-SMD_L3.9-W3.0-P4.45"
+    },
+    "pinInfoMap": {
+      "1": {
+        "name": "1",
+        "number": "1",
+        "net": "KEY_TRACK_N",
+        "props": {
+          "Pin Number": "1"
+        }
+      },
+      "2": {
+        "name": "2",
+        "number": "2",
+        "net": "GND",
+        "props": {
+          "Pin Number": "2"
+        }
+      }
+    }
+  },
+  "SW_PROBE": {
+    "props": {
+      "Add into BOM": "yes",
+      "Convert to PCB": "yes",
+      "Symbol": "fd89aa2769e31fb5",
+      "Designator": "SW3",
+      "Device": "f45f113db668020e",
+      "Footprint": "02a9f2c7f03ac2f2",
+      "Name": "PROBE KEY",
+      "Unique ID": "MAIN_SW_PROBE",
+      "Reuse Block": "",
+      "Group ID": "",
+      "Channel ID": "$6I66",
+      "Supplier Part": "TS-1088-AR02016",
+      "LCSC Part Name": "",
+      "Supplier Footprint": "",
+      "JLCPCB Part Class": "",
+      "Datasheet": "",
+      "Circuit": "",
+      "Actuator Style": "",
+      "Operating Force": "",
+      "Mounting Type": "",
+      "Length": "",
+      "Width": "",
+      "Switch Height": "",
+      "with Bracket": "",
+      "Contact Current": "",
+      "Voltage Rating": "",
+      "Actuator/Cap Color": "",
+      "With Lamp": "",
+      "IP Rating": "",
+      "Termination Style": "",
+      "Life": "",
+      "Operating Temperature": "",
+      "Description": "",
+      "Value": "PROBE KEY",
+      "Manufacturer": "XUNPU(讯普)",
+      "Manufacturer Part": "TS-1088-AR02016",
+      "Supplier": "LCSC",
+      "3D Model": "b26698b69f274ffabef8a26c7d0e5dd1|0819f05c4eef4c71ace90d822a990e87",
+      "3D Model Title": "SW-SMD_L3.9-W2.9-H2.0-LS4.8",
+      "3D Model Transform": "188.976,114.174,0,0,0,0,0,0,0",
+      "DeviceName": "TS-1088-AR02016",
+      "FootprintName": "SW-SMD_L3.9-W3.0-P4.45"
+    },
+    "pinInfoMap": {
+      "1": {
+        "name": "1",
+        "number": "1",
+        "net": "KEY_PROBE_MCU",
+        "props": {
+          "Pin Number": "1"
+        }
+      },
+      "2": {
+        "name": "2",
+        "number": "2",
+        "net": "GND",
+        "props": {
+          "Pin Number": "2"
+        }
+      }
+    }
+  }
+}

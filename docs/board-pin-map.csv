@@ -1,0 +1,37 @@
+﻿connector,pin,gpio,net,function
+J_C1,6,PC6,MCU_US_ECHO,TIM8_CH1 / AF4 (PWM input capture 1us)
+J_C1,7,PC7,MCU_SERVO_PWR_EN,GPIO output active HIGH (TPS63060 #2 EN & gate)
+J_C1,8,PC8,MCU_LASER_EN,GPIO output active HIGH (<=5mW laser MOSFET)
+J_C1,9,PC9,MCU_BUZZER,GPIO output active HIGH -> U18 4B
+J_C1,10,PA8,BT_KEY_MCU,GPIO output active HIGH (HC-04 AT key)
+J_C1,11,PA9,BT_RXD_MCU,USART1_TX / AF7
+J_C1,12,PA10,BT_TXD_MCU,USART1_RX / AF7
+J_C1,15,PA15,MCU_SERVO_PWM,TIM2_CH1 / AF1 (50Hz 1us resolution)
+J_C1,16,PC10,BT_STATUS_MCU,GPIO input (HC-04 connection status)
+J_C1,19,PD0,KEY_TRACK_MCU,GPIO input active HIGH (inverted via U3)
+J_C1,20,PD1,KEY_PROBE_MCU,GPIO input active LOW (pull-up + RC debounce)
+J_C1,21,PD2,MCU_MOTOR_EN,GPIO output HIGH enables U18 2B -> U4
+J_C1,27,PB3,LCD_SCL_MCU,SPI1_SCK / AF5
+J_C1,29,PB5,LCD_SDA_MCU,SPI1_MOSI / AF5
+J_C1,30,PB6,ENC_L_A,TIM4_CH1 / AF2 (disable UCPD dead-battery first)
+J_C1,31,PB7,ENC_L_B,TIM4_CH2 / AF2
+J_C1,33,PB9,MCU_US_TRIG,TIM17_CH1 / AF1 (45us hardware one-pulse)
+J_C2,6,GND,MCU_PRESENT_n,Core GND presence auto-switches MODE_MCU=1
+J_C2,7,PD13,LCD_BL_MCU,GPIO output active HIGH
+J_C2,9,PD11,LCD_CS_MCU,GPIO output active LOW
+J_C2,10,PD12,LCD_DC_MCU,GPIO output
+J_C2,12,PD10,LCD_RES_MCU,GPIO output active LOW
+J_C2,14,PD8,MCU_PARK_LAMP,GPIO output active HIGH -> U18 3B
+J_C2,21,PE13,MCU_BIN1,TIM1_CH3 / AF2 (Right H-bridge IN1)
+J_C2,22,PE14,MCU_BIN2,TIM1_CH4 / AF2 (Right H-bridge IN2; AF6 is BKIN2!)
+J_C2,23,PE11,MCU_AIN2,TIM1_CH2 / AF2 (Left H-bridge IN2)
+J_C2,25,PE9,MCU_AIN1,TIM1_CH1 / AF2 (Left H-bridge IN1)
+J_C2,33,PA7,ENC_R_B,TIM3_CH2 / AF2
+J_C2,34,PC4,DRV_nFAULT,GPIO input active LOW (10k pull-up to MCU_3V3)
+J_C2,36,PA6,ENC_R_A,TIM3_CH1 / AF2
+J_C2,37,PA3,IR_ADC_3,ADC1_IN4 (Right outer R2)
+J_C2,39,PA1,IR_ADC_1,ADC1_IN2 (Left inner L1)
+J_C2,40,PA2,IR_ADC_2,ADC1_IN3 (Right inner R1)
+J_C2,42,PA0,IR_ADC_0,ADC1_IN1 (Left outer L2)
+CORE,-,PC0,CORE_LED,GPIO output active LOW (Core board LED)
+CORE,-,PD15,CORE_KEY,GPIO input active LOW (Core board user button)

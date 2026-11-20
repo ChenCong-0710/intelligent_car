@@ -1,0 +1,18 @@
+{
+  "version":"0.2.0",
+  "configurations":[{
+    "name":"STM32Cube: Debug line-following (ST-LINK)",
+    "type":"stlinkgdbtarget","request":"launch","origin":"snippet",
+    "cwd":"${workspaceFolder}","preLaunchTask":"Build Debug","preBuild":"",
+    "deviceName":"STM32G474VET6","deviceCore":"Cortex-M4","runEntry":"main",
+    "gdb":"${env:LOCALAPPDATA}/stm32cube/bundles/gnu-tools-for-stm32/14.3.1+st.2/bin/arm-none-eabi-gdb.exe",
+    "imagesAndSymbols":[{"imageFileName":"${workspaceFolder}/build/Debug/line-following.elf"}],
+    "serverExe":"ST-LINK_gdbserver.exe",
+    "serverCwd":"${env:LOCALAPPDATA}/stm32cube/bundles/stlink-gdbserver/7.14.0+st.2/bin",
+    "serverCubeProgPath":"${env:LOCALAPPDATA}/stm32cube/bundles/programmer/2.23.0/bin",
+    "serverInterface":"SWD","serverInterfaceFrequency":"1000","serverVerify":true,
+    "serverRtos":{"enabled":false},"serverSemihosting":{"enabled":false},
+    "deviceStopWDGOnHalt":false,
+    "liveWatch":{"enabled":true,"samplesPerSecond":"10"}
+  }]
+}

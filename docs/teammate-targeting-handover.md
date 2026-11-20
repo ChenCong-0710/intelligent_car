@@ -1,0 +1,153 @@
+# 队友交接指南：全软件任务架构与四面激光打靶（蓝牙标定/录数）开发手册
+
+> **交接背景**：纯硬件模拟电路循迹已改板实车跑通（详见 [pure-analog-rework-and-calibration.md](file:///C:/Users/Seraphina/Documents/ESD/firmware/line-following-car/docs/pure-analog-rework-and-calibration.md)），软件闭环循迹与电机死区/前馈标定均已完成并归档。  
+> **当前版本**：已完成**全部软件任务的主体状态机框架与蓝牙标定/采集工具链**，插上 STM32G474 核心板即可直接开展**提高部分（2）四面顺时针目标探测与 10 秒激光打靶**的实车标定与优化。
+
+---
+
+## 一、全部软件任务总览与当前就绪状态
+
+| 软件任务模块 | 核心状态机 / 触发方式 | 当前状态 | 关键代码位置 |
+| :--- | :--- | :---: | :--- |
+| **1. 软件高速循迹** | `LF_CALIBRATING` -> `LF_ARMING (2s)` -> `LF_TRACKING`（按 `SW2` 或蓝牙 `start`） | ✅ 已跑通（后续可继续提速优化） | [Control/line_follower.c](file:///C:/Users/Seraphina/Documents/ESD/firmware/line-following-car/Control/line_follower.c) |
+| **2. 超声波 `<15cm` 避障刹停** | 循迹中超声连续命中 `<= 150 mm` -> `LF_OBSTACLE_STOP`（主动短接制动 + 停车灯常亮 + 1s 长鸣） | ✅ 已集成并过单测 | [Control/line_follower.c](file:///C:/Users/Seraphina/Documents/ESD/firmware/line-following-car/Control/line_follower.c) |
+| **3. 四面顺时针目标探测与 10s 打靶** | 在 `LF_OBSTACLE_STOP` 或 `LF_STOPPED` 下按 `SW3` 或蓝牙 `probe` -> `LF_PROBING`（8 阶段矩形绕行 + 3 组两短一长结束提示） | ✅ **完整可调框架已就绪，待实车标定几何/云台参数** | [Control/line_follower.c](file:///C:/Users/Seraphina/Documents/ESD/firmware/line-following-car/Control/line_follower.c#L807-L925) |
+| **4. 蓝牙串口数据采集与在线标定** | `host_station.py`：`mcal` / `push` / `capture` / **`probe-scan`** / **`probe-odom`** / **`probe-run`** | ✅ **已全部打通并过自检** | [tools/host_station.py](file:///C:/Users/Seraphina/Documents/ESD/firmware/line-following-car/tools/host_station.py) |
+
+---
+
+## 二、四面打靶 (`LF_PROBING`) 8 阶段状态机架构
+
+为了让小车可靠绕过方形/柱状障碍物四面，固件实现了完整的 **8 阶段矩形绕行状态机**（所有角度、距离、速度、时长均支持蓝牙实时调节，无需反复烧录）：
+
+```mermaid
+stateDiagram-v2
+    [*] --> LF_PROBE_AIM: 启动 probe (face=0)
+    LF_PROBE_AIM --> LF_PROBE_LASER: 扫掠 aim_ms 锁定最小超声距离 best_servo_us
+    LF_PROBE_LASER --> LF_PROBE_COMPLETE_BEEPS: 发射 laser_ms(10s) 后 face+1 >= faces
+    LF_PROBE_LASER --> LF_PROBE_TURN_OUT: 发射结束且未满 4 面
+    LF_PROBE_TURN_OUT --> LF_PROBE_DRIVE_EDGE1: 原地左转 turn_deg (90°)
+    LF_PROBE_DRIVE_EDGE1 --> LF_PROBE_TURN_CORNER: 带航向纠偏直行 edge1_mm
+    LF_PROBE_TURN_CORNER --> LF_PROBE_DRIVE_EDGE2: 原地右转 turn_deg (90°)
+    LF_PROBE_DRIVE_EDGE2 --> LF_PROBE_TURN_IN: 带航向纠偏直行 edge2_mm
+    LF_PROBE_TURN_IN --> LF_PROBE_APPROACH: 原地右转 turn_deg (90°)
+    LF_PROBE_APPROACH --> LF_PROBE_AIM: 超声 <= obs_mm (150mm) 刹停，face++
+    LF_PROBE_COMPLETE_BEEPS --> [*]: 3组两短一长蜂鸣(3.6s) -> STOPPED
+```
+
+### 全部可调参数表（蓝牙 `set <参数名> <数值>`）
+
+| 蓝牙参数名 | 结构体字段 (`LfProbeConfig`) | 默认值 | 合法范围 | 物理含义与现场调参说明 |
+| :--- | :--- | :---: | :---: | :--- |
+| **`servo_us`** | `cfg.servo_center_us` | `1500` | `900..2100` | 云台舵机正对正前方的机械中位脉宽 ($\mu\text{s}$) |
+| **`obs_mm`** | `cfg.obstacle_stop_mm` | `150` | `50..500` | 避障停机与打靶逼近刹停的超声距离阈值 ($\text{mm}$) |
+| **`probe_cw`** | `probe.clockwise` | `1` | `0` / `1` | `1` = 顺时针绕行四面（任务书要求），`0` = 逆时针 |
+| **`probe_faces`** | `probe.faces` | `4` | `1..4` | 目标平面总数；**初期调试建议先设为 `1` 或 `2`** |
+| **`probe_aim_ms`** | `probe.aim_ms` | `1200` | `200..5000` | 云台扫掠寻优总时长 ($\text{ms}$，含前 150 ms 归起点稳定) |
+| **`probe_sweep_us`** | `probe.sweep_us` | `220` | `20..600` | 相对中位的单侧扫掠半幅 ($\pm\text{us}$) |
+| **`probe_laser_ms`** | `probe.laser_ms` | `10000` | `200..30000` | 单面激光+蜂鸣器同步发射时长；**联调时可先设为 `2000` 省时间** |
+| **`probe_turn_deg`** | `probe.turn_deg` | `90.0` | `30..180` | 每次 90° 原地转向的目标角度；若地面打滑偏少可微调至 `92~96` |
+| **`probe_edge1_mm`** | `probe.edge1_mm` | `220.0` | `30..1500` | 阶段 4：离面越过拐角的直行距离（约 $\frac{W}{2} + D$） |
+| **`probe_edge2_mm`** | `probe.edge2_mm` | `220.0` | `30..1500` | 阶段 6：沿侧面走至下一面中心垂线的直行距离（约 $\frac{L}{2} + D$） |
+| **`probe_approach_mm`** | `probe.approach_max_mm` | `260.0` | `30..1000` | 阶段 8：逼近下一面的最大前移安全距离（防止超声漏检一直往前开） |
+| **`probe_turn_spd`** | `probe.turn_speed_mm_s` | `90.0` | `20..300` | 原地转向时的单轮线速度 ($\text{mm/s}$) |
+| **`probe_drive_spd`** | `probe.drive_speed_mm_s` | `120.0` | `20..400` | 绕边直行时的目标线速度 ($\text{mm/s}$) |
+| **`probe_approach_spd`** | `probe.approach_speed_mm_s` | `85.0` | `20..300` | 逼近下一平面时的缓慢线速度 ($\text{mm/s}$) |
+
+---
+
+## 三、蓝牙串口标定与实车联调标准 5 步流程
+
+> ⚠️ **注意**：本固件采用 **RAM-first** 策略（不自动写 Flash 保护芯片寿命），每次单片机断电重启后，请先执行一次 `push` 将电脑保存的地面电机死区曲线下发至小车 RAM。
+
+### 第 1 步：确认蓝牙连接与硬件外设自检
+```powershell
+# 1. 查看并绑定默认蓝牙端口（如 COM10）
+python tools/host_station.py ports
+python tools/host_station.py set-port COM10
+
+# 2. 查看按键、编码器、超声与供电状态
+python tools/host_station.py cmd "io" "us"
+
+# 3. 逐项点亮外设自检（安全不转电机）
+python tools/host_station.py cmd "outtest lamp 1 1000"
+python tools/host_station.py cmd "outtest buz 1 800"
+python tools/host_station.py cmd "outtest laser 1 1500"
+python tools/host_station.py cmd "outtest servo 1500 1500"
+```
+
+### 第 2 步：下发地面电机前馈曲线（消除左右轮跑偏）
+```powershell
+# 直接把已标定好的 data/latest_calibration.json 下发至小车 RAM
+python tools/host_station.py push --mode GROUND
+
+# （若更换了新电池或电机，可重新跑 5 轮地面带载自动标定）
+# python tools/host_station.py mcal --mode ground --passes 5
+```
+
+### 第 3 步：蓝牙标定云台机械中位与超声波瞄准曲线（`probe-scan`）
+将小车正对障碍物平面中心约 `15 cm` 处停稳，运行：
+```powershell
+python tools/host_station.py probe-scan --span 240 --step 20 --dwell 140
+```
+- 上位机会自动录制每一档 `(servo_us, obs_mm)` 到 `data/probe_scan_<时间戳>.csv`，并计算超声距离谷底对应的 **`recommended_servo_center_us`**。
+- 若实测机械中位偏离 `1500`（例如 `1540`），立即用 `set servo_us 1540` 修正（稳定后可改写到 `Control/line_follower.c` 默认值中）。
+
+### 第 4 步：蓝牙标定直行距离与原地 90° 转弯精度（`probe-odom`）
+```powershell
+# 1. 标定直行 300 mm：用尺子量小车实际前行距离，与里程计 actual_mm 对比
+python tools/host_station.py probe-odom drive 300 --speed 120 --push
+
+# 2. 标定原地左转 90°（正=左转CCW，负=右转CW）：用量角器核对实际转角
+python tools/host_station.py probe-odom turn 90 --speed 90 --push
+python tools/host_station.py probe-odom turn -90 --speed 90 --push
+```
+- **标定修正公式**：
+  - 若实测转角偏小（如只转了 `85°`）：可增大轮距 `set track_mm <原值 * 90 / 85>` 或直接调大 `set probe_turn_deg 95`。
+  - 若实测直行距离偏短（如只走了 `285 mm`）：可减小轮径 `set wheel_mm <原值 * 285 / 300>`。
+
+### 第 5 步：蓝牙一键试跑打靶任务并全程录制 `PROBE` 遥测（`probe-run`）
+```powershell
+# 1. 先用单面 + 2秒激光 快速验证瞄准与激光发射
+python tools/host_station.py probe-run --push --faces 1 --laser-ms 2000
+
+# 2. 验证 4 面完整绕行轨迹（先用 2秒激光 省时间，标定好 edge1/edge2/turn-deg）
+python tools/host_station.py probe-run --push --faces 4 --laser-ms 2000 --edge1 220 --edge2 220 --turn-deg 90
+
+# 3. 正式全流程 4 面 × 10 秒打靶 + 3组两短一长验收（全程录数至 data/probe_run_*.csv）
+python tools/host_station.py probe-run --push --faces 4 --laser-ms 10000 --edge1 220 --edge2 220 --turn-deg 90
+```
+
+---
+
+## 四、编译、单测与烧录命令速查
+
+所有构建均封装在 [tools/build.ps1](file:///C:/Users/Seraphina/Documents/ESD/firmware/line-following-car/tools/build.ps1) 中：
+
+```powershell
+# 编译 Debug / Release STM32G474 固件
+.\tools\build.ps1 -Configuration Debug
+.\tools\build.ps1 -Configuration Release
+
+# 编译并烧录至 STM32G474（ST-LINK 必须插在主扩展板边缘 J_SWD 座！）
+.\tools\build.ps1 -Configuration Debug -Flash
+
+# 运行全部 26 项 PC 主机端单元测试（每次改完 Control/line_follower.c 必跑！）
+.\tools\build.ps1 -Test
+
+# 运行蓝牙上位机算法与协议自检
+python tools/host_station.py --selftest
+```
+
+---
+
+## 五、二次开发与算法优化入口指引
+
+1. **改进打靶瞄准算法（如多点滤波、二次抛物线拟合谷底、边界中点法）**：
+   - 修改 [Control/line_follower.c](file:///C:/Users/Seraphina/Documents/ESD/firmware/line-following-car/Control/line_follower.c) 中的 `step_probing()` -> `case LF_PROBE_AIM`。
+2. **改进绕障路径（如边走边用超声测角、动态识别障碍物宽度）**：
+   - 修改 [Control/line_follower.c](file:///C:/Users/Seraphina/Documents/ESD/firmware/line-following-car/Control/line_follower.c) 中的 `LF_PROBE_DRIVE_EDGE1` / `LF_PROBE_DRIVE_EDGE2` / `LF_PROBE_APPROACH`。
+3. **固化现场标定好的默认参数**：
+   - 调出最优参数后，直接写回 [Control/line_follower.c](file:///C:/Users/Seraphina/Documents/ESD/firmware/line-following-car/Control/line_follower.c) 的 `lf_default_config()`，重新编译烧录即可断电永久保存。
+4. **硬件接口逐脚定义与排错**：
+   - 详见 [docs/hardware-interface-manual.md](file:///C:/Users/Seraphina/Documents/ESD/firmware/line-following-car/docs/hardware-interface-manual.md) 与 [docs/codebase-guide.md](file:///C:/Users/Seraphina/Documents/ESD/firmware/line-following-car/docs/codebase-guide.md)。

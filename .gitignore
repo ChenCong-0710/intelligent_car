@@ -1,0 +1,21 @@
+# CMake and STM32 build outputs
+/build/
+
+# IDE state and machine-specific VS Code settings
+/.settings/
+/.vscode/settings.json
+
+# Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Generated logs and OS files
+*.log
+.DS_Store
+Thumbs.db
+
+# Generated test runs and local serial-port settings
+/data/*
+!/data/README.md
+!/data/latest_calibration.json
