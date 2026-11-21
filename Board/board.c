@@ -86,7 +86,7 @@ static uint8_t adc_vref_mode; /* 0=回退默认, 1=外部VREF+, 2=内部2.90V_VR
  */
 #define FLASH_STORAGE_ADDR 0x0807F800UL
 #define FLASH_STORAGE_MAGIC 0x4C464734UL
-#define FLASH_STORAGE_VERSION 5UL
+#define FLASH_STORAGE_VERSION 6UL /* v6: LfProbeConfig 新增步进扫掠步长 scan_step_us 字段 */
 
 typedef struct {
     _Alignas(8) uint32_t magic; /**< 魔数标识 "LFG4" (0x4C464734) */

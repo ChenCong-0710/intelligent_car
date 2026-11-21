@@ -71,12 +71,17 @@ static void change_state(LfController *c, LfState s, uint32_t now) {
     c->state_since = now;
 }
 
+/** @brief 清空云台步进扫掠采样缓存并复位本轮瞄准结果（具体实现见模块 8a） */
+static void probe_scan_reset(LfController *c);
+
 /** @brief 切换四面打靶子阶段，同时记录该阶段起始时间戳、起始里程与起始航向角 */
 static void change_probe_phase(LfController *c, LfProbePhase p, uint32_t now) {
     c->probe_phase = p;
     c->phase_since = now;
     c->phase_start_mm = c->odo.distance_mm;
     c->phase_start_rad = c->odo.heading_rad;
+    /* 每次进入瞄准阶段都重新开始一轮全新扫掠，避免上一面的回波数据污染本轮拟合 */
+    if (p == LF_PROBE_AIM) probe_scan_reset(c);
 }
 
 /* ============================================================================
@@ -123,7 +128,7 @@ LfConfig lf_default_config(void) {
         /* 四面顺时针障碍物探测与 10s 激光打靶默认参数（均可经蓝牙 set probe_* 在线标定） */
         .probe = {
             .clockwise = true, .faces = 4U,
-            .aim_ms = 1200U, .sweep_us = 220U, .laser_ms = 10000U,
+            .aim_ms = 2000U, .sweep_us = 600U, .scan_step_us = 75U, .laser_ms = 10000U,
             .aim_min_mm = 40U, .aim_max_mm = 400U, .phase_timeout_ms = 4500U,
             .turn_speed_mm_s = 90.0f, .drive_speed_mm_s = 120.0f, .approach_speed_mm_s = 85.0f,
             .turn_deg = 90.0f, .edge1_mm = 220.0f, .edge2_mm = 220.0f, .approach_max_mm = 260.0f
@@ -254,6 +259,7 @@ bool lf_config_valid(const LfConfig *p) {
     if (pr->faces < 1U || pr->faces > 4U ||
         pr->aim_ms < 200U || pr->aim_ms > 5000U ||
         pr->sweep_us < 20U || pr->sweep_us > 600U ||
+        pr->scan_step_us < 20U || pr->scan_step_us > 200U ||
         pr->laser_ms < 200U || pr->laser_ms > 30000U ||
         pr->aim_min_mm < 20U || pr->aim_max_mm <= pr->aim_min_mm || pr->aim_max_mm > 2000U ||
         pr->phase_timeout_ms < 500U || pr->phase_timeout_ms > 15000U ||
@@ -804,6 +810,154 @@ static bool morse_2short_1long(uint32_t elapsed_ms) {
     return (slot < 150U) || (slot >= 300U && slot < 450U) || (slot >= 600U && slot < 1050U);
 }
 
+/* ============================================================================
+ * 模块 8a：云台步进扫掠 + 平面法线（垂直位置）最小二乘拟合
+ * ============================================================================
+ * 对一堵垂直于地面的平面，从不同水平角度 theta 测距满足 1/r(theta) = a*cos(theta) + b*sin(theta)，
+ * 其法线（即小车真正需要“正对/垂直”的方向）位于 theta* = atan2(b, a)。
+ * 因此本模块按固定脉宽步长离散驻留采样，再对连续有效回波段做二维最小二乘拟合求出平面法线，
+ * 相比“只记录单点最小距离”能显著抵抗超声噪声、斜射回波衰减与多径干扰。
+ */
+
+/** @brief 单个扫掠采样点的最短驻留时长 (ms)，必须覆盖一次 60 ms 的硬件超声触发周期 */
+#define LF_PROBE_SCAN_MIN_DWELL_MS 60U
+
+/** @brief 瞄准阶段开始前让舵机在首点稳定下来的时间上限 (ms) */
+#define LF_PROBE_AIM_SETTLE_MS 150U
+
+/** @brief 取第 index 个离散采样点对应的舵机脉宽 (us，按 ±sweep_us 线性分布并限幅 900..2100) */
+static uint16_t probe_scan_pulse(const LfController *c, uint16_t index) {
+    const LfProbeConfig *pr = &c->cfg.probe;
+    float span = c->scan_points > 1U ? (float)(c->scan_points - 1U) : 1.0f;
+    float offset = -1.0f * (float)pr->sweep_us + 2.0f * (float)pr->sweep_us * (float)index / span;
+    float us = (float)c->cfg.servo_center_us + offset;
+    if (us < 900.0f) us = 900.0f;
+    if (us > 2100.0f) us = 2100.0f;
+    return (uint16_t)(us + 0.5f);
+}
+
+/** @brief 清空云台步进扫掠采样缓存并复位本轮瞄准结果 */
+static void probe_scan_reset(LfController *c) {
+    memset(c->scan_range_mm, 0, sizeof(c->scan_range_mm));
+    memset(c->scan_sum_mm, 0, sizeof(c->scan_sum_mm));
+    memset(c->scan_hits, 0, sizeof(c->scan_hits));
+    c->scan_points = 0;
+    c->scan_index = 0;
+    c->best_servo_us = c->cfg.servo_center_us;
+    c->best_obstacle_mm = UINT16_MAX;
+}
+
+/** @brief 依据扫掠半幅、步长与总时长规划本轮离散采样点数（保证每点驻留 >= LF_PROBE_SCAN_MIN_DWELL_MS） */
+static uint16_t probe_scan_plan(LfController *c, uint32_t sweep_ms) {
+    const LfProbeConfig *pr = &c->cfg.probe;
+    uint32_t step = pr->scan_step_us ? (uint32_t)pr->scan_step_us : 75U;
+    uint32_t n = (2U * (uint32_t)pr->sweep_us) / step + 1U;
+    uint32_t max_n = sweep_ms / LF_PROBE_SCAN_MIN_DWELL_MS;
+    if (max_n < 3U) max_n = 3U;
+    if (n < 3U) n = 3U;
+    if (n > (uint32_t)LF_PROBE_SCAN_POINTS) n = (uint32_t)LF_PROBE_SCAN_POINTS;
+    if (n > max_n) n = max_n;
+    c->scan_points = (uint8_t)n;
+    return (uint16_t)n;
+}
+
+/**
+ * @brief 对最长连续有效回波段做 1/r = a*cos(theta) + b*sin(theta) 最小二乘拟合，求出平面法线方向
+ * @param[out] pulse_us    正对平面法线方向的舵机脉宽 (us)
+ * @param[out] distance_mm 该方向上实测的回波距离 (mm)
+ * @return true = 拟合成功；false = 有效点不足或拟合残差 > 12%（调用方改用三点平滑最小值兜底）
+ */
+static bool probe_fit_normal(const LfController *c, uint16_t *pulse_us, uint16_t *distance_mm) {
+    unsigned n = c->scan_points;
+    if (n < 3U) return false;
+    unsigned run_start = 0, run_len = 0, best_start = 0, best_len = 0;
+    for (unsigned i = 0; i <= n; ++i) {
+        if (i < n && c->scan_range_mm[i] != 0U) {
+            if (run_len == 0U) run_start = i;
+            ++run_len;
+        } else {
+            if (run_len > best_len) { best_start = run_start; best_len = run_len; }
+            run_len = 0U;
+        }
+    }
+    if (best_len < 3U) return false;
+
+    const float half_us = (float)c->cfg.probe.sweep_us;
+    float offset_per_index = (2.0f * half_us) / (float)(n - 1U); /* 相邻采样点的脉宽差 (us) */
+
+    /* 首尾各去掉一个点：目标恰好进出波束边缘时回波幅度最容易被低估 */
+    unsigned fit_start = best_start + (best_len >= 5U ? 1U : 0U);
+    unsigned fit_end = best_start + best_len - (best_len >= 5U ? 1U : 0U);
+    float scc = 0, sss = 0, scs = 0, scz = 0, ssz = 0;
+    for (unsigned i = fit_start; i < fit_end; ++i) {
+        float offset_us = -half_us + offset_per_index * (float)i;
+        float radians = (offset_us / LF_PROBE_SCAN_US_PER_DEG) * 0.01745329252f;
+        float co = cosf(radians), si = sinf(radians);
+        float z = 1.0f / (float)c->scan_range_mm[i];
+        scc += co * co; sss += si * si; scs += co * si;
+        scz += co * z;  ssz += si * z;
+    }
+    float det = scc * sss - scs * scs;
+    float chosen_index = -1.0f;
+    if (det > 0.0001f) {
+        float a = (scz * sss - ssz * scs) / det;
+        float b = (ssz * scc - scz * scs) / det;
+        float normal_deg = atan2f(b, a) * 57.29577951f;
+        chosen_index = (normal_deg * LF_PROBE_SCAN_US_PER_DEG + half_us) / offset_per_index;
+        float relative_error = 0;
+        for (unsigned i = fit_start; i < fit_end; ++i) {
+            float offset_us = -half_us + offset_per_index * (float)i;
+            float radians = (offset_us / LF_PROBE_SCAN_US_PER_DEG) * 0.01745329252f;
+            float predicted = a * cosf(radians) + b * sinf(radians);
+            float measured = 1.0f / (float)c->scan_range_mm[i];
+            relative_error += fabsf(predicted - measured) / measured;
+        }
+        relative_error /= (float)(fit_end - fit_start);
+        if (relative_error > 0.12f || chosen_index < (float)best_start ||
+            chosen_index > (float)(best_start + best_len - 1U)) chosen_index = -1.0f;
+    }
+    if (chosen_index < 0.0f) {
+        /* 曲面或回波抖动较大时退回三点平滑最小值（等价于参考工程 Tracker_ChooseNormal 的兜底分支） */
+        uint32_t smallest = UINT32_MAX;
+        unsigned fallback = best_start + best_len / 2U;
+        for (unsigned i = best_start + 1U; i + 1U < best_start + best_len; ++i) {
+            uint32_t sum = (uint32_t)c->scan_range_mm[i - 1U] + (uint32_t)c->scan_range_mm[i] +
+                           (uint32_t)c->scan_range_mm[i + 1U];
+            if (sum < smallest) { smallest = sum; fallback = i; }
+        }
+        chosen_index = (float)fallback;
+    }
+    unsigned nearest = (unsigned)(chosen_index + 0.5f);
+    if (nearest < best_start) nearest = best_start;
+    if (nearest >= best_start + best_len) nearest = best_start + best_len - 1U;
+    float us = (float)c->cfg.servo_center_us + (-half_us + offset_per_index * chosen_index);
+    if (us < 900.0f) us = 900.0f;
+    if (us > 2100.0f) us = 2100.0f;
+    *pulse_us = (uint16_t)(us + 0.5f);
+    *distance_mm = c->scan_range_mm[nearest];
+    return true;
+}
+
+/** @brief 结束一轮扫掠：各点累加值换算为平均距离，再拟合平面法线并锁存最佳瞄准脉宽/距离 */
+static void probe_scan_finish(LfController *c) {
+    unsigned n = c->scan_points;
+    for (unsigned i = 0; i < n; ++i) {
+        uint32_t hits = c->scan_hits[i];
+        c->scan_range_mm[i] = hits ? (uint16_t)(c->scan_sum_mm[i] / hits) : 0U;
+    }
+    uint16_t best_mm = UINT16_MAX, best_us = c->cfg.servo_center_us;
+    for (unsigned i = 0; i < n; ++i) {
+        if (c->scan_range_mm[i] != 0U && c->scan_range_mm[i] < best_mm) {
+            best_mm = c->scan_range_mm[i];
+            best_us = probe_scan_pulse(c, (uint16_t)i);
+        }
+    }
+    uint16_t fit_us = 0, fit_mm = 0;
+    if (probe_fit_normal(c, &fit_us, &fit_mm)) { best_us = fit_us; best_mm = fit_mm; }
+    c->best_servo_us = best_us;
+    c->best_obstacle_mm = best_mm;
+}
+
 static void step_probing(LfController *c, const LfInput *in, uint32_t now, float dt) {
     if (now - c->state_since >= 180000U) { lf_stop(c, now); return; }
     const LfProbeConfig *pr = &c->cfg.probe;
@@ -819,26 +973,31 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
     case LF_PROBE_AIM: {
         c->out.enable = c->out.brake = c->out.park_lamp = true;
         uint32_t settle_ms = pr->aim_ms / 4U;
-        if (settle_ms > 150U) settle_ms = 150U;
+        if (settle_ms > LF_PROBE_AIM_SETTLE_MS) settle_ms = LF_PROBE_AIM_SETTLE_MS;
         uint32_t sweep_ms = pr->aim_ms > settle_ms ? (pr->aim_ms - settle_ms) : 1U;
-        int32_t sweep_off = -(int32_t)pr->sweep_us;
-        if (elapsed > settle_ms) {
+        uint16_t points = probe_scan_plan(c, sweep_ms);
+        if (elapsed < settle_ms) {
+            /* 首点驻留：等舵机从上一位置转到位，并让超声回波彻底稳定后再开始计点 */
+            c->out.servo_us = probe_scan_pulse(c, 0U);
+        } else {
             uint32_t s_el = elapsed - settle_ms;
             if (s_el > sweep_ms) s_el = sweep_ms;
-            sweep_off = -(int32_t)pr->sweep_us + (int32_t)((2U * (uint32_t)pr->sweep_us * s_el) / sweep_ms);
-        }
-        int32_t raw_us = (int32_t)c->cfg.servo_center_us + sweep_off;
-        if (raw_us < 900) raw_us = 900;
-        if (raw_us > 2100) raw_us = 2100;
-        uint16_t cmd_us = (uint16_t)raw_us;
-        c->out.servo_us = cmd_us;
-        if (elapsed >= settle_ms && in->obstacle_valid &&
-            in->obstacle_mm >= pr->aim_min_mm && in->obstacle_mm <= pr->aim_max_mm &&
-            in->obstacle_mm < c->best_obstacle_mm) {
-            c->best_obstacle_mm = in->obstacle_mm;
-            c->best_servo_us = cmd_us;
+            /* 由已用时间反推当前应驻留的离散角度点：舵机做“台阶式”步进而非连续扫掠，
+             * 保证每个角度上都留足 >= 60 ms 去覆盖一次硬件超声触发周期 */
+            uint32_t index = (s_el * (uint32_t)points) / sweep_ms;
+            if (index >= (uint32_t)points) index = (uint32_t)points - 1U;
+            c->scan_index = (uint8_t)index;
+            c->out.servo_us = probe_scan_pulse(c, (uint16_t)index);
+            /* 仅当回波落在“正前方合理障碍距离窗口 [aim_min_mm, aim_max_mm]”内才计入该角度样本 */
+            if (in->obstacle_valid &&
+                in->obstacle_mm >= pr->aim_min_mm && in->obstacle_mm <= pr->aim_max_mm) {
+                c->scan_sum_mm[index] += in->obstacle_mm;
+                uint8_t hits = c->scan_hits[index];
+                if (hits < 255) { ++hits; c->scan_hits[index] = hits; }
+            }
         }
         if (elapsed >= pr->aim_ms) {
+            probe_scan_finish(c);
             c->out.servo_us = c->best_servo_us ? c->best_servo_us : c->cfg.servo_center_us;
             change_probe_phase(c, LF_PROBE_LASER, now);
         }
@@ -912,7 +1071,8 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
     }
     case LF_PROBE_COMPLETE_BEEPS:
         c->out.enable = c->out.brake = c->out.park_lamp = true;
-        c->out.servo_us = c->cfg.servo_center_us;
+        /* 单面/最后一面完成后继续保持在最佳瞄准角，不再立刻回正前方。 */
+        c->out.servo_us = c->best_servo_us ? c->best_servo_us : c->cfg.servo_center_us;
         c->out.buzzer = morse_2short_1long(elapsed);
         if (elapsed >= 3600U) {
             c->out = (LfOutput){0};

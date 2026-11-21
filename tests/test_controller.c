@@ -22,6 +22,7 @@
  *   21. obstacle     : <15cm 超声波自动主动短接制动停车 + 停车灯常亮 + 1.0s 蜂鸣器长鸣
  *   22. probe        : 四面顺时针障碍物瞄准 + 10s 激光与蜂鸣器同步发射 + 3 组“两短一长”鸣叫
  *   23. motorcal     : 左右轮不同死区与斜率的 3 轮自动扫描拟合及前馈不对称补偿验证
+ *   24. probeaim     : 云台步进扫掠 + 平面法线(垂直位置)最小二乘拟合精度验证
  */
 
 #include "line_follower.h"
@@ -188,8 +189,8 @@ static void probe(void) {
     assert(lf_start_probe(&c,now));
     assert(c.state==LF_PROBING && c.probe_phase==LF_PROBE_AIM);
     for(unsigned face=0;face<4;++face){
-        /* 1200 ms aim sweep (240 ticks @ 5 ms) */
-        in.obstacle_mm=125;tick(&c,&in,&now,245);
+        /* 2000 ms stepped aim sweep (400 ticks @ 5 ms) */
+        in.obstacle_mm=125;tick(&c,&in,&now,420);
         assert(c.probe_phase==LF_PROBE_LASER && c.out.laser && c.out.buzzer && c.out.park_lamp);
         tick(&c,&in,&now,2000); /* 10 s laser + synchronous buzzer */
         if(face<3){
@@ -228,6 +229,38 @@ static void probe(void) {
     assert(!strcmp(lf_probe_phase_name(LF_PROBE_TURN_CORNER), "TURN_CORNER"));
     LfConfig bad = lf_default_config(); bad.probe.faces = 0; assert(!lf_config_valid(&bad));
     bad = lf_default_config(); bad.probe.turn_deg = 10.0f; assert(!lf_config_valid(&bad));
+}
+/* 云台步进扫掠 + 平面法线(垂直位置)拟合精度：
+ * 把 20° 方向的人造平面回波（r = d / cos(theta - 20°)）喂给瞄准状态机，
+ * 扫掠结束后锁定的舵机脉宽必须落在 1500 + 20*US_PER_DEG 附近，
+ * 而不是简单返回“单点最小距离”所在的 ±60° 边缘。 */
+static void probeaim(void) {
+    LfController c;ready(&c);uint32_t now=0;
+    LfInput in=input(3000,500,500,3000);
+    in.obstacle_valid=true;in.obstacle_mm=130;
+    tick(&c,&in,&now,2);assert(c.state==LF_OBSTACLE_STOP);
+    assert(lf_start_probe(&c,now));
+    const float normal_deg=20.0f, plane_mm=150.0f;
+    unsigned guard=0, ping_ticks=0;
+    while(c.probe_phase==LF_PROBE_AIM && ++guard<2000){
+        /* 真实硬件上 TIM17 每 60 ms 才触发一次超声，回波值在两次触发之间保持不变 */
+        if(++ping_ticks>=12U){
+            ping_ticks=0U;
+            float deg=((float)c.out.servo_us-(float)c.cfg.servo_center_us)/LF_PROBE_SCAN_US_PER_DEG;
+            float rel=(deg-normal_deg)*0.01745329252f;
+            in.obstacle_mm=(uint16_t)(plane_mm/cosf(rel)+0.5f);
+        }
+        now+=5;lf_step(&c,&in,now,.005f);
+    }
+    assert(c.probe_phase==LF_PROBE_LASER);
+    assert(c.scan_points>=9U);
+    float found_deg=((float)c.best_servo_us-(float)c.cfg.servo_center_us)/LF_PROBE_SCAN_US_PER_DEG;
+    assert(fabsf(found_deg-normal_deg)<4.0f);
+    assert(c.best_obstacle_mm>=140U && c.best_obstacle_mm<=170U);
+    /* 步进扫掠步长参数必须受配置校验约束 */
+    LfConfig bad=lf_default_config();bad.probe.scan_step_us=5U;assert(!lf_config_valid(&bad));
+    bad=lf_default_config();bad.probe.scan_step_us=500U;assert(!lf_config_valid(&bad));
+    assert(lf_config_valid(&c.cfg));
 }
 static void motorcal(void) {
     /* Simulate asymmetric motors across 15 steps (0.06..0.95 duty range):
@@ -427,6 +460,7 @@ int main(int argc,char **argv) {
     else if(!strcmp(name,"scurve"))scurve();
     else if(!strcmp(name,"obstacle"))obstacle();
     else if(!strcmp(name,"probe"))probe();
+    else if(!strcmp(name,"probeaim"))probeaim();
     else if(!strcmp(name,"motorcal"))motorcal();
     else if(!strcmp(name,"ground_priority"))ground_priority();
     else if(!strcmp(name,"hwemu"))hwemu();

@@ -1,12 +1,12 @@
 {
-  "date": "2026-11-17",
+  "date": "2026-11-21",
   "mcu": "STM32G474VET6",
   "hardware_flash_performed": true,
   "real_track_verified": false,
   "profiles": {
     "Debug": {
-      "bin_bytes": 82956,
-      "bin_sha256": "be7be881a5470c0d011e99acb3835efffbdb5e5fc0edc01182661434963e8ff2",
+      "bin_bytes": 97328,
+      "bin_sha256": "f73e4cccd43a68bd1fb6b3db8083e10d9e6b3fa27f0be5de1568b96a97e9abee",
       "initial_stack": "0x20018000",
       "warnings": 0,
       "interrupt_vectors": "strong handlers present",
@@ -14,8 +14,8 @@
       "rwx_segments": false
     },
     "Release": {
-      "bin_bytes": 79188,
-      "bin_sha256": "61363e2198c9f4ce8d6352ca01bcbeac992f79f5b0a33dc8c34dd67e93a6facf",
+      "bin_bytes": 92344,
+      "bin_sha256": "a303ac59a0f1ce5824abd669d96c50b50213c82b49d8b970b45285060889e0d6",
       "initial_stack": "0x20018000",
       "warnings": 0,
       "interrupt_vectors": "strong handlers present",
@@ -24,7 +24,7 @@
     }
   },
   "host_tests": {
-    "c_unit_tests_passed": 25,
+    "c_unit_tests_passed": 27,
     "c_unit_tests_failed": 0,
     "python_host_station_selftest": "PASS"
   },
@@ -44,16 +44,18 @@
     "Three-key polarity verification (SW2 PD0 low-active before U3 + SW3 PD1 + CORE_KEY PD15 internal pullup) + io/outtest diagnostics",
     "Portrait 128x160 ST7735S LCD + 500ms HC-04 auto-baud cooldown + live COM10 bidirectional BT verification",
     "Portrait 0xC0 upright LCD + voltage-proportional bar + TIM3/4 IC1 encoder reversal + VREFBUF 2.9V auto-rescue",
-    "Suspended motor polarity check (bench) + 5-pass mcal air 5 + vtest saved to data/"
+    "Suspended motor polarity check (bench) + 5-pass mcal air 5 + vtest saved to data/",
+    "Auto servo+ultrasonic plane-normal (perpendicular) search right after <15cm obstacle stop (AUTO_PROBE_ON_OBSTACLE) + LED blink indicator + probeaim host test",
+    "Servo held at mechanical center while arming/tracking so the <15cm ultrasonic stop range is measured along the heading (TRACK_SERVO_CENTER)"
   ],
   "source_sha256": {
     "Control\\bridge_logic.c": "d6a00e152c698aee11aad7c34edb8adf5018fa837903079f9fcc8be368978e02",
-    "Control\\line_follower.c": "b3527504041bd6cf943d8567195c41f1c9a6f460cfa109c208e7114b41b1906c",
-    "Board\\board.c": "b71b4d910ab54c5a5f8f6aea04dc2b25c5a7b40d9f0a3480159be2b3ca732269",
-    "Board\\lcd_st7735.c": "06d7051428a60152e699b0d52fe859e19086da474c2d0a97a0f9bf29a1a74105",
-    "Core\\Src\\main.c": "28423567381ccf9b4170d893694ca492579d876edf136aa9704dd1003894309c",
+    "Control\\line_follower.c": "3511caa292390223f76fc53d5e2d856a8563dec5efbade9a0ec0d33d8ca919d5",
+    "Board\\board.c": "bda5358f450665e4c5ddaced5b4e4299dc1f3f4a4203a2e22fee7200b7ace76b",
+    "Board\\lcd_st7735.c": "3d6cceb53f70629ed40caaa93295574160fcfdec35978ca8ab7fa10f60ec0c3b",
+    "Core\\Src\\main.c": "ebb358d88512c24f85bf8d7a5ad8cc37681d8ad290c25d3c803ac9d589ae39c9",
     "Core\\Src\\syscalls.c": "d482a68c95a5259666c79aa6d9b8fe6a0aee9fdd6175e9f468131779e8bcb5ff",
-    "tools\\host_station.py": "267db9b6382437676b13e2fe972ad39fc46e9b11ac510df7b24fde41c9559e96"
+    "tools\\host_station.py": "ed6e44d233b05ea88ec21ae91d0c4188944a35e6027d1ff277f6729dc1fa321a"
   },
   "clangd_checks": [
     {

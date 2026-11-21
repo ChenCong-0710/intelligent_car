@@ -12,11 +12,28 @@
  */
 
 #include "board.h"
+#include "stm32g4xx.h"
 #include <math.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+/* 距离障碍物 <15 cm 停稳后，自动立刻开始“舵机 + 超声波”寻找障碍物垂直(法线)方向：1 = 自动（比赛流程），0 = 需手动按探测键 */
+#define AUTO_PROBE_ON_OBSTACLE 1
+
+/* 主动短接制动停稳后额外等待多久再启动云台扫掠 (ms)：留出机械停稳与舵机 5V 电源建立时间 */
+#define AUTO_PROBE_SETTLE_MS 300U
+
+/* 循迹行驶期间把云台舵机锁定并保持供电在中位：1 = 启用（推荐，保证 <15cm 停车测距方向始终朝前） */
+#define TRACK_SERVO_CENTER 1
+
+/* 单面打靶台架测试：1 = 只打一面、无激光、用核心板 LED 闪烁表示完成 */
+#define PROBE_TEST_ONE_FACE 1
+#define PROBE_TEST_LASER_MS 10000U  /* 锁定目标后的保持/模拟发射时间（LED 闪烁） */
+#define PROBE_TEST_BLINK_MS 10000U  /* 完成后 LED 继续闪烁 10 s，期间保持瞄准 */
+#define PROBE_TEST_SWEEP_US 600U    /* 单侧扫掠半幅：1500±600 = 900..2100us */
+#define PROBE_TEST_AIM_MS 2000U     /* 大角度扫掠给足时间，含起始端稳定 150ms */
 
 /* ============================================================================
  * 1. 全局控制器与调试器 Live Watch 实时观测结构体
@@ -55,10 +72,16 @@ static uint32_t scan_step_since;
 static float move_target, move_speed, move_start_mm, move_start_rad;
 static uint32_t move_since, move_timeout_ms;
 static LfOutput outtest_output;
+/* 舵机连续往返扫掠台架测试：servosweep [period_ms] / servosweep stop */
+static bool servo_sweep_active;
+static uint32_t servo_sweep_since;
+static uint16_t servo_sweep_period_ms = 2000U;
+static uint32_t probe_done_blink_until;
 
 static void clear_aux_modes(void) {
     bench_active = false; vtest_active = false; outtest_active = false;
     outtest_led = false; scan_active = false; move_active = false;
+    servo_sweep_active = false;
 }
 
 /* ============================================================================
@@ -98,6 +121,13 @@ static void start(uint32_t now) {
 
 /** @brief 启动顺时针四面障碍物目标探测与 10 秒激光打靶 */
 static void start_probe(uint32_t now) {
+#if PROBE_TEST_ONE_FACE
+    /* 台架测试：强制单面，缩短模拟发射时间。参数在 Flash 恢复之后覆盖。 */
+    g_lf.cfg.probe.faces = 1U;
+    g_lf.cfg.probe.laser_ms = PROBE_TEST_LASER_MS;
+    g_lf.cfg.probe.sweep_us = PROBE_TEST_SWEEP_US;
+    g_lf.cfg.probe.aim_ms = PROBE_TEST_AIM_MS;
+#endif
     clear_aux_modes();
     board_log(lf_start_probe(&g_lf, now) ?
               "PROBE: starting %u-face %s target probing (laser=%ums, aim=%ums, edge=%.0f/%.0fmm, turn=%.1fdeg).\r\n" :
@@ -267,6 +297,13 @@ static void print_io(void) {
         (unsigned)io.enc_left_cnt, (unsigned)io.enc_right_cnt,
         (unsigned)io.raw_adc[0], (unsigned)io.raw_adc[1],
         (unsigned)io.raw_adc[2], (unsigned)io.raw_adc[3]);
+    /* 舵机/云台硬件自检：TIM2 是否在计数、CCR1 脉宽、PA15 复用、PC7 电源使能 */
+    board_log("IO_SERVO,TIM2_CR1=0x%04X,CNT=%u,CCR1=%u,ARR=%u,PA15_MODER=%u,PA15_AF=%u,PC7_ODR=%u\r\n",
+        (unsigned)TIM2->CR1, (unsigned)TIM2->CNT, (unsigned)TIM2->CCR1,
+        (unsigned)TIM2->ARR,
+        (unsigned)((GPIOA->MODER >> 30) & 3U),
+        (unsigned)((GPIOA->AFR[1] >> 28) & 0xFU),
+        (unsigned)((GPIOC->ODR >> 7) & 1U));
     board_log("IO_NOTE: Keys idle=H(PD0=3.185V,PD1/PD15=3.3V), press=L(0V). Outputs require J_C2.6=GND -> U3.2(MODE_MCU=5V).\r\n");
 }
 
@@ -383,7 +420,7 @@ static bool set_parameter(const char *name, float value) {
     if (!strcmp(name, "search_ms") || !strcmp(name, "lost_brake_ms") ||
         !strcmp(name, "cross_ms") || !strcmp(name, "obs_mm") || !strcmp(name, "servo_us") ||
         !strcmp(name, "probe_cw") || !strcmp(name, "probe_faces") || !strcmp(name, "probe_aim_ms") ||
-        !strcmp(name, "probe_sweep_us") || !strcmp(name, "probe_laser_ms") ||
+        !strcmp(name, "probe_sweep_us") || !strcmp(name, "probe_step_us") || !strcmp(name, "probe_laser_ms") ||
         !strcmp(name, "probe_aim_min") || !strcmp(name, "probe_aim_max") || !strcmp(name, "probe_timeout_ms")) {
         if (floorf(value) != value) return false;
         if (!strcmp(name, "search_ms") && value >= 0 && value <= 1000) { candidate.search_ms = (uint16_t)value; known = true; }
@@ -395,6 +432,7 @@ static bool set_parameter(const char *name, float value) {
         if (!strcmp(name, "probe_faces") && value >= 1 && value <= 4) { candidate.probe.faces = (uint8_t)value; known = true; }
         if (!strcmp(name, "probe_aim_ms") && value >= 200 && value <= 5000) { candidate.probe.aim_ms = (uint16_t)value; known = true; }
         if (!strcmp(name, "probe_sweep_us") && value >= 20 && value <= 600) { candidate.probe.sweep_us = (uint16_t)value; known = true; }
+        if (!strcmp(name, "probe_step_us") && value >= 20 && value <= 200) { candidate.probe.scan_step_us = (uint16_t)value; known = true; }
         if (!strcmp(name, "probe_laser_ms") && value >= 200 && value <= 30000) { candidate.probe.laser_ms = (uint16_t)value; known = true; }
         if (!strcmp(name, "probe_aim_min") && value >= 20 && value <= 500) { candidate.probe.aim_min_mm = (uint16_t)value; known = true; }
         if (!strcmp(name, "probe_aim_max") && value >= 100 && value <= 2000) { candidate.probe.aim_max_mm = (uint16_t)value; known = true; }
@@ -407,7 +445,8 @@ static bool set_parameter(const char *name, float value) {
 
 static bool is_stopped(void) {
     return (g_lf.state == LF_STOPPED || g_lf.state == LF_OBSTACLE_STOP || g_lf.state == LF_FAULT) &&
-           !bench_active && !vtest_active && !outtest_active && !scan_active && !move_active;
+           !bench_active && !vtest_active && !outtest_active && !scan_active && !move_active &&
+           !servo_sweep_active;
 }
 
 static void command(char *line, uint32_t now) {
@@ -438,8 +477,9 @@ static void command(char *line, uint32_t now) {
         board_log("cal | mcal [ground|air] [passes=5] | use_mcal [ground|air] | start | probe | stop | status | diag | hwmap | io | us | odom_reset | log 0/1 | probe_log 0/1\r\n");
         board_log("set kp/ki/kd/k3/speed/curve_min/max_turn/max_duty/speed_kp/speed_ki VALUE\r\n");
         board_log("set db_l/db_r/fs_l/fs_r VALUE; set speed_loop/reverse/brake_pwm/obstacle 0/1; enc_l/r motor_l/r -1/1\r\n");
-        board_log("PROBE: set probe_cw/probe_faces/probe_aim_ms/probe_sweep_us/probe_laser_ms/probe_turn_deg/probe_edge1_mm/probe_edge2_mm/probe_approach_mm V\r\n");
+        board_log("PROBE: set probe_cw/probe_faces/probe_aim_ms/probe_sweep_us/probe_step_us/probe_laser_ms/probe_turn_deg/probe_edge1_mm/probe_edge2_mm/probe_approach_mm V\r\n");
         board_log("PROBE-CAL: scan [span_us=220] [step_us=20] [dwell_ms=140] | drive MM [SPD=120] | turn DEG [SPD=90] | outtest lamp/buz/laser/servo/led/stop VAL [MS]\r\n");
+        board_log("SERVO: servosweep [period_ms=2000] (continuous 900..2100us) | servosweep stop | stop\r\n");
         board_log("HW-EMU: hw_preset stock|group_b; set hw_emu/hw_netlist/hw_r45_5v/hw_i/hw_coast 0/1; mcurve/vtest/bench/calset/defaults\r\n");
         return;
     }
@@ -460,11 +500,34 @@ static void command(char *line, uint32_t now) {
     }
     if (!strcmp(cmd, "start")) { start(now); return; }
     if (!strcmp(cmd, "probe")) { start_probe(now); return; }
+    if (!strcmp(cmd, "servosweep")) {
+        /* 舵机连续往返台架测试：默认 2 s 一个完整 900->2100->900 周期，直到 stop 或 servosweep stop */
+        char *v = strtok(NULL, " \t");
+        if (v && !strcmp(v, "stop")) {
+            servo_sweep_active = false;
+            board_log("SERVOSWEEP STOP\r\n");
+            return;
+        }
+        char *endp = NULL;
+        unsigned long period = v ? strtoul(v, &endp, 10) : 2000UL;
+        if ((v && (endp == v || *endp != 0)) || period < 500UL || period > 10000UL) {
+            board_log("SERVOSWEEP ERROR (usage: servosweep [period_ms 500..10000] | servosweep stop)\r\n");
+            return;
+        }
+        if (g_lf.fault != LF_OK) { board_log("SERVOSWEEP DENIED (fault)\r\n"); return; }
+        if (g_lf.state != LF_STOPPED) lf_stop(&g_lf, now);
+        clear_aux_modes();
+        servo_sweep_period_ms = (uint16_t)period;
+        servo_sweep_since = now;
+        servo_sweep_active = true;
+        board_log("SERVOSWEEP START period_ms=%lu range=900..2100us (send stop or servosweep stop)\r\n", period);
+        return;
+    }
     if (!strcmp(cmd, "outtest")) {
         /* 单路硬件输出点亮自检 (outtest lamp/buz/laser/servo/led/stop val [ms])，不驱动电机以保证台架安全 */
         char *ch = strtok(NULL, " \t");
         if (!ch || !strcmp(ch, "stop")) {
-            outtest_active = false; outtest_led = false;
+            outtest_active = false; outtest_led = false; servo_sweep_active = false;
             memset(&outtest_output, 0, sizeof(outtest_output));
             board_log("OUTTEST STOP\r\n");
             return;
@@ -494,6 +557,7 @@ static void command(char *line, uint32_t now) {
         } else valid = false;
         if (!valid) { board_log("OUTTEST ERROR\r\n"); return; }
         if (g_lf.state != LF_STOPPED) lf_stop(&g_lf, now);
+        clear_aux_modes();
         outtest_output = next_out;
         outtest_led = next_led;
         outtest_until = now + (uint32_t)ms;
@@ -772,10 +836,13 @@ static void snapshot(uint32_t now, const LfInput *sample) {
 
 int main(void) {
     lf_init(&g_lf); board_init();
+    /* 上电先尝试恢复上次 save 到片内 Flash 的红外标定与全部参数，保证“上电后按键即可发车” */
+    bool cfg_loaded = board_flash_load(&g_lf.cal, &g_lf.cfg);
     g_lf.cfg.hw.adc_vref_v = board_adc_vref_v();
     board_log("\r\nG474 LINE FOLLOW v2.2; 80MHz/TIM6+ADC1 5x1kHz/control 200Hz/PWM 20kHz; BT=%s (PC10=%c)\r\n",
         bt_probe_label(board_bt_probe_status()), board_bt_status_pin() ? 'H' : 'L');
     board_log("RAM-first mode (no auto Flash wear). Commands: mcal air 5 | mcal ground 5 | cal | start | diag\r\n");
+    board_log("BOOT_CFG,flash_load=%u,cal_valid=%u\r\n", (unsigned)cfg_loaded, (unsigned)g_lf.cal.valid);
     board_log("CSV,ms,state,fault,raw0,raw1,raw2,raw3,q0,q1,q2,q3,pos,confidence,vL,vR,tL,tR,uL,uR\r\n");
     uint32_t last_log = board_millis();
     LfState previous_state = g_lf.state;
@@ -801,6 +868,7 @@ int main(void) {
             }
             LfInput sample = {0}; board_sample(&sample);
             buttons(now);
+
             uint32_t request = g_debug_request; g_debug_request = 0;
             if (request == 1) calibrate(now);
             if (request == 2) start(now);
@@ -809,6 +877,37 @@ int main(void) {
             if (request == 5) calibrate_motors(LF_MCAL_AIR, 5, now);
             if (request == 6) calibrate_motors(LF_MCAL_GROUND, 5, now);
             lf_step(&g_lf, &sample, now, dt);
+
+#if TRACK_SERVO_CENTER
+            /* 起跑/循迹/取线/障碍停车期间把云台锁在机械中位并保持 5V 供电：
+             * 否则舵机断电后会被振动带偏，导致“<15 cm 停车”的超声测距方向不再是车头正前方。 */
+            if (g_lf.state == LF_ARMING || g_lf.state == LF_TRACKING ||
+                g_lf.state == LF_LOST_BRAKE || g_lf.state == LF_SEARCHING ||
+                g_lf.state == LF_OBSTACLE_STOP) {
+                g_lf.out.servo_enable = true;
+                g_lf.out.servo_us = g_lf.cfg.servo_center_us;
+            }
+#endif
+
+            /* --- 自动打靶：<15 cm 主动短接制动停稳后，立刻开始“舵机 + 超声波”寻找垂直(法线)方向 --- */
+            if (AUTO_PROBE_ON_OBSTACLE && g_lf.state == LF_OBSTACLE_STOP &&
+                (int32_t)(now - (g_lf.state_since + AUTO_PROBE_SETTLE_MS)) >= 0) {
+                start_probe(now);
+            }
+
+#if PROBE_TEST_ONE_FACE
+            /* 目前没有激光器：单面测试期间关闭激光和蜂鸣器，改用 LED 指示。 */
+            if (g_lf.state == LF_PROBING) {
+                g_lf.out.laser = false;
+                g_lf.out.buzzer = false;
+            }
+            /* 完成后状态虽回到 STOPPED，仍给舵机供电并保持锁定角，直到 LED 闪烁结束。 */
+            if (g_lf.state == LF_STOPPED && probe_done_blink_until != 0U &&
+                (int32_t)(probe_done_blink_until - now) > 0) {
+                g_lf.out.servo_enable = true;
+                g_lf.out.servo_us = g_lf.best_servo_us ? g_lf.best_servo_us : g_lf.cfg.servo_center_us;
+            }
+#endif
 
             if (vtest_active && g_lf.state == LF_STOPPED && g_lf.fault == LF_OK && (now - vtest_since >= 250U)) {
                 vtest_sum_speed[0] += g_lf.measured_mm_s[0];
@@ -917,21 +1016,60 @@ int main(void) {
                                       .servo_us = g_lf.cfg.servo_center_us};
             } else if (outtest_active && g_lf.state == LF_STOPPED && g_lf.fault == LF_OK) {
                 g_lf.out = outtest_output;
+            } else if (servo_sweep_active && g_lf.state == LF_STOPPED && g_lf.fault == LF_OK) {
+                /* 连续三角波：900us -> 2100us -> 900us，周期 servo_sweep_period_ms */
+                uint32_t period = servo_sweep_period_ms ? servo_sweep_period_ms : 2000U;
+                uint32_t half = period / 2U;
+                uint32_t phase = (now - servo_sweep_since) % period;
+                uint16_t us;
+                if (phase < half)
+                    us = (uint16_t)(900U + (1200U * phase) / half);
+                else
+                    us = (uint16_t)(2100U - (1200U * (phase - half)) / half);
+                g_lf.out = (LfOutput){.servo_enable = true, .servo_us = us};
             } else if (g_lf.state != LF_STOPPED) {
                 clear_aux_modes();
             }
             board_set_pwm_hz(g_lf.cfg.hw.enable ? (uint32_t)(g_lf.cfg.hw.tri_freq_hz + 0.5f) : 20000U);
             board_apply(&g_lf.out, &g_lf.cfg); snapshot(now, &sample);
-            board_led(outtest_active ? outtest_led :
-                (g_lf.state == LF_TRACKING || g_lf.state == LF_PROBING ||
+            bool probe_indicator_blink = false;
+#if PROBE_TEST_ONE_FACE
+            probe_indicator_blink =
+                (g_lf.state == LF_PROBING &&
+                 (g_lf.probe_phase == LF_PROBE_LASER || g_lf.probe_phase == LF_PROBE_COMPLETE_BEEPS)) ||
+                (probe_done_blink_until != 0U &&
+                 (int32_t)(probe_done_blink_until - now) > 0);
+#endif
+            bool status_led_on;
+            if (outtest_active) status_led_on = outtest_led;
+            else if (probe_indicator_blink) status_led_on = ((now / 150U) % 2U) != 0U;
+            else status_led_on = (g_lf.state == LF_TRACKING || g_lf.state == LF_PROBING ||
                  ((g_lf.state == LF_CALIBRATING || g_lf.state == LF_MOTOR_CAL ||
-                   g_lf.state == LF_ARMING || g_lf.state == LF_FAULT) && (now / 100) % 2)));
+                   g_lf.state == LF_ARMING || g_lf.state == LF_FAULT) && (now / 100) % 2));
+            board_led(status_led_on);
             if (g_lf.state != previous_state) {
                 board_log("EVENT %lu %s %s\r\n", (unsigned long)now, lf_state_name(g_lf.state), lf_fault_name(g_lf.fault));
                 if (previous_state == LF_CALIBRATING) status();
+#if PROBE_TEST_ONE_FACE
+                if (previous_state == LF_PROBING && g_lf.state == LF_STOPPED) {
+                    probe_done_blink_until = now + PROBE_TEST_BLINK_MS;
+                    board_log("PROBE_TEST_DONE: single-face done, stopped; LED blink %u ms\r\n",
+                              (unsigned)PROBE_TEST_BLINK_MS);
+                }
+#endif
                 previous_state = g_lf.state;
             }
             if (g_lf.probe_phase != previous_probe_phase) {
+                if (previous_probe_phase == LF_PROBE_AIM && g_lf.probe_phase == LF_PROBE_LASER) {
+                    /* 本轮扫掠找到障碍物平面的垂直(法线)方向：打印瞄准结果，便于现场核对偏转角 */
+                    float angle_deg = ((float)g_lf.best_servo_us - (float)g_lf.cfg.servo_center_us) /
+                                      LF_PROBE_SCAN_US_PER_DEG;
+                    board_log("PROBE_LOCK,face=%u,servo_us=%u,center_us=%u,angle_deg=%.1f,dist_mm=%u,points=%u\r\n",
+                        (unsigned)g_lf.probe_face, (unsigned)g_lf.best_servo_us,
+                        (unsigned)g_lf.cfg.servo_center_us, (double)angle_deg,
+                        (unsigned)(g_lf.best_obstacle_mm == UINT16_MAX ? 0U : g_lf.best_obstacle_mm),
+                        (unsigned)g_lf.scan_points);
+                }
                 board_log("PROBE_EVENT,%lu,%u,%s,%u,%u,%.1f,%.2f\r\n",
                     (unsigned long)now, (unsigned)g_lf.probe_face, lf_probe_phase_name(g_lf.probe_phase),
                     (unsigned)g_lf.last_obstacle_mm, (unsigned)g_lf.out.servo_us,

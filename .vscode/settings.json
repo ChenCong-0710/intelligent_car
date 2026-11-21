@@ -1,0 +1,21 @@
+{
+  "cmake.useCMakePresets":"always",
+  "cmake.configureOnOpen":false,
+  "cmake.generator":"Ninja",
+  "cmake.preferredGenerators":[
+    "Ninja"
+  ],
+  "C_Cpp.default.compileCommands":"${workspaceFolder}/build/Debug/compile_commands.json",
+  "files.associations":{"*.h":"c"},
+  "files.exclude":{"**/build":true},
+  "search.exclude":{"**/Drivers":true,"**/build":true},
+  "stm32cube-ide-clangd.path":"C:/Users/Seraphina/AppData/Local/stm32cube/bundles/st-arm-clangd/21.1.0+st.2/bin/starm-clangd.exe",
+  "stm32cube-ide-clangd.arguments":[
+    "--compile-commands-dir=C:/Users/Seraphina/Documents/ESD/firmware/line-following-car/build/Debug",
+    "--query-driver=C:/Users/Seraphina/AppData/Local/stm32cube/bundles/gnu-tools-for-stm32/*/bin/arm-none-eabi-gcc.exe"
+  ],
+  "cmake.cmakePath": "cube-cmake",
+  "cmake.configureArgs": [
+    "-DCMAKE_COMMAND=cube-cmake"
+  ]
+}

@@ -29,6 +29,12 @@
 /** @brief 电机死区与全量程转速标定的占空比阶梯数量（0.06 ~ 0.95 共 15 档，低速 3% 步长测死区，中高占空比覆盖至 95%） */
 #define LF_MCAL_STEPS 15U
 
+/** @brief 云台步进扫掠寻找障碍物平面法线(垂直位置)时允许的最大离散采样点数 */
+#define LF_PROBE_SCAN_POINTS 41U
+
+/** @brief 云台舵机 1° 对应的近似脉宽 (us/deg，SG90 类舵机约 10 us/deg)，用于把扫掠脉宽换算成平面法线的几何角度 */
+#define LF_PROBE_SCAN_US_PER_DEG 10.0f
+
 /**
  * @brief 顶层运行状态机枚举
  */
@@ -86,7 +92,8 @@ typedef struct {
     bool clockwise;           /**< true = 顺时针绕行四面（任务书默认）；false = 逆时针绕行 */
     uint8_t faces;            /**< 需完成的目标平面数量 (1 ~ 4，默认 4；单面调试可设 1) */
     uint16_t aim_ms;          /**< 云台扫掠寻优总时长 (ms，默认 1200 ms，含前 150 ms 归起点稳定) */
-    uint16_t sweep_us;        /**< 云台相对 servo_center_us 的单侧扫掠半幅 (us，默认 220 us) */
+    uint16_t sweep_us;        /**< 云台相对 servo_center_us 的单侧扫掠半幅 (us，默认 600 us -> 900..2100 us) */
+    uint16_t scan_step_us;    /**< 步进扫掠的相邻采样点脉宽间隔 (us，默认 75 us；越小越密但单点驻留时间越短) */
     uint16_t laser_ms;        /**< 单面激光+蜂鸣器同步发射持续时间 (ms，默认 10000 ms；调试可缩短) */
     uint16_t aim_min_mm;      /**< 瞄准有效最小超声距离门槛 (mm，默认 40 mm) */
     uint16_t aim_max_mm;      /**< 瞄准有效最大超声距离门槛 (mm，默认 400 mm) */
@@ -306,6 +313,13 @@ typedef struct {
     uint8_t obstacle_hits;   /**< 连续检测到 <15cm 障碍物的次数（用于消抖） */
     uint16_t last_obstacle_mm; /**< 最近一拍超声波测距值 (mm，供蓝牙遥测与诊断实时读取) */
     bool last_obstacle_valid;  /**< 最近一拍超声波测距有效标志 */
+
+    /* --- 云台步进扫掠 + 平面法线(垂直位置)拟合状态量 --- */
+    uint16_t scan_range_mm[LF_PROBE_SCAN_POINTS]; /**< 本轮扫掠各离散角度的平均超声距离 (mm，0 = 该点无有效回波) */
+    uint32_t scan_sum_mm[LF_PROBE_SCAN_POINTS];   /**< 本轮扫掠各离散角度的回波距离累加和 (mm) */
+    uint8_t scan_hits[LF_PROBE_SCAN_POINTS];      /**< 本轮扫掠各离散角度的有效回波累计帧数 */
+    uint8_t scan_points;                          /**< 本轮扫掠实际使用的离散采样点数量 (3 ~ LF_PROBE_SCAN_POINTS) */
+    uint8_t scan_index;                           /**< 当前正在驻留测量的离散采样点序号 */
 
     /* --- 左右轮电机死区与全量程转速自动标定 (LF_MOTOR_CAL：地面带载为主、空载作参考) --- */
     LfMcalMode mcal_mode;                   /**< 当前正在扫描的模式：LF_MCAL_AIR 或 LF_MCAL_GROUND */
