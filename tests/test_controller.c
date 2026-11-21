@@ -23,6 +23,7 @@
  *   22. probe        : 四面顺时针障碍物瞄准 + 10s 激光与蜂鸣器同步发射 + 3 组“两短一长”鸣叫
  *   23. motorcal     : 左右轮不同死区与斜率的 3 轮自动扫描拟合及前馈不对称补偿验证
  *   24. probeaim     : 云台步进扫掠 + 平面法线(垂直位置)最小二乘拟合精度验证
+ *   25~28. probeedge / probecenter / probeturn / probetour : M1~M4 将逐步实现的骨架（现为 SKIP）
  */
 
 #include "line_follower.h"
@@ -262,6 +263,47 @@ static void probeaim(void) {
     bad=lf_default_config();bad.probe.scan_step_us=500U;assert(!lf_config_valid(&bad));
     assert(lf_config_valid(&c.cfg));
 }
+/* ============================================================================
+ * M1~M4 瞄准/导航类用例的公共工具与骨架
+ * ==========================================================================*/
+
+/** 合成「带波束外扩」的超声回波，供瞄准类单测使用。
+ *  面垂直于云台轴、距轴 rho；面中心横向偏移 c；半宽 a；波束半角 gamma。
+ *  只要波束边缘还能擦到面就有回波，所以量到的边界会比真实边界外扩 rho*tan(gamma)。
+ *  返回 0 表示该角度没有回波。 */
+static uint16_t synth_mm(float th_deg, float rho, float c, float a, float gamma_deg) {
+    const float rad = 0.01745329252f;
+    float y = rho * tanf(th_deg * rad);
+    float reach = a + rho * tanf(gamma_deg * rad);
+    if (fabsf(y - c) > reach) return 0U;
+    return (uint16_t)(rho / cosf(th_deg * rad) + 0.5f);
+}
+
+/** 已注册但尚未实现的用例：打印 SKIP 并正常退出（保持 -Test 全绿）。 */
+static void probe_pending(const char *name) {
+    printf("SKIP %s (待实现，见 接口契约_M1.md)\n", name);
+}
+
+/** M1：先用 TLS 面模型替换本用例的断言；现在先验证合成回波器本身。 */
+static void probeedge(void) {
+    /* 150 mm 处 50 mm 窄面（a=25），波束 gamma=7.5 */
+    assert(synth_mm(0.0f, 150.0f, 0.0f, 25.0f, 7.5f) == 150U);
+    assert(synth_mm(10.0f, 150.0f, 0.0f, 25.0f, 7.5f) == 152U);
+    assert(synth_mm(-10.0f, 150.0f, 0.0f, 25.0f, 7.5f) == 152U);
+    assert(synth_mm(30.0f, 150.0f, 0.0f, 25.0f, 7.5f) == 0U);
+    assert(synth_mm(-30.0f, 150.0f, 0.0f, 25.0f, 7.5f) == 0U);
+    /* 宽面 150 mm（a=75），面心横向偏 75 mm 时正前方仍看得到面 */
+    assert(synth_mm(0.0f, 150.0f, 75.0f, 75.0f, 7.5f) == 150U);
+    assert(synth_mm(45.0f, 150.0f, 75.0f, 75.0f, 7.5f) == 212U);
+    assert(synth_mm(60.0f, 150.0f, 75.0f, 75.0f, 7.5f) == 0U);
+}
+/** M2：边界二分 + 波束补偿 + 中点（位置域）。 */
+static void probecenter(void) { probe_pending("probecenter"); }
+/** M3：车体对正 SQUARE + 偏心挪车 ALIGN。 */
+static void probeturn(void) { probe_pending("probeturn"); }
+/** M4：切线绕行（edge1/edge2 由实测值计算）。 */
+static void probetour(void) { probe_pending("probetour"); }
+
 static void motorcal(void) {
     /* Simulate asymmetric motors across 15 steps (0.06..0.95 duty range):
      * Left motor : true deadband = 0.16, true free speed = 420 mm/s
@@ -461,6 +503,10 @@ int main(int argc,char **argv) {
     else if(!strcmp(name,"obstacle"))obstacle();
     else if(!strcmp(name,"probe"))probe();
     else if(!strcmp(name,"probeaim"))probeaim();
+    else if(!strcmp(name,"probeedge"))probeedge();
+    else if(!strcmp(name,"probecenter"))probecenter();
+    else if(!strcmp(name,"probeturn"))probeturn();
+    else if(!strcmp(name,"probetour"))probetour();
     else if(!strcmp(name,"motorcal"))motorcal();
     else if(!strcmp(name,"ground_priority"))ground_priority();
     else if(!strcmp(name,"hwemu"))hwemu();
