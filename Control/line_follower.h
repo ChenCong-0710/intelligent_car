@@ -36,6 +36,15 @@
 #define LF_PROBE_SCAN_US_PER_DEG 10.0f
 
 /**
+ * @brief 云台舵机允许输出的脉宽上下限 (us)
+ * @note  旧范围 900~2100 只有 ±60°，不足以让云台侧视 ±90°（侧视横扫法需要 2400us）。
+ *        SG90 实测可走 0~180°（约 600~2400us），故放宽；机械顶死时可用 `probe_side_us` 单独调小，
+ *        不影响侧视法的中点精度（扫描与发射同角即可，见方案 §3.3）。
+ */
+#define LF_SERVO_US_MIN 600U
+#define LF_SERVO_US_MAX 2400U
+
+/**
  * @brief 顶层运行状态机枚举
  */
 typedef enum {

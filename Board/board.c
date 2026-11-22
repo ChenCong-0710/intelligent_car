@@ -754,7 +754,8 @@ void board_apply(const LfOutput *out, const LfConfig *cfg) {
             HAL_GPIO_WritePin(GPIOC, GPIO_PIN_7, GPIO_PIN_SET);
             TIM2->CCR1 = 0;
         } else if (now - servo_power_since >= 5U) {
-            uint16_t us = out->servo_us < 900U ? 900U : (out->servo_us > 2100U ? 2100U : out->servo_us);
+            uint16_t us = out->servo_us < LF_SERVO_US_MIN ? LF_SERVO_US_MIN
+                        : (out->servo_us > LF_SERVO_US_MAX ? LF_SERVO_US_MAX : out->servo_us);
             TIM2->CCR1 = us;
         }
     } else {

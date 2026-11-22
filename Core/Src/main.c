@@ -541,8 +541,9 @@ static void command(char *line, uint32_t now) {
         char *ev = NULL, *ed = NULL;
         long val = v ? strtol(v, &ev, 10) : -1;
         unsigned long ms = d ? strtoul(d, &ed, 10) : 1000UL;
-        if (!v || *ev != 0 || (d && *ed != 0) || ms < 100UL || ms > 3000UL) {
-            board_log("OUTTEST ERROR (usage: outtest lamp|buz|laser|led 0/1 [ms], outtest servo 900..2100 [ms])\r\n");
+        const unsigned long ms_max = !strcmp(ch, "servo") ? 30000UL : 3000UL;
+        if (!v || *ev != 0 || (d && *ed != 0) || ms < 100UL || ms > ms_max) {
+            board_log("OUTTEST ERROR (usage: outtest lamp|buz|laser|led 0/1 [ms], outtest servo 600..2400 [ms])\r\n");
             return;
         }
         LfOutput next_out = {.servo_us = g_lf.cfg.servo_center_us};
@@ -552,7 +553,7 @@ static void command(char *line, uint32_t now) {
         else if (!strcmp(ch, "buz") && (val == 0 || val == 1)) next_out.buzzer = (val == 1);
         else if (!strcmp(ch, "laser") && (val == 0 || val == 1)) next_out.laser = (val == 1);
         else if (!strcmp(ch, "led") && (val == 0 || val == 1)) next_led = (val == 1);
-        else if (!strcmp(ch, "servo") && val >= 900 && val <= 2100) {
+        else if (!strcmp(ch, "servo") && val >= (long)LF_SERVO_US_MIN && val <= (long)LF_SERVO_US_MAX) {
             next_out.servo_enable = true; next_out.servo_us = (uint16_t)val;
         } else valid = false;
         if (!valid) { board_log("OUTTEST ERROR\r\n"); return; }
