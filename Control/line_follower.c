@@ -80,6 +80,8 @@ static void change_probe_phase(LfController *c, LfProbePhase p, uint32_t now) {
     c->phase_since = now;
     c->phase_start_mm = c->odo.distance_mm;
     c->phase_start_rad = c->odo.heading_rad;
+    c->phase_start_x_mm = c->odo.x_mm;
+    c->phase_start_y_mm = c->odo.y_mm;
     /* 每次进入瞄准阶段都重新开始一轮全新扫掠，避免上一面的回波数据污染本轮拟合 */
     if (p == LF_PROBE_AIM) probe_scan_reset(c);
 }
@@ -128,7 +130,7 @@ LfConfig lf_default_config(void) {
         /* 四面顺时针障碍物探测与 10s 激光打靶默认参数（均可经蓝牙 set probe_* 在线标定） */
         .probe = {
             .clockwise = true, .faces = 4U,
-            .aim_ms = 2000U, .sweep_us = 600U, .scan_step_us = 75U, .laser_ms = 10000U,
+            .aim_ms = 2000U, .sweep_us = 300U, .scan_step_us = 60U, .laser_ms = 10000U,
             .aim_min_mm = 40U, .aim_max_mm = 400U, .phase_timeout_ms = 4500U,
             .turn_speed_mm_s = 90.0f, .drive_speed_mm_s = 120.0f, .approach_speed_mm_s = 85.0f,
             .turn_deg = 90.0f, .edge1_mm = 220.0f, .edge2_mm = 220.0f, .approach_max_mm = 260.0f
@@ -819,25 +821,31 @@ static bool morse_2short_1long(uint32_t elapsed_ms) {
  * 相比“只记录单点最小距离”能显著抵抗超声噪声、斜射回波衰减与多径干扰。
  */
 
-/** @brief 单个扫掠采样点的最短驻留时长 (ms)，必须覆盖一次 60 ms 的硬件超声触发周期 */
-#define LF_PROBE_SCAN_MIN_DWELL_MS 60U
+/**
+ * @brief 单个扫掠采样点的最短驻留时长 (ms)
+ * @note  60 ms 覆盖一次硬件超声触发周期，另 60 ms 用于等舵机走完这一步（SG90 约 10 ms/deg，
+ *        7.5° 一步约 75 ms）。驻留不足会让采样点混入上一角度的旧回波，使法线出现 1~2° 系统偏置。
+ */
+#define LF_PROBE_SCAN_MIN_DWELL_MS 180U
+
+/** @brief 每步进之后丢弃的最初时长 (ms)：这段时间内的回波可能还是上一个角度触发的 */
+#define LF_PROBE_SCAN_SKIP_MS 120U
 
 /** @brief 瞄准阶段开始前让舵机在首点稳定下来的时间上限 (ms) */
 #define LF_PROBE_AIM_SETTLE_MS 150U
 
 /** @brief 取第 index 个离散采样点对应的舵机脉宽 (us，按 ±sweep_us 线性分布并限幅 900..2100) */
 static uint16_t probe_scan_pulse(const LfController *c, uint16_t index) {
-    const LfProbeConfig *pr = &c->cfg.probe;
     float span = c->scan_points > 1U ? (float)(c->scan_points - 1U) : 1.0f;
-    float offset = -1.0f * (float)pr->sweep_us + 2.0f * (float)pr->sweep_us * (float)index / span;
-    float us = (float)c->cfg.servo_center_us + offset;
+    float offset = -1.0f * (float)c->aim_span_us + 2.0f * (float)c->aim_span_us * (float)index / span;
+    float us = (float)c->aim_center_us + offset;
     if (us < 900.0f) us = 900.0f;
     if (us > 2100.0f) us = 2100.0f;
     return (uint16_t)(us + 0.5f);
 }
 
-/** @brief 清空云台步进扫掠采样缓存并复位本轮瞄准结果 */
-static void probe_scan_reset(LfController *c) {
+/** @brief 只清空扫掠采样缓存（两段式扫掠的第二段复用） */
+static void probe_scan_clear(LfController *c) {
     memset(c->scan_range_mm, 0, sizeof(c->scan_range_mm));
     memset(c->scan_sum_mm, 0, sizeof(c->scan_sum_mm));
     memset(c->scan_hits, 0, sizeof(c->scan_hits));
@@ -847,11 +855,22 @@ static void probe_scan_reset(LfController *c) {
     c->best_obstacle_mm = UINT16_MAX;
 }
 
+/** @brief 清空云台步进扫掠采样缓存、复位本轮瞄准结果，并回到第一段（粗扫） */
+static void probe_scan_reset(LfController *c) {
+    probe_scan_clear(c);
+    memset(&c->face, 0, sizeof(c->face));
+    memset(&c->aim_first, 0, sizeof(c->aim_first));
+    c->aim_span_us = c->cfg.probe.sweep_us;
+    c->aim_center_us = c->cfg.servo_center_us;
+    c->aim_pass = 0U;
+}
+
 /** @brief 依据扫掠半幅、步长与总时长规划本轮离散采样点数（保证每点驻留 >= LF_PROBE_SCAN_MIN_DWELL_MS） */
 static uint16_t probe_scan_plan(LfController *c, uint32_t sweep_ms) {
     const LfProbeConfig *pr = &c->cfg.probe;
-    uint32_t step = pr->scan_step_us ? (uint32_t)pr->scan_step_us : 75U;
-    uint32_t n = (2U * (uint32_t)pr->sweep_us) / step + 1U;
+    uint32_t step = (c->aim_pass == 0U) ? (pr->scan_step_us ? (uint32_t)pr->scan_step_us : 60U)
+                                        : (uint32_t)LF_PROBE_AIM2_STEP_US;
+    uint32_t n = (2U * (uint32_t)c->aim_span_us) / step + 1U;
     uint32_t max_n = sweep_ms / LF_PROBE_SCAN_MIN_DWELL_MS;
     if (max_n < 3U) max_n = 3U;
     if (n < 3U) n = 3U;
@@ -861,28 +880,94 @@ static uint16_t probe_scan_plan(LfController *c, uint32_t sweep_ms) {
     return (uint16_t)n;
 }
 
+/** @brief 第 index 个离散采样点对应的方位角 (rad，相对车头正前，向左为正) */
+static float probe_scan_angle(const LfController *c, unsigned index) {
+    float span = c->scan_points > 1U ? (float)(c->scan_points - 1U) : 1.0f;
+    float offset = -1.0f * (float)c->aim_span_us + 2.0f * (float)c->aim_span_us * (float)index / span;
+    float us = (float)c->aim_center_us + offset;
+    return ((us - (float)c->cfg.servo_center_us) / LF_PROBE_SCAN_US_PER_DEG) * 0.01745329252f;
+}
+
+/**
+ * @brief 内点判据：实测距离与该角度下的模型预测距离之差是否在带宽内
+ * @param rho  面到云台轴的垂直距离 (mm)
+ * @param phi  面法线方位角 (rad)
+ * @param th   采样方位角 (rad)
+ * @param d    该点实测距离 (mm，0 = 无回波)
+ * @param band 允许偏差 (mm)
+ */
+static bool probe_inlier(float rho, float phi, float th, uint16_t d, float band) {
+    if (d == 0U) return false;
+    float pred = rho / cosf(th - phi);
+    if (!(pred > 40.0f) || !(pred < 400.0f)) return false;
+    return fabsf((float)d - pred) <= band;
+}
+
 /**
  * @brief 对最长连续有效回波段做 1/r = a*cos(theta) + b*sin(theta) 最小二乘拟合，求出平面法线方向
  * @param[out] pulse_us    正对平面法线方向的舵机脉宽 (us)
  * @param[out] distance_mm 该方向上实测的回波距离 (mm)
  * @return true = 拟合成功；false = 有效点不足或拟合残差 > 12%（调用方改用三点平滑最小值兜底）
  */
-static bool probe_fit_normal(const LfController *c, uint16_t *pulse_us, uint16_t *distance_mm) {
+static bool probe_fit_normal(LfController *c, uint16_t *pulse_us, uint16_t *distance_mm) {
     unsigned n = c->scan_points;
     if (n < 3U) return false;
-    unsigned run_start = 0, run_len = 0, best_start = 0, best_len = 0;
+    /* 先把扫掠切成「同一物体」的连续段：回波为 0 或相邻两点距离突跳都算断点 */
+    unsigned run_start = 0, run_len = 0;
+    unsigned cand_start[LF_PROBE_MAX_RUNS], cand_len[LF_PROBE_MAX_RUNS];
+    uint32_t cand_sum[LF_PROBE_MAX_RUNS];
+    unsigned cand_n = 0U;
     for (unsigned i = 0; i <= n; ++i) {
-        if (i < n && c->scan_range_mm[i] != 0U) {
+        bool ok = (i < n) && (c->scan_range_mm[i] != 0U);
+        if (ok && run_len > 0U) {
+            int32_t prev = (int32_t)c->scan_range_mm[i - 1U];
+            int32_t cur = (int32_t)c->scan_range_mm[i];
+            int32_t jump = cur > prev ? cur - prev : prev - cur;
+            if (jump > (int32_t)LF_PROBE_RUN_JUMP_MM) {
+                if (cand_n < LF_PROBE_MAX_RUNS) {
+                    uint32_t sum = 0U;
+                    for (unsigned k = run_start; k < run_start + run_len; ++k) sum += c->scan_range_mm[k];
+                    cand_start[cand_n] = run_start; cand_len[cand_n] = run_len; cand_sum[cand_n] = sum;
+                    ++cand_n;
+                }
+                run_len = 0U;
+            }
+        }
+        if (ok) {
             if (run_len == 0U) run_start = i;
             ++run_len;
-        } else {
-            if (run_len > best_len) { best_start = run_start; best_len = run_len; }
+        } else if (run_len > 0U) {
+            if (cand_n < LF_PROBE_MAX_RUNS) {
+                uint32_t sum = 0U;
+                for (unsigned k = run_start; k < run_start + run_len; ++k) sum += c->scan_range_mm[k];
+                cand_start[cand_n] = run_start; cand_len[cand_n] = run_len; cand_sum[cand_n] = sum;
+                ++cand_n;
+            }
             run_len = 0U;
+        }
+    }
+
+    /* 选段：障碍物是「车停下来时最近的那个面」，所以在长度 >= 3 的候选段里取平均距离最小的；
+     * 都不到 3 点时退回最长的一段。 */
+    unsigned best_start = 0U, best_len = 0U;
+    uint32_t best_mean = UINT32_MAX;
+    for (unsigned k = 0; k < cand_n; ++k) {
+        if (cand_len[k] < 3U) continue;
+        uint32_t mean = cand_sum[k] / cand_len[k];
+        if (mean < best_mean) {
+            best_mean = mean; best_start = cand_start[k]; best_len = cand_len[k];
+        } else if (mean == best_mean && cand_len[k] > best_len) {
+            best_start = cand_start[k]; best_len = cand_len[k];
+        }
+    }
+    if (best_len == 0U) {
+        for (unsigned k = 0; k < cand_n; ++k) {
+            if (cand_len[k] > best_len) { best_len = cand_len[k]; best_start = cand_start[k]; }
         }
     }
     if (best_len < 3U) return false;
 
-    const float half_us = (float)c->cfg.probe.sweep_us;
+    const float half_us = (float)c->aim_span_us;
     float offset_per_index = (2.0f * half_us) / (float)(n - 1U); /* 相邻采样点的脉宽差 (us) */
 
     /* 首尾各去掉一个点：目标恰好进出波束边缘时回波幅度最容易被低估 */
@@ -890,8 +975,8 @@ static bool probe_fit_normal(const LfController *c, uint16_t *pulse_us, uint16_t
     unsigned fit_end = best_start + best_len - (best_len >= 5U ? 1U : 0U);
     float scc = 0, sss = 0, scs = 0, scz = 0, ssz = 0;
     for (unsigned i = fit_start; i < fit_end; ++i) {
-        float offset_us = -half_us + offset_per_index * (float)i;
-        float radians = (offset_us / LF_PROBE_SCAN_US_PER_DEG) * 0.01745329252f;
+        /* 一律用「相对车头正前」的绝对角度，保证两段式扫掠中心不同时模型仍然一致 */
+        float radians = probe_scan_angle(c, i);
         float co = cosf(radians), si = sinf(radians);
         float z = 1.0f / (float)c->scan_range_mm[i];
         scc += co * co; sss += si * si; scs += co * si;
@@ -899,15 +984,24 @@ static bool probe_fit_normal(const LfController *c, uint16_t *pulse_us, uint16_t
     }
     float det = scc * sss - scs * scs;
     float chosen_index = -1.0f;
+    float plane_a = 0.0f, plane_b = 0.0f; /* 1/d = a*cos(th) + b*sin(th) 的两个系数 */
+    bool model_ok = false;
     if (det > 0.0001f) {
         float a = (scz * sss - ssz * scs) / det;
         float b = (ssz * scc - scz * scs) / det;
         float normal_deg = atan2f(b, a) * 57.29577951f;
-        chosen_index = (normal_deg * LF_PROBE_SCAN_US_PER_DEG + half_us) / offset_per_index;
+        plane_a = a;
+        plane_b = b;
+        model_ok = true;
+        /* 法线角是「相对车头正前」的绝对角，而采样点是以 aim_center_us 为中心的，
+         * 所以先把法线角换算成相对本轮扫掠中心的偏移，才能反解出采样点序号 */
+        float center_deg = ((float)c->aim_center_us - (float)c->cfg.servo_center_us) /
+                           LF_PROBE_SCAN_US_PER_DEG;
+        chosen_index = ((normal_deg - center_deg) * LF_PROBE_SCAN_US_PER_DEG + half_us) /
+                       offset_per_index;
         float relative_error = 0;
         for (unsigned i = fit_start; i < fit_end; ++i) {
-            float offset_us = -half_us + offset_per_index * (float)i;
-            float radians = (offset_us / LF_PROBE_SCAN_US_PER_DEG) * 0.01745329252f;
+            float radians = probe_scan_angle(c, i);
             float predicted = a * cosf(radians) + b * sinf(radians);
             float measured = 1.0f / (float)c->scan_range_mm[i];
             relative_error += fabsf(predicted - measured) / measured;
@@ -930,11 +1024,35 @@ static bool probe_fit_normal(const LfController *c, uint16_t *pulse_us, uint16_t
     unsigned nearest = (unsigned)(chosen_index + 0.5f);
     if (nearest < best_start) nearest = best_start;
     if (nearest >= best_start + best_len) nearest = best_start + best_len - 1U;
-    float us = (float)c->cfg.servo_center_us + (-half_us + offset_per_index * chosen_index);
+    float us = (float)c->aim_center_us + (-half_us + offset_per_index * chosen_index);
     if (us < 900.0f) us = 900.0f;
     if (us > 2100.0f) us = 2100.0f;
     *pulse_us = (uint16_t)(us + 0.5f);
     *distance_mm = c->scan_range_mm[nearest];
+
+    /* --- M1：把平面模型交给上层（phi/rho/rms/hits），供 PROBE_FACE 日志与 M2 侧视横扫复用 --- */
+    memset(&c->face, 0, sizeof(c->face));
+    if (model_ok) {
+        float phi = atan2f(plane_b, plane_a);
+        float rho = 1.0f / sqrtf(plane_a * plane_a + plane_b * plane_b);
+        if (isfinite(phi) && isfinite(rho) && rho > 1.0f) {
+            float e2 = 0.0f;
+            unsigned used = 0, inl = 0;
+            for (unsigned i = fit_start; i < fit_end; ++i) {
+                float th = probe_scan_angle(c, i);
+                float e = (float)c->scan_range_mm[i] - rho / cosf(th - phi);
+                e2 += e * e;
+                ++used;
+                if (probe_inlier(rho, phi, th, c->scan_range_mm[i], LF_PROBE_INLIER_BAND_MM)) ++inl;
+            }
+            c->face.phi = phi;
+            c->face.rho = rho;
+            c->face.rms = used ? sqrtf(e2 / (float)used) : 99.0f;
+            c->face.hits = (uint8_t)(inl > 255U ? 255U : inl);
+            c->face.valid = (inl >= LF_PROBE_MIN_INLIERS) && (c->face.rms < LF_PROBE_FIT_RMS_MM) &&
+                            (rho > 60.0f) && (rho < 400.0f);
+        }
+    }
     return true;
 }
 
@@ -988,8 +1106,11 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
             if (index >= (uint32_t)points) index = (uint32_t)points - 1U;
             c->scan_index = (uint8_t)index;
             c->out.servo_us = probe_scan_pulse(c, (uint16_t)index);
+            /* 每步开头的 LF_PROBE_SCAN_SKIP_MS 内，超声可能还在按上一角度计时，丢弃这段样本 */
+            uint32_t index_begin_ms = (index * sweep_ms) / (uint32_t)points;
+            bool fresh = (s_el - index_begin_ms) >= LF_PROBE_SCAN_SKIP_MS;
             /* 仅当回波落在“正前方合理障碍距离窗口 [aim_min_mm, aim_max_mm]”内才计入该角度样本 */
-            if (in->obstacle_valid &&
+            if (fresh && in->obstacle_valid &&
                 in->obstacle_mm >= pr->aim_min_mm && in->obstacle_mm <= pr->aim_max_mm) {
                 c->scan_sum_mm[index] += in->obstacle_mm;
                 uint8_t hits = c->scan_hits[index];
@@ -998,8 +1119,30 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
         }
         if (elapsed >= pr->aim_ms) {
             probe_scan_finish(c);
-            c->out.servo_us = c->best_servo_us ? c->best_servo_us : c->cfg.servo_center_us;
-            change_probe_phase(c, LF_PROBE_LASER, now);
+            if (c->aim_pass == 0U && c->face.valid) {
+                /* 第一段粗扫成功：以粗测法线为中心做第二段细扫，
+                 * 让 50 mm 窄面从「3 个采样点」变成「8~10 个采样点」 */
+                c->aim_first = c->face;
+                /* phi 是弧度，先换成度再换成脉宽偏移 */
+                float center = (float)c->cfg.servo_center_us +
+                               c->face.phi * 57.29577951f * LF_PROBE_SCAN_US_PER_DEG;
+                float lo = (float)c->cfg.servo_center_us - (float)pr->sweep_us +
+                           (float)LF_PROBE_AIM2_SPAN_US;
+                float hi = (float)c->cfg.servo_center_us + (float)pr->sweep_us -
+                           (float)LF_PROBE_AIM2_SPAN_US;
+                center = limit(center, lo, hi);
+                c->aim_center_us = (uint16_t)(center + 0.5f);
+                c->aim_span_us = LF_PROBE_AIM2_SPAN_US;
+                c->aim_pass = 1U;
+                probe_scan_clear(c);
+                memset(&c->face, 0, sizeof(c->face));
+                c->phase_since = now;
+                c->out.servo_us = probe_scan_pulse(c, 0U);
+            } else {
+                if (c->aim_pass == 1U && !c->face.valid) c->face = c->aim_first;
+                c->out.servo_us = c->best_servo_us ? c->best_servo_us : c->cfg.servo_center_us;
+                change_probe_phase(c, LF_PROBE_LASER, now);
+            }
         }
         break;
     }

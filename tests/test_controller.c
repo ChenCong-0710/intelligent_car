@@ -23,7 +23,8 @@
  *   22. probe        : 四面顺时针障碍物瞄准 + 10s 激光与蜂鸣器同步发射 + 3 组“两短一长”鸣叫
  *   23. motorcal     : 左右轮不同死区与斜率的 3 轮自动扫描拟合及前馈不对称补偿验证
  *   24. probeaim     : 云台步进扫掠 + 平面法线(垂直位置)最小二乘拟合精度验证
- *   25~28. probeedge / probecenter / probeturn / probetour : M1~M4 将逐步实现的骨架（现为 SKIP）
+ *   25. probefit    : M1 面模型（phi/rho/rms/hits）在无噪声/噪声/丢帧/无回波下的精度
+ *   26~28. probecenter / probeturn / probetour : M2~M4 骨架（现为 SKIP）
  */
 
 #include "line_follower.h"
@@ -190,8 +191,8 @@ static void probe(void) {
     assert(lf_start_probe(&c,now));
     assert(c.state==LF_PROBING && c.probe_phase==LF_PROBE_AIM);
     for(unsigned face=0;face<4;++face){
-        /* 2000 ms stepped aim sweep (400 ticks @ 5 ms) */
-        in.obstacle_mm=125;tick(&c,&in,&now,420);
+        /* 两段式 aim 扫掠：粗扫 2000 ms + 细扫 2000 ms（800 ticks @ 5 ms，留 900 余量） */
+        in.obstacle_mm=125;tick(&c,&in,&now,900);
         assert(c.probe_phase==LF_PROBE_LASER && c.out.laser && c.out.buzzer && c.out.park_lamp);
         tick(&c,&in,&now,2000); /* 10 s laser + synchronous buzzer */
         if(face<3){
@@ -284,18 +285,97 @@ static void probe_pending(const char *name) {
     printf("SKIP %s (待实现，见 接口契约_M1.md)\n", name);
 }
 
-/** M1：先用 TLS 面模型替换本用例的断言；现在先验证合成回波器本身。 */
-static void probeedge(void) {
-    /* 150 mm 处 50 mm 窄面（a=25），波束 gamma=7.5 */
+/* ---- 合成回波的噪声/丢帧版本（M1~M4 共用） ---- */
+static uint32_t g_synth_rng = 20261122U;
+static float synth_rand01(void) {
+    g_synth_rng = g_synth_rng * 1664525U + 1013904223U;
+    return (float)((g_synth_rng >> 8) & 0xFFFFU) / 65535.0f;
+}
+/** 在 synth_mm 基础上叠加 [0,sigma] 均匀噪声与 drop 丢帧率；返回 0 表示该帧无回波 */
+static uint16_t synth_noisy(float th_deg, float rho, float half_w, float gamma_deg, float sigma, float drop) {
+    if (drop > 0.0f && synth_rand01() < drop) return 0U;
+    uint16_t d = synth_mm(th_deg, rho, 0.0f, half_w, gamma_deg);
+    if (d == 0U || sigma <= 0.0f) return d;
+    float v = (float)d + (synth_rand01() * 2.0f - 1.0f) * sigma;
+    return (uint16_t)(v < 1.0f ? 1.0f : v + 0.5f);
+}
+/** 跑完一次 AIM（按真实硬件的 60 ms 超声节拍喂合成回波），返回时 face 已填好 */
+static void aim_run(LfController *c, LfInput *in, uint32_t *now,
+                    float phi_deg, float rho, float half_w, float sigma, float drop) {
+    unsigned guard = 0, ping_ticks = 0;
+    while (c->probe_phase == LF_PROBE_AIM && ++guard < 4000U) {
+        if (++ping_ticks >= 12U) {
+            ping_ticks = 0U;
+            float deg = ((float)c->out.servo_us - (float)c->cfg.servo_center_us) / LF_PROBE_SCAN_US_PER_DEG;
+            in->obstacle_mm = synth_noisy(deg - phi_deg, rho, half_w, 7.5f, sigma, drop);
+            in->obstacle_valid = in->obstacle_mm != 0U;
+        }
+        *now += 5U;
+        lf_step(c, in, *now, 0.005f);
+    }
+}
+/** 起一次完整的单面探测流程 */
+static void probe_start(LfController *c, LfInput *in, uint32_t *now) {
+    ready(c);
+    *in = input(3000, 500, 500, 3000);
+    in->obstacle_valid = true;
+    in->obstacle_mm = 130;
+    tick(c, in, now, 2);
+    assert(c->state == LF_OBSTACLE_STOP);
+    assert(lf_start_probe(c, *now));
+}
+
+/** M1：面模型（phi/rho/rms/hits）在无噪声基线与噪声/丢帧下的精度。 */
+static void probefit(void) {
+    /* ① 合成回波器自检：面心正对 150 mm、半宽 25 mm 的窄面 */
     assert(synth_mm(0.0f, 150.0f, 0.0f, 25.0f, 7.5f) == 150U);
     assert(synth_mm(10.0f, 150.0f, 0.0f, 25.0f, 7.5f) == 152U);
-    assert(synth_mm(-10.0f, 150.0f, 0.0f, 25.0f, 7.5f) == 152U);
     assert(synth_mm(30.0f, 150.0f, 0.0f, 25.0f, 7.5f) == 0U);
-    assert(synth_mm(-30.0f, 150.0f, 0.0f, 25.0f, 7.5f) == 0U);
-    /* 宽面 150 mm（a=75），面心横向偏 75 mm 时正前方仍看得到面 */
-    assert(synth_mm(0.0f, 150.0f, 75.0f, 75.0f, 7.5f) == 150U);
-    assert(synth_mm(45.0f, 150.0f, 75.0f, 75.0f, 7.5f) == 212U);
-    assert(synth_mm(60.0f, 150.0f, 75.0f, 75.0f, 7.5f) == 0U);
+
+    /* ② 无噪声基线：拟合本身不许带系统偏置 */
+    {
+        LfController c; LfInput in; uint32_t now = 0;
+        probe_start(&c, &in, &now);
+        aim_run(&c, &in, &now, 0.0f, 150.0f, 75.0f, 0.0f, 0.0f);
+        assert(c.probe_phase == LF_PROBE_LASER);
+        assert(c.face.valid);
+        assert(fabsf(c.face.phi * 57.2957795f) < 0.3f);
+        assert(fabsf(c.face.rho - 150.0f) < 2.0f);
+        assert(c.face.hits >= 3U);
+    }
+    /* ③ 宽面 + 12° 斜置 + 3 mm 噪声 + 10% 丢帧 */
+    {
+        LfController c; LfInput in; uint32_t now = 0;
+        probe_start(&c, &in, &now);
+        aim_run(&c, &in, &now, -12.0f, 150.0f, 75.0f, 2.0f, 0.10f);
+        float err_deg = fabsf(c.face.phi * 57.2957795f + 12.0f);
+        assert(err_deg < 1.5f);
+        assert(fabsf(c.face.rho - 150.0f) < 5.0f);
+        assert(c.face.rms < 6.0f);
+        assert(c.face.valid);
+    }
+    /* ④ 窄面 + 8° 斜置 + 噪声/丢帧：面只有 50 mm 宽，是最难的一档 */
+    {
+        LfController c; LfInput in; uint32_t now = 0;
+        probe_start(&c, &in, &now);
+        aim_run(&c, &in, &now, 8.0f, 150.0f, 25.0f, 2.0f, 0.15f);
+        float err_deg = fabsf(c.face.phi * 57.2957795f - 8.0f);
+        /* 50 mm 窄面在 ±30° 扫掠里只有 3 个采样点，3 点拟合的法线精度约 3°；
+           侧视横扫只用 φ 决定转多少度（仿射性质保证中点不受影响），3° 足够 */
+        assert(err_deg < 3.5f);
+        assert(fabsf(c.face.rho - 150.0f) < 5.0f);
+        assert(c.face.rms < 6.0f);
+        assert(c.face.valid);
+    }
+    /* ⑤ 无回波：不许崩，且必须判为无效 */
+    {
+        LfController c; LfInput in; uint32_t now = 0;
+        probe_start(&c, &in, &now);
+        unsigned guard = 0;
+        in.obstacle_valid = false; in.obstacle_mm = 0;
+        while (c.probe_phase == LF_PROBE_AIM && ++guard < 4000U) { now += 5U; lf_step(&c, &in, now, 0.005f); }
+        assert(!c.face.valid);
+    }
 }
 /** M2：边界二分 + 波束补偿 + 中点（位置域）。 */
 static void probecenter(void) { probe_pending("probecenter"); }
@@ -503,7 +583,7 @@ int main(int argc,char **argv) {
     else if(!strcmp(name,"obstacle"))obstacle();
     else if(!strcmp(name,"probe"))probe();
     else if(!strcmp(name,"probeaim"))probeaim();
-    else if(!strcmp(name,"probeedge"))probeedge();
+    else if(!strcmp(name,"probefit"))probefit();
     else if(!strcmp(name,"probecenter"))probecenter();
     else if(!strcmp(name,"probeturn"))probeturn();
     else if(!strcmp(name,"probetour"))probetour();

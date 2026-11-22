@@ -45,6 +45,42 @@
 #define LF_SERVO_US_MAX 2400U
 
 /**
+ * @brief M1 面拟合有效性阈值（M2 起由 probe_fit_rms_mm 参数覆盖）
+ * @note  纸盒靶面本身有 1~3 mm 的鼓包，200 mm 处 ±30° 扫掠下 rms 常到 6~8 mm；
+ *        取 10 mm 既能放过真实纸盒，又能挡住「盒子+墙混在一起」这类 rms 20 mm 以上的垃圾拟合。
+ */
+#define LF_PROBE_FIT_RMS_MM 15.0f
+
+/**
+ * @brief 两段式 AIM 的第二段（细扫）参数
+ * @note  第一段 ±sweep_us 粗扫定位平面，第二段以上一段求得的法线为中心、±120us(±12°) 细扫，
+ *        步长 20us(2°)、约 10 个点。50 mm 窄面在第一段只有 3 个点，第二段能拿到 8~10 个点。
+ */
+#define LF_PROBE_AIM2_SPAN_US 120U
+#define LF_PROBE_AIM2_STEP_US 20U
+
+/**
+ * @brief 相邻采样点距离跳变阈值 (mm)：超过它认为「换了一个物体」，结束当前连续段
+ * @note  只靠「回波为 0」切段是不够的：旁边有桌子/墙时每个角度都有回波，
+ *        整条扫掠会被当成一个面拟合，rms 直接飙到几十毫米。
+ */
+#define LF_PROBE_RUN_JUMP_MM 40U
+
+/** @brief 一次扫掠里最多记录多少个「同一物体」的连续段（用于挑选最近的那个面） */
+#define LF_PROBE_MAX_RUNS 8U
+
+/** @brief M1 内点带半宽 (mm)：|d_meas - rho/cos(theta-phi)| 小于它才算内点 */
+#define LF_PROBE_INLIER_BAND_MM 15.0f
+
+/**
+ * @brief M1 判定拟合有效所需的最少内点数
+ * @note  50 mm 窄面在 150 mm 处只占 ±9.5°，加上波束外扩也只到 ±17°，
+ *        在 ±60° 扫掠里通常只有 3~5 个采样点。取 3 是「能拟合」的下限；
+ *        窄面的法线精度会降到 3° 左右，而侧视横扫只需用它决定转多少度，3° 足够。
+ */
+#define LF_PROBE_MIN_INLIERS 3U
+
+/**
  * @brief 顶层运行状态机枚举
  */
 typedef enum {
@@ -274,6 +310,25 @@ typedef struct {
 } LfOdometry;
 
 /**
+ * @brief 一次 AIM 扫掠得到的障碍物平面模型
+ * @note  M1 只写前 5 个字段（valid/phi/rho/rms/hits）；侧视横扫（M2）再写边界与站立距离。
+ */
+typedef struct {
+    bool    valid;    /**< 本次拟合是否可信 */
+    float   phi;      /**< 面法线方向在车体系的角度 (rad，0 = 车头正前) */
+    float   rho;      /**< 云台轴到面的垂直距离 (mm) */
+    float   rms;      /**< 拟合残差 (mm 量纲) */
+    uint8_t hits;     /**< 落在内点带内的采样点数 */
+    float   s_l;      /**< 左边界在扫描轴上的位置 (mm，M2) */
+    float   s_r;      /**< 右边界在扫描轴上的位置 (mm，M2) */
+    float   s_m;      /**< 中点位置 (mm，M2) */
+    float   w;        /**< 面宽 (mm，γ 补偿后，M2) */
+    float   h;        /**< 侧视站立距离 (mm，M2) */
+    uint8_t kind;     /**< 0 = 窄面(≈50) 1 = 宽面(≈150)，M2 */
+    uint8_t id;       /**< 第几面 0~3，M2 */
+} LfFace;
+
+/**
  * @brief 智能小车控制器主状态结构体（包含全部配置、标定、状态与实时中间量）
  */
 typedef struct {
@@ -316,6 +371,9 @@ typedef struct {
     /* --- 四面打靶与超声避障状态量 --- */
     float phase_start_mm;    /**< 当前打靶子阶段起始时的累计里程 (mm) */
     float phase_start_rad;   /**< 当前打靶子阶段起始时的累计航向角 (rad) */
+    float phase_start_x_mm;  /**< 当前打靶子阶段起始时的世界系 x (mm)，侧扫有符号位移用 */
+    float phase_start_y_mm;  /**< 当前打靶子阶段起始时的世界系 y (mm) */
+    LfFace face;             /**< 当前障碍物平面模型（M1 起由 probe_fit_normal 填充） */
     uint16_t best_servo_us;  /**< 云台扫掠寻优找到的正对平面中心舵机脉宽 (us) */
     uint16_t best_obstacle_mm; /**< 云台扫掠寻优记录的最小垂直距离 (mm) */
     uint8_t probe_face;      /**< 当前正在探测的障碍物平面序号 (0 ~ 3 对应第 1 ~ 4 面) */
@@ -329,6 +387,10 @@ typedef struct {
     uint8_t scan_hits[LF_PROBE_SCAN_POINTS];      /**< 本轮扫掠各离散角度的有效回波累计帧数 */
     uint8_t scan_points;                          /**< 本轮扫掠实际使用的离散采样点数量 (3 ~ LF_PROBE_SCAN_POINTS) */
     uint8_t scan_index;                           /**< 当前正在驻留测量的离散采样点序号 */
+    uint16_t aim_span_us;                         /**< 本轮 AIM 扫掠半幅 (us)：第一段 = sweep_us，第二段 = ±120 */
+    uint16_t aim_center_us;                       /**< 本轮 AIM 扫掠中心脉宽 (us)：第一段 = servo_center，第二段对准粗测法线 */
+    uint8_t aim_pass;                             /**< 0 = 粗扫，1 = 细扫 */
+    LfFace aim_first;                             /**< 粗扫结果备份（细扫失败时回退） */
 
     /* --- 左右轮电机死区与全量程转速自动标定 (LF_MOTOR_CAL：地面带载为主、空载作参考) --- */
     LfMcalMode mcal_mode;                   /**< 当前正在扫描的模式：LF_MCAL_AIR 或 LF_MCAL_GROUND */

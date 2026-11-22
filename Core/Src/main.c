@@ -1062,6 +1062,10 @@ int main(void) {
             }
             if (g_lf.probe_phase != previous_probe_phase) {
                 if (previous_probe_phase == LF_PROBE_AIM && g_lf.probe_phase == LF_PROBE_LASER) {
+                    /* M1：面模型（法线角/垂直距离/残差/内点数），侧视横扫的自检与绕行距离都靠它 */
+                    board_log("PROBE_FACE,phi=%.2f,rho=%.1f,rms=%.1f,hits=%u,valid=%u\r\n",
+                        (double)(g_lf.face.phi * 57.2957795f), (double)g_lf.face.rho,
+                        (double)g_lf.face.rms, (unsigned)g_lf.face.hits, (unsigned)g_lf.face.valid);
                     /* 本轮扫掠找到障碍物平面的垂直(法线)方向：打印瞄准结果，便于现场核对偏转角 */
                     float angle_deg = ((float)g_lf.best_servo_us - (float)g_lf.cfg.servo_center_us) /
                                       LF_PROBE_SCAN_US_PER_DEG;

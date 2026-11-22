@@ -20,7 +20,7 @@
 4. **[docs/hardware-interface-manual.md](docs/hardware-interface-manual.md)**：**《STM32G474 核心板与主扩展板硬件接口逐脚对应手册》** —— 详细到每一个 MCU 引脚、核心板排针、主扩展板排母、逻辑门芯片引脚与外部传感器/电机的电气对接关系。
 5. **[docs/software-architecture-and-review.md](docs/software-architecture-and-review.md)**：**《固件审查与软件总体架构设计》** —— 记录硬件复用修复、定时器零冲突分配矩阵与快速循迹专项优化设计。
 6. **[docs/board-pin-map.csv](docs/board-pin-map.csv)**：全车 27 项 MCU 引脚、网络名与外设复用速查表格。
-7. **[docs/validation.json](docs/validation.json)**：每次代码修改后的 Debug/Release 编译、clangd 静态检查与 **27 项**自动化单元测试通过记录。
+7. **[docs/validation.json](docs/validation.json)**：每次代码修改后的 Debug/Release 编译、clangd 静态检查与 **31 项**自动化单元测试通过记录。
 
 ---
 

@@ -5,8 +5,8 @@
   "real_track_verified": false,
   "profiles": {
     "Debug": {
-      "bin_bytes": 97344,
-      "bin_sha256": "65b3724c72b2b3ead036dd59ef733c079ae058a646366b7094b775df48095836",
+      "bin_bytes": 98776,
+      "bin_sha256": "98c7641b0566d7c440704136b7dd4a555a4ba9c4467103d1cceee64f22e752a4",
       "initial_stack": "0x20018000",
       "warnings": 0,
       "interrupt_vectors": "strong handlers present",
@@ -14,8 +14,8 @@
       "rwx_segments": false
     },
     "Release": {
-      "bin_bytes": 92360,
-      "bin_sha256": "76d5ecc0165208928417aad3698a5b3c5342a56bd9d75b64b1d521241432dd7d",
+      "bin_bytes": 93648,
+      "bin_sha256": "8511cd1255d3d8f2583c752329b10cef85df3c38a4571982150bde1d972e6898",
       "initial_stack": "0x20018000",
       "warnings": 0,
       "interrupt_vectors": "strong handlers present",
@@ -47,15 +47,17 @@
     "Suspended motor polarity check (bench) + 5-pass mcal air 5 + vtest saved to data/",
     "Auto servo+ultrasonic plane-normal (perpendicular) search right after <15cm obstacle stop (AUTO_PROBE_ON_OBSTACLE) + LED blink indicator + probeaim host test",
     "Servo held at mechanical center while arming/tracking so the <15cm ultrasonic stop range is measured along the heading (TRACK_SERVO_CENTER)",
-    "Servo pulse range widened 900..2100 -> 600..2400 us (LF_SERVO_US_MIN/MAX) for side-view ±90° probing; outtest servo now accepts 600..2400 and holds up to 30 s"
+    "Servo pulse range widened 900..2100 -> 600..2400 us (LF_SERVO_US_MIN/MAX) for side-view ±90° probing; outtest servo now accepts 600..2400 and holds up to 30 s",
+    "M1 plane model: two-pass AIM (coarse ±30° then fine ±12° around the coarse normal), 180 ms dwell with 120 ms skip, run splitting on 40 mm jump + nearest-run selection, rms/inlier band 15 mm; PROBE_FACE log; bench verified on 150 mm and 50 mm faces"
   ],
   "source_sha256": {
     "Control\\bridge_logic.c": "d6a00e152c698aee11aad7c34edb8adf5018fa837903079f9fcc8be368978e02",
-    "Control\\line_follower.c": "3511caa292390223f76fc53d5e2d856a8563dec5efbade9a0ec0d33d8ca919d5",
+    "Control\\line_follower.c": "001cfbdf0388f72619e023134702eae553c2e9ee4622790ab1b701e44f70c720",
     "Board\\board.c": "2dfabe0fea9aa637ece52d4085fe5d02573cbfe594eadd306b00e105500d804c",
     "Board\\lcd_st7735.c": "3d6cceb53f70629ed40caaa93295574160fcfdec35978ca8ab7fa10f60ec0c3b",
-    "Control\\line_follower.h": "752873bb5a21198bddd84317fbf4eac6cfe179d5a762a28e5d55c77d36f36cad",
-    "Core\\Src\\main.c": "3c33cdcd57ec962b0479c73cf5e0e80f17774af9fdc71ca6866a781397f0048d",
+    "Control\\line_follower.h": "62e42315ac8d5ca9db1c6fd70b3de021092a9cb2fd24de6e72368a2f7a766bea",
+    "Core\\Src\\main.c": "d5d12ba9c1a5eb84ec5daf96e0a88bf433eb08588ce2595db66ffa23865152f0",
+    "tests\\test_controller.c": "7632a62d6435c797b04801c22f805cf953e096a36a8e8a190bc030afad30f59f",
     "Core\\Src\\syscalls.c": "d482a68c95a5259666c79aa6d9b8fe6a0aee9fdd6175e9f468131779e8bcb5ff",
     "tools\\host_station.py": "ed6e44d233b05ea88ec21ae91d0c4188944a35e6027d1ff277f6729dc1fa321a"
   },
