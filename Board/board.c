@@ -27,6 +27,9 @@
 #include <stdio.h>
 #include <string.h>
 
+/* BOARD_SWAP_LR（左右通道对调）统一定义在 board.h，并随上电日志 PROBE_BUILD 打印；
+ * 本文件只在采样（TIM3/TIM4）与 H 桥映射（values[]）两处使用它。 */
+
 /* ============================================================================
  * 1. 片上外设句柄与硬件缓冲区定义
  * ============================================================================ */
@@ -704,7 +707,12 @@ void board_sample(LfInput *sample) {
     sample->driver_ok = HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_4) == GPIO_PIN_SET;
 
     /* 读取 16 位正交编码器计数器并做模 65536 有符号差分，自动处理上下溢出回绕 */
+#if BOARD_SWAP_LR
+    /* 物理左轮接在右编码器口 (TIM3)，物理右轮接在左编码器口 (TIM4) */
+    uint16_t counts[] = {(uint16_t)TIM3->CNT, (uint16_t)TIM4->CNT};
+#else
     uint16_t counts[] = {(uint16_t)TIM4->CNT, (uint16_t)TIM3->CNT};
+#endif
     for (unsigned i = 0; i < 2; ++i) {
         uint16_t wrapped = (uint16_t)(counts[i] - previous_count[i]);
         int32_t delta = wrapped > 32767 ? (int32_t)wrapped - 65536 : wrapped;
@@ -789,7 +797,12 @@ void board_apply(const LfOutput *out, const LfConfig *cfg) {
             if (direction) motor_direction[i] = direction;
         }
         bool brake_pwm = cfg->hw.enable ? !cfg->hw.coast_mode : cfg->drive_brake;
+#if BOARD_SWAP_LR
+        /* 控制左 (i=0) -> 右桥 values[1] -> TIM1_CH3/4；控制右 (i=1) -> 左桥 values[0] */
+        values[1U - i] = bridge_compare(duty, true, brake, brake_pwm, pwm_period);
+#else
         values[i] = bridge_compare(duty, true, brake, brake_pwm, pwm_period);
+#endif
     }
 
     /* 5. 利用 TIM1 UDIS 位原子更新四路 CCR 预装载寄存器，确保同一 PWM 周期同步生效 */

@@ -15,8 +15,10 @@
 >   `SIDE_LOCK`（舵机掰 90° 测站立距离 h 并自检）→ `SIDE_SCAN`（沿面平移，回波跳变找左右边界，位置域中点）→
 >   `SIDE_MOVE`（沿切线开到中点，含发射前复测）→ 侧向 10 s 激光。台架入口：**`side`（自走）/ `side push`（人工推车）**。
 >   详细落地记录见《手册》§3.9、《方案》§13.4、《问题排查手册》§17.14。
-> - 🚀 **下一阶段 M3**：`TURN_PAR`（原地转到与面平行）+ `LEG`（绕到下一面），在 `AIM` 与 `SIDE_LOCK` 之间插入 `TURN_PAR`，自动流程才启用侧扫（`AIM→TURN_PAR→SIDE_LOCK→…→LEG`）完成四面循环；
->   接手请读 **[docs/teammate-targeting-handover.md](docs/teammate-targeting-handover.md)**。
+> - ✅ **M3 转平行 + 绕行（2026-11-22 已烧录）**：`TURN_PAR` 接在 AIM 后；`LEG` 用 DRIVE1→TURN→DRIVE2 绕到下一面，**宽面→窄面单向台架通过**（下一面 `SIDE_LOCK h=215 ok=1`、`w=43.6 NARROW`、`TURN 90/91` 实车左转）。
+>   关键修正：`BOARD_SWAP_LR=0`（否则日志左转、实车右转）、`track_width_mm=112.5`（90° 标度）、**LEG 不做 14° ALIGN**。
+> - 🚀 **下一阶段 M4**：四面循环、faces=2 自动全流程验证、`h_pred` 修正、`probetour`；
+>   接手请读 **[docs/M3-task-handover.md](docs/M3-task-handover.md)** 与 **[docs/teammate-targeting-handover.md](docs/teammate-targeting-handover.md)**。
 
 为了让每位组员无需翻阅底层寄存器即可快速掌握整个项目，所有软件与硬件对接文档均整理在本工作区 `docs/` 目录下：
 
@@ -26,7 +28,7 @@
 4. **[docs/hardware-interface-manual.md](docs/hardware-interface-manual.md)**：**《STM32G474 核心板与主扩展板硬件接口逐脚对应手册》** —— 详细到每一个 MCU 引脚、核心板排针、主扩展板排母、逻辑门芯片引脚与外部传感器/电机的电气对接关系。
 5. **[docs/software-architecture-and-review.md](docs/software-architecture-and-review.md)**：**《固件审查与软件总体架构设计》** —— 记录硬件复用修复、定时器零冲突分配矩阵与快速循迹专项优化设计。
 6. **[docs/board-pin-map.csv](docs/board-pin-map.csv)**：全车 27 项 MCU 引脚、网络名与外设复用速查表格。
-7. **[docs/validation.json](docs/validation.json)**：每次代码修改后的 Debug/Release 编译、静态检查、**31 项**自动化单元测试与**台架验证**记录；M2 台架遥测在 [data/m2_side_bench_20261122.csv](data/m2_side_bench_20261122.csv)。
+7. **[docs/validation.json](docs/validation.json)**：每次代码修改后的 Debug/Release 编译、静态检查、**33 项**自动化单元测试与**台架验证**记录；M2 台架遥测在 [data/m2_side_bench_20261122.csv](data/m2_side_bench_20261122.csv)。
 
 ---
 
@@ -52,7 +54,7 @@
 - **命令面板方式**：按 `Ctrl + Shift + P` → 输入并选择 **`Tasks: Run Task`** → 选择：
   - **`Build Debug`**：编译带调试符号的 Debug 固件（输出至 `build/Debug/line-following.elf/.hex/.bin`）。
   - **`Build Release`**：编译体积与速度优化的 Release 固件（输出至 `build/Release/line-following.elf/.hex/.bin`）。
-  - **`Test Controller`**：在电脑本机运行全部 **31 项控制算法自动化单元测试**（无需连接开发板）。
+  - **`Test Controller`**：在电脑本机运行全部 **33 项控制算法自动化单元测试**（无需连接开发板）。
 
 ---
 
@@ -70,7 +72,7 @@
 
 **等价终端命令**（也可在 VS Code 终端中直接粘贴执行）：
 ```powershell
-# 仅编译 Debug / Release / 运行 31 项主机测试：
+# 仅编译 Debug / Release / 运行 33 项主机测试：
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\build.ps1 -Configuration Debug
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\build.ps1 -Configuration Release
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\build.ps1 -Test

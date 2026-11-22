@@ -634,8 +634,8 @@ static void probeside(void) {
         tick(&c, &in, &now, 30U);
         assert(c.state == LF_STOPPED);
     }
-    /* ⑩ M2 的自动流程必须保持 M1 行为：默认 probe_scan_mode=1，但侧扫只能从台架入口进入，
-     *     所以「<15cm 停车 → probe」在 AIM 成功后直接进 LASER，不会去侧甩舵机/误锁邻墙 */
+    /* ⑩ M3 的自动流程：默认 probe_scan_mode=1，AIM 成功后必须进 TURN_PAR（不再是 M2 的 LASER）；
+     *     这正是 M2 接入分支 side_bench 死代码被修掉后的行为变化 */
     {
         LfController c; ready(&c); uint32_t now = 0;
         LfInput in = input(3000, 500, 500, 3000);
@@ -645,7 +645,7 @@ static void probeside(void) {
         assert(lf_start_probe(&c, now));
         assert(c.cfg.probe.scan_mode == 1U); /* 默认就是侧视模式 */
         aim_run(&c, &in, &now, 0.0f, 150.0f, 75.0f, 2.0f, 0.10f);
-        assert(c.probe_phase == LF_PROBE_LASER); /* M2：自动流程 = M1（不进侧扫） */
+        assert(c.probe_phase == LF_PROBE_TURN_PAR); /* M3：AIM → TURN_PAR → SIDE_LOCK */
         assert(c.side_locked == 0U);
         assert((c.side_event & (uint8_t)LF_SIDE_EVENT_EDGE) == 0U);
         assert(c.face.valid);
@@ -701,6 +701,134 @@ static void probeside(void) {
         assert(!lf_start_side_probe(&c, 0U, false)); /* 角度法模式下台架侧扫入口必须拒绝 */
     }
 }
+/**
+ * M3 TURN_PAR：直接注入 TURN_PAR 相位，用控制器自己的 target_mm_s 生成编码器脉冲。
+ * 覆盖 φ 的符号/幅度（−20/0/+20）、side_left=0/1、|φ|>35 拒绝、堵转超时。
+ */
+static void probepar(void) {
+    const float d2r = 3.14159265f / 180.0f;
+    const struct { float phi_deg; bool left; bool block; float expect_deg; } cases[] = {
+        {  0.0f, true,  false,  -90.0f },
+        { 20.0f, true,  false,  -70.0f },
+        {-20.0f, true,  false, -110.0f },
+        {  0.0f, false, false,   90.0f },
+        { 40.0f, true,  false,    0.0f },  /* |φ|>35：拒绝 TURN_PAR，失败停机 */
+        {  0.0f, true,  true,     0.0f },  /* 堵转：3 s 超时失败 */
+    };
+    for (unsigned k = 0; k < sizeof(cases) / sizeof(cases[0]); ++k) {
+        LfController c;
+        lf_init(&c);
+        c.cal.valid = true;
+        c.cfg.arm_delay_ms = 0;
+        c.cfg.probe.scan_mode = 1;
+        c.cfg.probe.side_left = cases[k].left;
+        c.state = LF_PROBING;
+        c.probe_phase = LF_PROBE_TURN_PAR;
+        c.state_since = 0;
+        c.phase_since = 0;
+        c.phase_start_rad = 0.0f;
+        c.turn_stage = (uint8_t)LF_TURN_IDLE;
+        c.turn_backup = 1U; /* 本用例只测转角，不测低 ρ 倒车 */
+        c.face.valid = 1;
+        c.face.phi = cases[k].phi_deg * d2r;
+        LfInput in = input(3000, 500, 500, 3000);
+        in.obstacle_valid = true;
+        in.obstacle_mm = 180U;
+        const float mmpc = 3.14159265f * c.cfg.wheel_diameter_mm / c.cfg.encoder_counts_per_rev;
+        float frac[2] = {0.0f, 0.0f};
+        uint32_t now = 0;
+        unsigned guard = 0;
+        while (c.state == LF_PROBING && c.probe_phase == LF_PROBE_TURN_PAR && ++guard < 2000U) {
+            for (unsigned i = 0; i < 2U; ++i) {
+                float counts = (cases[k].block ? 0.0f : c.target_mm_s[i]) * 0.005f / mmpc + frac[i];
+                int16_t whole = (int16_t)(counts >= 0.0f ? floorf(counts) : ceilf(counts));
+                frac[i] = counts - (float)whole;
+                in.encoder_delta[i] = whole;
+            }
+            now += 5U;
+            lf_step(&c, &in, now, 0.005f);
+        }
+        assert(guard < 2000U);
+        if (cases[k].phi_deg > 35.0f || cases[k].block) {
+            assert(c.turn_ok == 0U);
+            assert(c.probe_phase != LF_PROBE_SIDE_LOCK);
+            if (cases[k].block) assert(c.turn_ms >= 2900U);
+        } else {
+            assert(c.probe_phase == LF_PROBE_SIDE_LOCK);
+            assert(c.turn_ok == 1U);
+            assert(fabsf(c.turn_cmd_deg - cases[k].expect_deg) < 1.0f);
+            assert(fabsf(c.turn_ach_deg - cases[k].expect_deg) < 8.0f);
+        }
+    }
+}
+
+/**
+ * M3 LEG：先 side 扫到宽面中点，再 leg 绕到下一面，用独立 truth 位姿断言终点。
+ * 用 1.00 / 1.02 两种轮径比例误差，确认「控制器自测 OK」之外真值也落在下一面中心附近。
+ */
+static void probeleg(void) {
+    for (unsigned variant = 0; variant < 2U; ++variant) {
+        const float scale = variant == 0U ? 1.00f : 1.02f;
+        LfController c;
+        LfInput in;
+        uint32_t now;
+        SynthSide w = {0};
+        w.center_mm = 0.0f;
+        w.half_w_mm = 75.0f;
+        w.h_mm = 180.0f;
+        w.tilt = 0.0f;
+        w.gamma_deg = 7.5f;
+        w.sigma_mm = 0.0f;
+        w.drop = 0.0f;
+        w.bg_mm = 0.0f;
+        side_start(&c, &in, &now, false, false, 2400U);
+        side_run(&c, &in, &now, &w, false, 0.0f);
+        assert(c.probe_phase == LF_PROBE_LASER);
+        assert(c.face.kind == 1U && c.face.w > 130.0f && c.side_h > 150.0f);
+        lf_stop(&c, now);
+        tick(&c, &in, &now, 30U);
+        assert(c.state == LF_STOPPED);
+        assert(lf_start_leg_probe(&c, now));
+        assert(c.state == LF_PROBING && c.probe_phase == LF_PROBE_LEG);
+        /* truth：轮轴在面中心后方 pan_x、距面 h；宽面→下一面窄面，x=+75，中心 y=+25 */
+        float tx = -c.cfg.probe.pan_x_mm;
+        float ty = -c.side_h;
+        float tyaw = 0.0f;
+        const float mmpc = 3.14159265f * c.cfg.wheel_diameter_mm / c.cfg.encoder_counts_per_rev;
+        float frac[2] = {0.0f, 0.0f};
+        unsigned guard = 0;
+        while (c.state == LF_PROBING && c.probe_phase == LF_PROBE_LEG && ++guard < 8000U) {
+            float v[2] = {c.target_mm_s[0], c.target_mm_s[1]};
+            float dL = v[0] * 0.005f * scale;
+            float dR = v[1] * 0.005f * scale;
+            float ds = 0.5f * (dL + dR);
+            float dth = (dR - dL) / c.cfg.track_width_mm;
+            tx += ds * cosf(tyaw + 0.5f * dth);
+            ty += ds * sinf(tyaw + 0.5f * dth);
+            tyaw += dth;
+            for (unsigned i = 0; i < 2U; ++i) {
+                float counts = v[i] * 0.005f / mmpc + frac[i];
+                int16_t whole = (int16_t)(counts >= 0.0f ? floorf(counts) : ceilf(counts));
+                frac[i] = counts - (float)whole;
+                in.encoder_delta[i] = whole;
+            }
+            now += 5U;
+            lf_step(&c, &in, now, 0.005f);
+        }
+        assert(guard < 8000U);
+        assert(c.probe_phase == LF_PROBE_SIDE_LOCK);
+        assert(c.leg_fail == 0U);
+        assert(c.leg_stage == (uint8_t)LF_LEG_DONE);
+        assert((c.leg_event & (uint8_t)LF_LEG_EVENT_DRIVE2) != 0U);
+        assert(fabsf(c.leg_turn_ach_deg - 90.0f) < 8.0f);
+        assert(fabsf(c.leg_cmd_mm - c.leg_l2_mm) < 0.01f);
+        /* 真值终点：x = 75 + h + margin = 275；云台轴在下一面中心 y=25，轮轴在 y=25−pan_x=−5 */
+        assert(fabsf(tx - 275.0f) < 15.0f);
+        assert(fabsf(ty + 5.0f) < 15.0f);
+        assert(fabsf(tyaw - 1.5707963f) < 0.10f);
+    }
+}
+
 /** M3：车体对正 SQUARE + 偏心挪车 ALIGN。 */
 static void probeturn(void) { probe_pending("probeturn"); }
 /** M4：切线绕行（edge1/edge2 由实测值计算）。 */
@@ -907,6 +1035,8 @@ int main(int argc,char **argv) {
     else if(!strcmp(name,"probeaim"))probeaim();
     else if(!strcmp(name,"probefit"))probefit();
     else if(!strcmp(name,"probeside"))probeside();
+    else if(!strcmp(name,"probepar"))probepar();
+    else if(!strcmp(name,"probeleg"))probeleg();
     else if(!strcmp(name,"probeturn"))probeturn();
     else if(!strcmp(name,"probetour"))probetour();
     else if(!strcmp(name,"motorcal"))motorcal();

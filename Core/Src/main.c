@@ -166,6 +166,23 @@ static void start_side_probe(uint32_t now, bool push) {
     }
 }
 
+/**
+ * @brief 台架绕行（M3 验收用）：用上一次 side 扫描的 w/kind/h 跑一段 LEG -> 下一面 SIDE_LOCK/SCAN/MOVE
+ * @note  必须先 side（或 side push）扫到中点，否则 face.w/side_h 无效，命令会被拒绝。
+ */
+static void start_leg_probe(uint32_t now) {
+    clear_aux_modes();
+    if (lf_start_leg_probe(&g_lf, now)) {
+        board_log("LEG: starting one-leg bench (w=%.1f,h=%.1f,kind=%u,pan=%.0f).\r\n",
+                  (double)g_lf.face.w, (double)g_lf.side_h, (unsigned)g_lf.leg_kind,
+                  (double)g_lf.cfg.probe.pan_x_mm);
+        board_log("PROBE_MODE,scan=B,side=%c,us=%u\r\n",
+                  g_lf.cfg.probe.side_left ? 'L' : 'R', (unsigned)g_lf.cfg.probe.side_us);
+    } else {
+        board_log("LEG DENIED (need STOPPED/OBSTACLE_STOP, no fault, scan_mode=1, and a prior side scan with w/h)\r\n");
+    }
+}
+
 /** @brief 将上电 HC-04 波特率探测结果枚举转换为可读标签 */
 static const char *bt_probe_label(uint8_t probe_state) {
     switch (probe_state) {
@@ -531,6 +548,7 @@ static void command(char *line, uint32_t now) {
         board_log("SIDE:  set probe_scan_mode(0=A/1=B) probe_side_left probe_side_us probe_side_spd_mm_s probe_side_reach_mm\r\n");
         board_log("       set probe_side_band_mm probe_side_jump_mm probe_side_verify probe_beam_half_deg probe_pan_x_mm probe_fit_rms_mm V\r\n");
         board_log("SIDE-BENCH: side          (自走侧扫台架)  |  side push  (电机断电，人工推车扫)\r\n");
+        board_log("LEG-BENCH:  leg            (用上一次 side 的 w/h 绕到下一面，M3 验收)\r\n");
         board_log("PROBE-CAL: scan [span_us=220] [step_us=20] [dwell_ms=140] | drive MM [SPD=120] | turn DEG [SPD=90] | outtest lamp/buz/laser/servo/led/stop VAL [MS]\r\n");
         board_log("SERVO: servosweep [period_ms=2000] (continuous 900..2100us) | servosweep stop | stop\r\n");
         board_log("HW-EMU: hw_preset stock|group_b; set hw_emu/hw_netlist/hw_r45_5v/hw_i/hw_coast 0/1; mcurve/vtest/bench/calset/defaults\r\n");
@@ -560,6 +578,7 @@ static void command(char *line, uint32_t now) {
         start_side_probe(now, m != NULL);
         return;
     }
+    if (!strcmp(cmd, "leg")) { start_leg_probe(now); return; }
     if (!strcmp(cmd, "servosweep")) {
         /* 舵机连续往返台架测试：默认 2 s 一个完整 900->2100->900 周期，直到 stop 或 servosweep stop */
         char *v = strtok(NULL, " \t");
@@ -904,6 +923,9 @@ int main(void) {
         bt_probe_label(board_bt_probe_status()), board_bt_status_pin() ? 'H' : 'L');
     board_log("RAM-first mode (no auto Flash wear). Commands: mcal air 5 | mcal ground 5 | cal | start | diag\r\n");
     board_log("BOOT_CFG,flash_load=%u,cal_valid=%u\r\n", (unsigned)cfg_loaded, (unsigned)g_lf.cal.valid);
+    /* 二进制自证：板级左右对调开关。以后任何一份日志都能对上它跑的是哪版固件，
+     * 不再靠"两个文件时间戳谁更新"去猜（2026-11-22 转向争议就是这么糊涂的）。 */
+    board_log("PROBE_BUILD,swaplr=%u,h_pred=1\r\n", (unsigned)BOARD_SWAP_LR);
     board_log("CSV,ms,state,fault,raw0,raw1,raw2,raw3,q0,q1,q2,q3,pos,confidence,vL,vR,tL,tR,uL,uR\r\n");
     uint32_t last_log = board_millis();
     LfState previous_state = g_lf.state;
@@ -955,14 +977,49 @@ int main(void) {
                               (unsigned)i, (double)s, (double)s_true, (unsigned)g_lf.side_edge_frames);
                 }
                 if (side_ev & (uint8_t)LF_SIDE_EVENT_MID) {
-                    board_log("PROBE_SIDE_MID,s_m=%.1f,w=%.1f,kind=%s,retry=%u\r\n",
+                    /* k = d(h)/ds：只作诊断（车/盒残余斜率）。2026-11-22 21:36 起不再参与 LEG 控制 */
+                    board_log("PROBE_SIDE_MID,s_m=%.1f,w=%.1f,kind=%s,retry=%u,k=%.3f\r\n",
                               (double)g_lf.face.s_m, (double)g_lf.face.w,
-                              g_lf.face.kind == 0U ? "NARROW" : "WIDE", (unsigned)g_lf.side_warn);
+                              g_lf.face.kind == 0U ? "NARROW" : "WIDE", (unsigned)g_lf.side_warn,
+                              (double)g_lf.side_k);
                 }
                 if (side_ev & (uint8_t)LF_SIDE_EVENT_FAIL) {
                     board_log("PROBE_SIDE_FAIL,stage=%u,edges=%u,retry=%u,h=%.1f\r\n",
                               (unsigned)g_lf.side_stage, (unsigned)g_lf.side_edges,
                               (unsigned)g_lf.side_retry, (double)g_lf.side_h);
+                }
+            }
+
+            /* M3 LEG 遥测：LEG 三段在同一个相位里，不换相位，所以由控制器置事件位、这里打印后清零。
+             * TURN 用 turn_cmd/ach/ms；DRIVE1/2 用 leg_cmd/ach/hdg。 */
+            if (g_lf.leg_event != 0U) {
+                uint8_t leg_ev = g_lf.leg_event;
+                g_lf.leg_event = 0U;
+                if (leg_ev & (uint8_t)LF_LEG_EVENT_DRIVE1) {
+                    board_log("PROBE_LEG,seg=DRIVE1,len=%.1f,ach=%.1f,hdg=%.2f\r\n",
+                              (double)g_lf.leg_cmd_mm, (double)g_lf.leg_ach_mm,
+                              (double)g_lf.leg_hdg_deg);
+                }
+                if (leg_ev & (uint8_t)LF_LEG_EVENT_TURN) {
+                    /* dir = 命令符号（L=+90 逆时针）。h_pred = 转完后云台轴到下一面的期望侧距
+                     * ≈ h_leg + margin：下一面 SIDE_LOCK 实测 h 与它一比就知道"转向/认面"对不对，
+                     * 不必等 SIDE_SCAN 去和窄面窗口较劲（2026-11-22 的 389 mm 就是这么漏判的）。 */
+                    float h_leg = g_lf.side_h + g_lf.side_k * g_lf.face.s_m;
+                    board_log("PROBE_LEG,seg=TURN,cmd=%.1f,ach=%.1f,ms=%lu,dir=%c,h_pred=%.0f\r\n",
+                              (double)g_lf.turn_cmd_deg, (double)g_lf.turn_ach_deg,
+                              (unsigned long)g_lf.turn_ms,
+                              g_lf.turn_cmd_deg >= 0.0f ? 'L' : 'R',
+                              (double)(h_leg + LF_LEG_MARGIN_MM));
+                }
+                if (leg_ev & (uint8_t)LF_LEG_EVENT_DRIVE2) {
+                    board_log("PROBE_LEG,seg=DRIVE2,len=%.1f,ach=%.1f,hdg=%.2f\r\n",
+                              (double)g_lf.leg_cmd_mm, (double)g_lf.leg_ach_mm,
+                              (double)g_lf.leg_hdg_deg);
+                }
+                if (leg_ev & (uint8_t)LF_LEG_EVENT_FAIL) {
+                    board_log("PROBE_LEG,seg=FAIL,stage=%u,why=%u,h=%.1f\r\n",
+                              (unsigned)g_lf.leg_stage, (unsigned)g_lf.leg_fail,
+                              (double)g_lf.side_h);
                 }
             }
 
@@ -1168,9 +1225,20 @@ int main(void) {
                 if (previous_probe_phase == LF_PROBE_SIDE_LOCK) {
                     const LfProbeConfig *lp = &g_lf.cfg.probe;
                     float pred = g_lf.face.rho > 1.0f ? g_lf.face.rho + lp->pan_x_mm : 0.0f;
-                    board_log("PROBE_SIDE_LOCK,h=%.1f,pred=%.1f,us=%u,ok=%u\r\n",
+                    board_log("PROBE_SIDE_LOCK,h=%.1f,pred=%.1f,us=%u,ok=%u,h1=%.1f,h2=%.1f,corr=%.1f\r\n",
                               (double)g_lf.side_h, (double)pred, (unsigned)lp->side_us,
-                              (unsigned)(g_lf.probe_phase == LF_PROBE_SIDE_SCAN ? 1U : 0U));
+                              (unsigned)(g_lf.probe_phase == LF_PROBE_SIDE_SCAN ? 1U : 0U),
+                              (double)g_lf.side_h1, (double)g_lf.side_h2,
+                              (double)(g_lf.side_tilt_corr_rad * 57.2957795f));
+                }
+                if (previous_probe_phase == LF_PROBE_TURN_PAR) {
+                    /* TURN_PAR 结束（成功进 SIDE_LOCK 或失败停机都打）：cmd/ach 是停稳后的值。
+                     * dir 是命令符号：箱体在左（side_left=1）时**应当**是 R（从面对盒子转成平行），
+                     * 不要把它当成"转反了"——绕角那一段（LEG TURN）才是 L。 */
+                    board_log("PROBE_TURN,tag=PAR,cmd=%.1f,ach=%.1f,ms=%lu,ok=%u,dir=%c\r\n",
+                              (double)g_lf.turn_cmd_deg, (double)g_lf.turn_ach_deg,
+                              (unsigned long)g_lf.turn_ms, (unsigned)g_lf.turn_ok,
+                              g_lf.turn_cmd_deg >= 0.0f ? 'L' : 'R');
                 }
                 board_log("PROBE_EVENT,%lu,%u,%s,%u,%u,%.1f,%.2f\r\n",
                     (unsigned long)now, (unsigned)g_lf.probe_face, lf_probe_phase_name(g_lf.probe_phase),

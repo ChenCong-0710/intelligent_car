@@ -12,7 +12,7 @@
  *   4. 左右轮独立死区/斜率 + 15 点实测分段线性插值前馈补偿
  *   5. 5 轮空载 (mcal air) 与 5 轮地面带载自动往返 (mcal ground) 电机特性标定状态机 (LF_MOTOR_CAL)
  *   6. < 15 cm 超声波主动电枢短接制动停车 (LF_OBSTACLE_STOP) 与 1.0 s 声光提示
- *   7. 3 分钟限时顺时针四面障碍物瞄准与 10 s 激光发射状态机 (LF_PROBING)
+ *   7. 3 分钟限时四面障碍物瞄准与 10 s 激光发射状态机 (LF_PROBING，方向由 probe_side_left 选)
  */
 
 #ifndef LINE_FOLLOWER_H
@@ -133,7 +133,7 @@
 #define LF_SIDE_H_MAX_MM 350.0f
 
 /** @brief 侧视锁定超时 (ms)：400 ms 舵机 + 5 帧 × 60 ms = 700 ms，留 2.5 s 余量 */
-#define LF_SIDE_LOCK_TIMEOUT_MS 2500U
+#define LF_SIDE_LOCK_TIMEOUT_MS 6000U  /* 含预扫测斜：400 等待 + 3×5 帧 + 两次小转，2.5 s 不够 */
 
 /** @brief 侧扫/开位末段降速：|err| 小于它时降到低速，避免过冲 */
 #define LF_SIDE_SLOW_DIST_MM 20.0f
@@ -162,6 +162,78 @@
 /** @brief 超声触发周期 (ms)：侧扫按这个节拍取一帧（与 board.c TIM17 单脉冲节拍一致） */
 #define LF_SIDE_PING_MS 60U
 
+/* ---------------------------------------------------------------------------
+ * M3 转平行（TURN_PAR）与绕行（LEG）常数
+ * 按《M3计划_评审与修订.md》§4.5 采用宏而不是新 Flash 参数：M3 不升 Flash 版本，
+ * M4 需要在线调 box_ 与 leg_margin 时再一次性加参数并升 8。
+ * ------------------------------------------------------------------------- */
+
+/** @brief TURN_PAR 超时 (ms)：90° @90 mm/s 实测 1.1~1.4 s，3 s 足够；超时=失败+停机 */
+#define LF_TURN_PAR_TIMEOUT_MS 3000U
+
+/** @brief 原地转到位后的主动制动稳定时间 (ms)：停稳后再锁存 turn_ach_deg，避免把滑行角当成到位角 */
+#define LF_TURN_SETTLE_MS 150U
+
+/** @brief 原地转的到位容差 (deg)：超过它判 turn_ok=0（M3 失败即停，不回 AIM） */
+#define LF_TURN_TOL_DEG 8.0f
+
+/** @brief AIM 的 |φ| 超过它认为结果不可信，拒绝 TURN_PAR（避免为了对齐法线把车转过 125°） */
+#define LF_TURN_PAR_MAX_PHI_DEG 35.0f
+
+/** @brief 箱体名义尺寸 (mm)：任务书 150×50；LEG 用标称值而不是实测 w（实测 w 有 ±8 mm 误差且 80~120 会误分类） */
+#define LF_BOX_LONG_MM 150.0f
+#define LF_BOX_SHORT_MM 50.0f
+
+/** @brief LEG 直行速度 (mm/s) 与第一段越角余量 (mm) */
+#define LF_LEG_SPEED_MM_S 100.0f
+#define LF_LEG_MARGIN_MM 20.0f
+
+/** @brief LEG 前站立距离门禁 (mm)：低于它转 90° 时车体扫掠可能擦箱（h=80 时轮轴到转角仅 106 mm） */
+#define LF_LEG_H_MIN_MM 120.0f
+
+/** @brief LEG 总超时与单段直行超时 (ms) */
+#define LF_LEG_TIMEOUT_MS 15000U
+#define LF_LEG_DRIVE_TIMEOUT_MS 8000U
+
+/**
+ * @brief LEG 前航向修正（ALIGN）已于 2026-11-22 21:36 **永久删除**
+ * @note  台架结论：side_k=-0.25（≈14°）是侧扫弧段/电机死区造成的**测量偏置**，不是静态歪斜；
+ *        车实际与面平行时也会稳定测出 -0.25。按它修 14° 反而把车头顶向箱面
+ *        （h 143→约 100），转角时前角顶住箱角，外观就是「该左转却右拐」。
+ *        去掉 ALIGN 后 DRIVE1 保持 h≈143，转向不再被箱角卡住；
+ *        PROBE_SIDE_MID 的 k 只留作诊断，不再进入控制。
+ */
+
+/** @brief M3 转角降速 (mm/s)：LEG 转角 60、TURN_PAR 60；低 ρ 时减小前角擦箱与过冲 */
+#define LF_LEG_TURN_SPEED_MM_S 60.0f
+#define LF_TURN_PAR_SPEED_MM_S 60.0f
+
+/**
+ * @brief 面宽分类门限 (mm)：w < 它判窄面(50)，否则宽面(150)
+ * @note  2026-11-22 台架：窄面真值 50 在 h≈205 时测得 ~109.5（波束足印偏置），
+ *        宽面真值 150 在 h≈153 时测得 146~172。按实测偏置取 130；
+ *        直接用真值 100 会把窄面 109.5 误判成宽面，第二次 LEG 用错 d_B 后失败。
+ */
+#define LF_SIDE_KIND_SPLIT_MM 130.0f
+
+/**
+ * @brief SIDE_LOCK 预扫测斜：锁存 h1 后原地转 +5°，测 h2，用两条射线求面法线，转正后再测 h3
+ * @note  窄面 50 mm 时 5° 只让光束横移 h·tan5°≈14 mm（h=160），仍在 ±25 内；
+ *        转正后侧扫/SIDE_MOVE 才沿面切线走，不会「侧面划出去」。side push（电机断电）跳过。
+ */
+#define LF_SIDE_TILT_PROBE_DEG 5.0f
+#define LF_SIDE_TILT_PROBE_SPEED_MM_S 45.0f
+/* 2026-11-22 台架：5° 旋转两点法在静态 h 噪声下会假阳性（h1=153/h2=150 的 3 mm
+ * 被解成 14.7°，把本来平行的车转歪）。先关闭，下一版改成沿面 30 mm 平移两点法
+ * （30 mm 对 15° 倾斜有 7.8 mm 信号，远大于噪声），不要再用 5° 旋转。 */
+#define LF_SIDE_TILT_PROBE_ENABLE 0
+#define LF_SIDE_TILT_MIN_DEG 1.5f
+#define LF_SIDE_TILT_MAX_DEG 15.0f
+
+/** @brief TURN_PAR 低 ρ 倒车：AIM ρ 小于它先倒 20 mm，给原地转的前角留间隙（现场可能停在 13~14 cm） */
+#define LF_TURN_PAR_BACKUP_RHO_MM 150.0f
+#define LF_TURN_PAR_BACKUP_MM 20.0f
+
 /**
  * @brief 顶层运行状态机枚举
  */
@@ -175,7 +247,7 @@ typedef enum {
     LF_STOPPING,      /**< 6: 收到停止指令后的短时主动电磁制动停机状态 */
     LF_FAULT,         /**< 7: 故障保护锁定状态（立即切断驱动，需人工 stop 清故障） */
     LF_OBSTACLE_STOP, /**< 8: 检测到前方 <15cm 障碍物后的主动短接制动保持状态（亮停车灯+1s长鸣） */
-    LF_PROBING,       /**< 9: 提高部分（2）顺时针四面障碍物探测与 10s 激光打靶状态 */
+    LF_PROBING,       /**< 9: 提高部分（2）四面障碍物探测与 10s 激光打靶状态（方向可选） */
     LF_MOTOR_CAL      /**< 10: 左右轮电机死区与全量程转速特性 5 轮自动测试标定状态 */
 } LfState;
 
@@ -236,6 +308,35 @@ typedef enum {
     LF_SIDE_MOVE_DONE = 3     /**< 3: 就位，进入 LASER */
 } LfSideMoveStage;
 
+/** @brief 原地转（TURN_PAR / LEG 转角 / LEG 前航向修正）子状态（LfController::turn_stage） */
+typedef enum {
+    LF_TURN_IDLE = 0,    /**< 0: 未开始/需要重新锁存基准航向 */
+    LF_TURN_DRIVE = 1,   /**< 1: 单向逼近目标角 */
+    LF_TURN_SETTLE = 2,  /**< 2: 到位后主动制动，等停稳再测 ach */
+    LF_TURN_DONE = 3     /**< 3: 已完成（turn_ok 表示是否在容差内） */
+} LfTurnStage;
+
+/** @brief LEG 三段（LfController::leg_stage） */
+typedef enum {
+    LF_LEG_DRIVE1 = 0,  /**< 0: 沿面切线越过拐角，L1 = w_nom/2 + pan_x + h + margin */
+    LF_LEG_TURN = 1,    /**< 1: 原地转 ±90°（左视左转，右视右转；BOARD_SWAP_LR=0 时 + = 实车左转） */
+    LF_LEG_DRIVE2 = 2,  /**< 2: 沿新切线开到下一面中心，L2 = h + d_B/2 - pan_x */
+    LF_LEG_DONE = 3     /**< 3: 完成 */
+} LfLegStage;
+
+/**
+ * @brief LEG 遥测事件位掩码（LfController::leg_event，供 main.c 打印 PROBE_LEG 后清零）
+ * @note  与 side_event 同一套机制：main.c 只在相位切换时打 PROBE_TURN，LEG 内部三段不换相位，
+ *        所以必须用事件位让控制器把「哪一段刚结束」传出去。
+ */
+typedef enum {
+    LF_LEG_EVENT_NONE = 0x00,    /**< 无事件 */
+    LF_LEG_EVENT_DRIVE1 = 0x01,  /**< DRIVE1 结束 */
+    LF_LEG_EVENT_TURN = 0x02,    /**< 转角结束 */
+    LF_LEG_EVENT_DRIVE2 = 0x04,  /**< DRIVE2 结束（LEG 完成） */
+    LF_LEG_EVENT_FAIL = 0x08     /**< LEG 失败（超时/转角超差/h 门禁） */
+} LfLegEvent;
+
 /**
  * @brief 侧扫遥测事件位掩码（LfController::side_event，供 main.c 打印 PROBE_SIDE_* 日志后清零）
  * @note  用位掩码而不是单值：REV 找到第二个边界的那一拍既产生「边界」事件、又立即由调用方
@@ -253,7 +354,7 @@ typedef enum {
  * @details 所有参数均可通过蓝牙串口 `set probe_*` 实时微调，无需反复重烧固件。
  */
 typedef struct {
-    bool clockwise;           /**< true = 顺时针绕行四面（任务书默认）；false = 逆时针绕行 */
+    bool clockwise;           /**< true = 顺时针；false = 逆时针（任务书未限定，按接近侧选） */
     uint8_t faces;            /**< 需完成的目标平面数量 (1 ~ 4，默认 4；单面调试可设 1) */
     uint16_t aim_ms;          /**< 云台扫掠寻优总时长 (ms，默认 1200 ms，含前 150 ms 归起点稳定) */
     uint16_t sweep_us;        /**< 云台相对 servo_center_us 的单侧扫掠半幅 (us，默认 600 us -> 900..2100 us) */
@@ -272,7 +373,7 @@ typedef struct {
 
     /* ---- M2 侧视横扫参数（Flash v7 起保存；均可用蓝牙 set probe_* 在线微调） ---- */
     uint8_t scan_mode;        /**< 0 = 角度法过渡流程（保留 M1 行为）；1 = 侧视横扫（默认，主方案） */
-    bool side_left;           /**< true = 箱体在左、逆时针巡边（M3 的 TURN_PAR/LEG 用） */
+    bool side_left;           /**< true = 箱体在左、逆时针巡边（本项目左侧接近；M3 的 TURN_PAR/LEG 用） */
     uint16_t side_us;         /**< 侧视舵机脉宽 (us，默认 2400 = 右掰 90°，即箱体在车左侧) */
     float fit_rms_mm;         /**< 面拟合残差上限 (mm，默认 15；纸盒起伏实测 rms 6~13) */
     float side_speed_mm_s;    /**< 侧扫/开位速度 (mm/s，默认 50；60 ms 走 3 mm 即一个样本) */
@@ -561,7 +662,46 @@ typedef struct {
     float side_origin_rad;     /**< 侧扫轴方向（原点处的车头航向，rad） */
     uint32_t side_ping_since;  /**< 上一次取侧扫样本的时间戳 (ms)，按 60 ms 超声节拍取帧 */
 
-    /* --- 左右轮电机死区与全量程转速自动标定 (LF_MOTOR_CAL：地面带载为主、空载作参考) --- */
+    /* --- M3 转平行 TURN_PAR + 绕行 LEG --- */
+    uint8_t turn_stage;        /**< 原地转子状态 LF_TURN_IDLE / DRIVE / SETTLE / DONE */
+    uint8_t turn_ok;           /**< 1 = 停稳后 |ach - cmd| <= LF_TURN_TOL_DEG */
+    uint8_t turn_backup;       /**< 1 = TURN_PAR 的低 ρ 倒车已完成/不需要；0 = 还没倒 */
+    uint8_t side_lock_stage;   /**< SIDE_LOCK 预扫测斜：0=等待 1=h1 2=转+5° 3=h2 4=转正 5=h3 6=完成 */
+    float side_h1;             /**< 预扫第一点 h (mm) */
+    float side_h2;             /**< 预扫转 +5° 后 h (mm) */
+    float side_h3;             /**< 转正后 h (mm) */
+    float side_delta_rad;      /**< 预扫实际转过的 +δ (rad) */
+    float side_tilt_corr_rad;  /**< 由 h1/h2/δ 求出的车头修正角 (rad) */
+    uint8_t leg_stage;         /**< LEG 子状态 DRIVE1 / TURN / DRIVE2 / DONE */
+    uint8_t leg_started;       /**< 1 = LEG 入口的原点/航向/L1/L2 已经锁存 */
+    uint8_t leg_event;         /**< LEG 遥测事件 LF_LEG_EVENT_*，main.c 打印后清零 */
+    uint8_t leg_fail;          /**< LEG 失败原因：0=正常，1=h 门禁，2=DRIVE1 超时，3=转角超差，4=DRIVE2 超时 */
+    uint8_t leg_kind;          /**< 本段 LEG 当前面宽窄：0=窄(50)/1=宽(150)，首面实测+面序交替决定 */
+    uint8_t box_first_kind;    /**< 首面宽窄基准（1=宽 150） */
+    uint8_t box_latch_index;   /**< 首面基准对应的面号（probe_face-1） */
+    uint8_t box_kind_ok;       /**< 1 = 首面基准已锁存 */
+    float turn_base_rad;       /**< 本次原地转的基准航向 (rad)，TURN_PAR=入口航向，LEG TURN=DRIVE1 结束航向 */
+    float turn_cmd_deg;        /**< 本次原地转的命令角 (deg，左正右负) */
+    float turn_ach_deg;        /**< 停稳后实测角 (deg) */
+    uint32_t turn_start_ms;    /**< 本次原地转开始时间戳 (ms) */
+    uint32_t turn_settle_ms;   /**< 转到位、进入 SETTLE 的时间戳 (ms) */
+    uint32_t turn_ms;          /**< 本次原地转耗时 (ms，到停稳为止) */
+    float leg_origin_mm;       /**< LEG 入口累计里程 (mm) */
+    float leg_turn_mm;         /**< 进 TURN 前的累计里程 (mm)，DRIVE2 的距离基准（原地转不改变里程） */
+    float leg_hdg0;            /**< LEG 入口航向（DRIVE1 的纠偏基准，rad） */
+    float leg_hdg1;            /**< DRIVE1 结束/进 TURN 前的航向 (rad) */
+    float leg_hdg2;            /**< TURN 结束/DRIVE2 起始的航向 (rad) */
+    float leg_l1_mm;           /**< DRIVE1 目标距离 (mm) */
+    float leg_l2_mm;           /**< DRIVE2 目标距离 (mm) */
+    float leg_cmd_mm;          /**< 最近一段直行的命令距离 (mm) */
+    float leg_ach_mm;          /**< 最近一段直行的实测距离 (mm) */
+    float leg_hdg_deg;         /**< 最近一段直行的航向偏差 (deg，相对该段基准) */
+    float leg_turn_ach_deg;    /**< LEG 转角实测值 (deg) */
+    uint32_t leg_turn_ms;      /**< LEG 转角耗时 (ms) */
+    uint32_t leg_since;        /**< LEG 入口时间戳 (ms，总超时用) */
+    uint32_t leg_drive_since;  /**< 当前直行段起始时间戳 (ms，单段超时用) */
+
+    /* --- 左右轮电机死区与全量程转速自动标定 (LF_MCAL：地面带载为主、空载作参考) --- */
     LfMcalMode mcal_mode;                   /**< 当前正在扫描的模式：LF_MCAL_AIR 或 LF_MCAL_GROUND */
     LfMcalMode mcal_active_mode;            /**< 当前激活用于循迹前馈的标定数据源（优先采用 GROUND） */
     float mcal_sum_speed[LF_MCAL_STEPS][2]; /**< 各占空比阶梯在多轮测试中的累计实测轮速和 */
@@ -677,6 +817,16 @@ bool lf_start_probe(LfController *c, uint32_t now_ms);
  * @note   M2 台架验收用（《问题排查手册》§17.12 第 4、7 步）；M3 起正常流程由 AIM->TURN_PAR 自动进入。
  */
 bool lf_start_side_probe(LfController *c, uint32_t now_ms, bool push);
+
+/**
+ * @brief 台架绕行专用入口：用上一次 side 扫描得到的 face(w/kind/h) 直接跑一段 LEG
+ * @param c      控制器指针
+ * @param now_ms 当前毫秒时间戳
+ * @return true 启动成功；false 当前非停止状态、有故障、probe_scan_mode=0，或没有可用的 face.w / side_h
+ * @note  M3 台架验收用：先 side 扫到中点 → leg 绕到下一面 → 自动 SIDE_LOCK/SCAN/MOVE → COMPLETE_BEEPS。
+ *        LEG 段（DRIVE1/TURN/DRIVE2）、h 门禁与总超时；失败即停并置 leg_event FAIL。
+ */
+bool lf_start_leg_probe(LfController *c, uint32_t now_ms);
 
 /** @brief 请求停止（若正在运动则先执行短时主动电磁制动，再关断驱动） */
 void lf_stop(LfController *c, uint32_t now_ms);

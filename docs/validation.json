@@ -1,9 +1,9 @@
 {
   "date": "2026-11-22",
   "mcu": "STM32G474VET6",
-  "milestone": "M2 side-view scan implemented, flashed and bench-verified (log-based; no tape available)",
+  "milestone": "M3 LEG/TURN_PAR bench-verified: wide face -> left 90 deg -> narrow face (ALIGN deleted, BOARD_SWAP_LR=0, effective track 112.5)",
   "hardware_flash_performed": true,
-  "flashed_image": "build/Debug-make/line-following.elf (STM32CubeProgrammer, SWD 1000 kHz, verify OK)",
+  "flashed_image": "build/Debug/line-following.elf (110816 B, STM32CubeProgrammer SWD verify OK, 2026-11-22 21:46)",
   "real_track_verified": false,
   "bench_verified": true,
   "profiles": {
@@ -31,10 +31,12 @@
     }
   },
   "host_tests": {
-    "c_unit_tests_passed": 31,
+    "c_unit_tests_passed": 33,
     "c_unit_tests_failed": 0,
     "new_tests": [
-      "probeside (12 synthetic side-scan scenarios + config/phase checks)"
+      "probeside (12 synthetic side-scan scenarios + config/phase checks)",
+      "probepar (TURN_PAR sign/phi/blocked cases)",
+      "probeleg (wide->narrow truth pose, 1.00/1.02 wheel scale)"
     ]
   },
   "build_environment_note": "本机 DSH 沙箱下 Ninja 1.13 在第二个子进程起会卡死，故用 CMake MinGW Makefiles 生成器 + mingw32-make 验证/产出；编译与链接参数和 CMakePresets 的 Ninja 完全一致（同一 CMakeLists.txt / cmake/arm-gcc.cmake）。产物在 build/Debug-make、build/Release-make。",
@@ -64,18 +66,18 @@
     "runs": [
       {
         "run": 1,
-        "h_mm": 170.0,
-        "edge_plus_s_true": 70.0,
+        "h_mm": 170,
+        "edge_plus_s_true": 70,
         "edge_plus_n": 27,
         "edge_minus_s_true": -68.9,
         "edge_minus_n": 51,
-        "s_m_mm": 9.0,
+        "s_m_mm": 9,
         "w_mm": 136.3,
         "verify": "inconsistent(8.4mm) -> used verify"
       },
       {
         "run": 2,
-        "h_mm": 163.0,
+        "h_mm": 163,
         "edge_plus_s_true": 70.7,
         "edge_plus_n": 30,
         "edge_minus_s_true": -53.9,
@@ -86,7 +88,7 @@
       },
       {
         "run": 4,
-        "h_mm": 173.0,
+        "h_mm": 173,
         "edge_plus_s_true": 69.1,
         "edge_plus_n": 35,
         "edge_minus_s_true": -75.7,
@@ -97,7 +99,7 @@
       },
       {
         "run": 5,
-        "h_mm": 135.0,
+        "h_mm": 135,
         "edge_plus_s_true": 69.8,
         "edge_plus_n": 22,
         "edge_minus_s_true": -73.4,
@@ -114,21 +116,75 @@
       "SIDE_VERIFY 保护生效：3 次判一致取平均（retry=2），1 次差 8.4 mm 判不一致改以复测为准（retry=3）"
     ],
     "tuned_defaults": {
-      "probe_side_band_mm": 15.0,
-      "probe_side_jump_mm": 40.0,
+      "probe_side_band_mm": 15,
+      "probe_side_jump_mm": 40,
       "probe_beam_half_deg": 7.5,
       "note": "车在动时侧视噪声实测 ±15 mm（静止 ±2 mm），背景在 500~900 mm"
     }
   },
   "source_sha256": {
-    "Control\\line_follower.c": "08082b4e0659f922b469bcd9fb6339006018b425d2f73565246f4a03dc06071e",
-    "Control\\line_follower.h": "38e827d2dcfb11fbc5c845342644b23db64724e1bf076d25d13eb72155b35a9d",
+    "Control\\line_follower.c": "4c53b363de479e16e60b60d24cafc43141719fe2f5fd03192fd91b66fe2bafba",
+    "Control\\line_follower.h": "fee8fbe0915628157730900fe0a00e8eb5eb74775d43cfd4717fd0ef95533ce0",
     "Control\\bridge_logic.c": "d6a00e152c698aee11aad7c34edb8adf5018fa837903079f9fcc8be368978e02",
-    "Board\\board.c": "d852c9cbb45058ef2e3abef49523e6ed7a9b682f1711498dbf9389eace87b2ba",
+    "Board\\board.c": "1c3927188fbe10e1181809d9b6cc0559a95f990bf2c566dca22349a99a749555",
+    "Board\\board.h": "d28637e7c77eca8c89a238d339e04e0cd00bda4d7d06f59bfe297030dc1fa6b4",
     "Board\\lcd_st7735.c": "3d6cceb53f70629ed40caaa93295574160fcfdec35978ca8ab7fa10f60ec0c3b",
-    "Core\\Src\\main.c": "9a9dc41c56588a776b786e1d8be3dc48d04f73cdb0509567b149cd0212e77a41",
+    "Core\\Src\\main.c": "cbf5d5f2cf90b859455e88e2d362aa50a0f3f4a51d78b2512eeb9fcfd3da0e42",
     "Core\\Src\\syscalls.c": "d482a68c95a5259666c79aa6d9b8fe6a0aee9fdd6175e9f468131779e8bcb5ff",
-    "tests\\test_controller.c": "41c85706ff684f13f16685c629f6ac67c9594ffb80318191b731eaf6b4c037bc",
+    "tests\\test_controller.c": "8673f5ae4966823f5109d77254a2e56316ed87598f33952f2753cbf1d8bd85bf",
     "tools\\host_station.py": "ed6e44d233b05ea88ec21ae91d0c4188944a35e6027d1ff277f6729dc1fa321a"
+  },
+  "m3_bench": {
+    "date": "2026-11-22",
+    "firmware": "build/Debug/line-following.elf, 110816 B, STM32CubeProgrammer SWD verify OK",
+    "changes": [
+      "LEG 前 14° ALIGN 永久删除：k=-0.25 是侧扫/摆位造成的测量偏置，车目视平行时也稳定出现；按它修反而使 DRIVE1 向箱面收 ~70 mm",
+      "BOARD_SWAP_LR 1→0：修复「cmd=+90/ach=+90.9/dir=L 但实车右转」；+ = 实车左转 CCW",
+      "等效里程计轮距 track_width_mm 130→112.5：90° 命令实车约 104°（多 14°），130×90/104≈112.5"
+    ],
+    "runs": [
+      {
+        "time": "2026-11-22 21:43",
+        "track_mm": 130,
+        "side_h_mm": 160,
+        "side_w_mm": 166.4,
+        "side_kind": "WIDE",
+        "side_k": -0.25,
+        "drive1_mm": 275.4,
+        "turn_cmd_deg": 90,
+        "turn_ach_deg": 90.9,
+        "drive2_mm": 145.4,
+        "next_h_mm": 163,
+        "next_w_mm": 79.7,
+        "next_kind": "NARROW",
+        "next_k": -0.211,
+        "laser_done": true,
+        "note": "方向已对（BOARD_SWAP_LR=0），但下一面 k=-0.211 说明车头多转约 12°"
+      },
+      {
+        "time": "2026-11-22 21:49",
+        "track_mm": 112.5,
+        "side_h_mm": 150,
+        "side_w_mm": 136.8,
+        "side_kind": "WIDE",
+        "side_k": -0.25,
+        "drive1_mm": 281.5,
+        "turn_cmd_deg": 90,
+        "turn_ach_deg": 91,
+        "drive2_mm": 151.5,
+        "next_h_mm": 215,
+        "next_w_mm": 43.6,
+        "next_kind": "NARROW",
+        "next_k": 0.203,
+        "laser_done": true,
+        "note": "用户确认效果非常好；h=215 在 150~220；h_pred=176 与实测差 39 mm（未计转后云台轴偏置）"
+      }
+    ],
+    "conclusions": [
+      "M3 单向 LEG 端到端通过：宽面 SIDE_LOCK/SCAN/MOVE/LASER → DRIVE1 → TURN +90（实车左转）→ DRIVE2 → 窄面 SIDE_LOCK/SCAN/MOVE/LASER 全部 ok=1",
+      "BOARD_SWAP_LR=1 是 21:01/21:34「该左转却右拐」的根因：电机与编码器同时镜像，日志自洽但物理反向",
+      "track 130→112.5 后下一面 k 从 -0.211 翻到 +0.203，90° 转弯已基本无过冲；k 绝对值仍受波束/初始摆位影响，只作诊断",
+      "33/33 host tests pass；Debug/Release 0 warnings（-Wall -Wextra -Wpedantic -Werror）"
+    ]
   }
 }

@@ -107,16 +107,21 @@ flowchart LR
    - 5 轮结束后自动对左右轮分别做**最小二乘线性回归拟合**，并通过蓝牙回传 15 点实测曲线至上位机保存在电脑 `data/` 目录（**不主动磨损片内 Flash**）。
 7. **模块 8：提高部分（2）目标探测状态机（`step_probing`），模块 8a 平面法线拟合 + 模块 8b 侧视横扫**
    - **模块 8a（M1，已烧录）**：`<15cm` 停车后（`AUTO_PROBE_ON_OBSTACLE=1`）自动进入 `AIM`，舵机做**两段式**台阶步进扫掠（粗扫 `1500±300 µs`/10 点 → 以粗测法线为中心细扫 `±120 µs`/10 点，每点驻留 ≥180 ms、开头丢 120 ms），对回波做 `1/r = a·cosθ + b·sinθ` 最小二乘，输出面模型 `face.phi/rho/rms/hits`（`PROBE_FACE` 日志）。拟合残差门限 `probe_fit_rms_mm`（默认 15 mm）、内点带 ±15 mm、内点 ≥3。
-   - **模块 8b（M2，已烧录 + 4 次台架验证）**：侧扫只能从**台架入口**（`side` / `side push` → `lf_start_side_probe()`）进入，
-     自动流程（`<15cm` 停车 → `probe`）在 M2 保持 M1 的 `AIM → 正面 LASER`（M3 接上 TURN_PAR 后才自动启用侧扫）。
+   - **模块 8b（M2，已烧录 + 4 次台架验证）**：侧扫可从**台架入口**（`side` / `side push` → `lf_start_side_probe()`）直接进入；
+     M3 起自动流程为 `AIM → TURN_PAR → SIDE_LOCK → … → LASER → LEG`（`probe_scan_mode=1`）。
      侧扫流程为 `SIDE_LOCK → SIDE_SCAN → SIDE_MOVE(+VERIFY) → LASER`：
      - `SIDE_LOCK`：舵机锁到 `probe_side_us`（2400 µs = 右掰 90°），等 400 ms 后按 60 ms 超声节拍连测 5 帧取中位数得站立距离 h，并自检 `|h-(rho+pan_x)|≤40 mm`、`h∈[80,350]`；
      - `SIDE_SCAN`：车沿面切线平移（50 mm/s，60 ms 一帧 = 3 mm），用 8 点最小二乘 `d=h0+k·s` 拟合面内距离（k 吸收车不平行漂移），边界确认分两类证据（跳变型 3 帧且 |d−h|>jump / 真无回波型 6 帧），FWD 找 +s 边界、REV 找 −s 边界，行程上限相对扫描原点对称 ±`side_reach_mm`；
-     - 边界取「最后一个面内样本 + 第一个外点样本」中点，`s_m=(lo+hi)/2`、`w=(hi−lo)−2·h·tanγ`、`kind=(w<100?窄:宽)`；
+     - 边界取「最后一个面内样本 + 第一个外点样本」中点，`s_m=(lo+hi)/2`、`w=(hi−lo)−2·h·tanγ`、`kind=(w<130?窄:宽)`（`LF_SIDE_KIND_SPLIT_MM`）；
      - `SIDE_MOVE`：沿切线开到 `s_m`（末段 20 mm 降到 25 mm/s，到位 2 mm 停车 + 150 ms 主动制动），可选 `SIDE_VERIFY` 复测（原点改锁到中点，行程 ±(w/2+h·tanγ+确认距离) 动态算，|s_m2−s_m|<8 取平均）；开位超时会置 `side_warn=4`，留给复测自愈；
      - `LASER`：**保持 side_us 不动**发射 10 s（扫描与发射同轴同角 → 中点与 `pan_x`/侧角无关）；侧视模式但未锁定时先等 400 ms 再点灯（自动流程里舵机本来就在法线角，等于无额外动作）。
      - 台架入口 `lf_start_side_probe(c, now, push)`（`side` / `side push` 命令）跳过 AIM 直接进 `SIDE_LOCK`，用于《问题排查手册》§17.12 的台架验收。
    - 蓝牙回传 `PROBE_MODE`、`PROBE_FACE`、`PROBE_SIDE_LOCK`、`PROBE_SIDE_EDGE`、`PROBE_SIDE_MID`、`PROBE_SIDE_FAIL`、`PROBE_SIDE_CFG` 等日志，现场可直接核对法线角/站立距离/两个边界/中点是否与卷尺一致。
+   - **模块 8c（M3，已烧录；宽→窄单向 LEG 台架通过）**：
+     - `TURN_PAR`：AIM 成功后按 `side_left ? φ−90 : φ+90` 原地转（`probe_turn_to`，3 s 超时、8° 容差、失败即停），把车转到与面平行；
+     - `LEG`：`probe_leg_tick` 三段 `DRIVE1 → TURN → DRIVE2`，入口锁存 `leg_origin_mm/leg_hdg0`，`L1=w_nom/2+pan_x+h+margin`、`L2=h+d_B/2−pan_x`；宽窄由首面实测锁存 + 面序交替；
+     - **无 14° ALIGN**：`side_k` 只作诊断；`BOARD_SWAP_LR=0`、`track_width_mm=112.5` 是方向/标度正确的两个前提；
+     - 日志 `PROBE_LEG,seg=DRIVE1/TURN/DRIVE2/FAIL`（`leg_event` 位掩码）；详见 [M3-task-handover.md](M3-task-handover.md)。
 8. **模块 9：200 Hz 主控制步进与外侧单调外推快速循迹（`lf_step`）**
    - 包含完整的安全检查（参数检查、周期检查、`DRV8833` 过流检查、ADC 超时检查、编码器接反检查、电机堵转检查）。
    - **外侧单路边缘单调外推**：当急弯中黑带即将滑出最外侧探头（仅 `L2` 或 `R2` 见黑且灰度从 `0.90` 向 `0.20` 減弱）时，将控制误差从 `±1.0` 单调外推至 `±1.60`，配合三次方渐进比例增益 `line_k3`，在脱线前爆发出最大转向力矩把车头拉回赛道。
