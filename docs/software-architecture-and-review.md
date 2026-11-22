@@ -1,18 +1,18 @@
 # STM32G474 智能小车固件审查与软件总体架构设计
 
-本设计文档位于软件工程工作区 `docs/software-architecture-and-review.md`，对 [Board/board.c](file:///c:/Users/Seraphina/Documents/ESD/firmware/line-following-car/Board/board.c)、[Control/line_follower.c](file:///c:/Users/Seraphina/Documents/ESD/firmware/line-following-car/Control/line_follower.c)、[Control/bridge_logic.c](file:///c:/Users/Seraphina/Documents/ESD/firmware/line-following-car/Control/bridge_logic.c) 及 [Core/Src/main.c](file:///c:/Users/Seraphina/Documents/ESD/firmware/line-following-car/Core/Src/main.c) 进行全面审查，并给出面向全流程任务（快速循迹竞速、`<15cm` 超声主动制动停车、声光提示、四面顺时针激光打靶、掉电校准保存）的软件总体架构与算法优化方案。
+本设计文档位于软件工程工作区 `docs/software-architecture-and-review.md`，对 [Board/board.c](../Board/board.c)、[Control/line_follower.c](../Control/line_follower.c)、[Control/bridge_logic.c](../Control/bridge_logic.c) 及 [Core/Src/main.c](../Core/Src/main.c) 进行全面审查，并给出面向全流程任务（快速循迹竞速、`<15cm` 超声主动制动停车、声光提示、四面顺时针激光打靶、掉电校准保存）的软件总体架构与算法优化方案。
 
 ---
 
 ## 1. 硬件网表与片上外设审查（已核对嘉立创EDA主扩展板网表与CubeMX数据库）
 
-基于主扩展板实时导出网表 [live-main-netlist.json](file:///c:/Users/Seraphina/Documents/ESD/firmware/line-following-car/docs/live-main-netlist.json)、[hardware-relevant-parts.json](file:///c:/Users/Seraphina/Documents/ESD/firmware/line-following-car/docs/hardware-relevant-parts.json) 与本机 STM32CubeMX `GPIO-STM32G47x_gpio_v1_0_Modes.xml` 逐脚核对，确认全车硬件接口与定时器资源分配如下（完整引脚表见 [board-pin-map.csv](file:///c:/Users/Seraphina/Documents/ESD/firmware/line-following-car/docs/board-pin-map.csv)）：
+基于主扩展板实时导出网表 [live-main-netlist.json](live-main-netlist.json)、[hardware-relevant-parts.json](hardware-relevant-parts.json) 与本机 STM32CubeMX `GPIO-STM32G47x_gpio_v1_0_Modes.xml` 逐脚核对，确认全车硬件接口与定时器资源分配如下（完整引脚表见 [board-pin-map.csv](board-pin-map.csv)）：
 
 ### 1.1 致命硬件配置修复（P0）
 
 | 编号 | 问题位置 | 根因分析 | 修复状态 |
 | --- | --- | --- | --- |
-| **P0-1** | `Board/board.c` `pwm_init()` | 原代码将 `PE9/PE11/PE13/PE14` 配置为 `GPIO_AF6_TIM1`。在 STM32G474 上，`PE9/PE11/PE13` 的 `AF6` 无定义，而 `PE14` 的 `AF6` 是 `TIM1_BKIN2`（刹车输入），会导致四路 H 桥均无 PWM 输出且右桥 `BIN2` 悬空。 | **已修复为 `GPIO_AF2_TIM1`**，同步更新 [board-pin-map.csv](file:///c:/Users/Seraphina/Documents/ESD/firmware/line-following-car/docs/board-pin-map.csv) 与 [README.md](file:///c:/Users/Seraphina/Documents/ESD/firmware/line-following-car/README.md)。 |
+| **P0-1** | `Board/board.c` `pwm_init()` | 原代码将 `PE9/PE11/PE13/PE14` 配置为 `GPIO_AF6_TIM1`。在 STM32G474 上，`PE9/PE11/PE13` 的 `AF6` 无定义，而 `PE14` 的 `AF6` 是 `TIM1_BKIN2`（刹车输入），会导致四路 H 桥均无 PWM 输出且右桥 `BIN2` 悬空。 | **已修复为 `GPIO_AF2_TIM1`**，同步更新 [board-pin-map.csv](board-pin-map.csv) 与 [README.md](../README.md)。 |
 
 ### 1.2 全车定时器与 DMA 零冲突资源矩阵（解决 P1-2 定时器冲突）
 
@@ -49,7 +49,7 @@ flowchart TD
         TRACK["快速循迹控制器<br/>立方非线性P + 滤波D + 曲率前馈减速 + 快速切弯恢复"]
         ODO["里程计与滑窗测速模块 LfOdometry<br/>20ms(4拍)编码器滑窗测速 / 航向角 θ 与累计里程 s 积分"]
         MOT["双轮运动控制层<br/>前馈死区补偿 + 速度PI + 非对称加减速限幅(减速3.5×) + BRAKE_HOLD主动锁停"]
-        PROBE["停车后自动探测状态机<br/>舵机步进扫掠 + 平面法线拟合(LED闪烁) → 10s激光+蜂鸣 → 里程计顺时针绕角 → 3组两短一长鸣叫"]
+        PROBE["停车后自动探测状态机<br/>M1: 两段式扫掠+面法线拟合 → 10s激光+蜂鸣 → 里程计顺时针绕角 → 3组两短一长鸣叫<br/>M2: 侧视横扫 SIDE_LOCK/SIDE_SCAN/SIDE_MOVE(+VERIFY)（台架 side 入口；M3 起接管自动流程）"]
         BRG["H桥映射 Control/bridge_logic.c<br/>慢衰减驱动/制动 / 快衰减滑行 / 1111短接制动"]
     end
 
@@ -82,7 +82,7 @@ flowchart TD
 
 ## 3. 快速软件循迹专项优化设计（解决连续 S 弯与急弯冲线）
 
-结合 [硬件PID弯道失效分析与台架排查.md](file:///C:/Users/Seraphina/Documents/ESD/reviews/2026-11-16-hardware-pid-video/%E7%A1%AC%E4%BB%B6PID%E5%BC%AF%E9%81%93%E5%A4%B1%E6%95%88%E5%88%86%E6%9E%90%E4%B8%8E%E5%8F%B0%E6%9E%B6%E6%8E%92%E6%9F%A5.md) 中的实车几何（轮距 `b = 130 mm`、前伸 `L ≈ 35 mm`、探头节距 `13 mm` 即横向坐标 `±6.5, ±19.5 mm`、黑胶带宽 `20 mm`），针对原软件循迹算法做出 5 项关键提速优化：
+结合 硬件PID弯道失效分析与台架排查.md（外部资料，未随仓库提供） 中的实车几何（轮距 `b = 130 mm`、前伸 `L ≈ 35 mm`、探头节距 `13 mm` 即横向坐标 `±6.5, ±19.5 mm`、黑胶带宽 `20 mm`），针对原软件循迹算法做出 5 项关键提速优化：
 
 ### 3.1 阵列外侧单调位置外推（Outer-Edge Monotonic Extrapolation，解决 P2-2）
 - **原问题**：归一化质心 `pos = sum(x_i * q_i) / sum(q_i)` 在黑带滑出到仅最外侧单路（`L2` 或 `R2`）见黑时，无论黑带压在探头正中（`q_outer = 1.0`）还是即将滑出探头外缘（`q_outer = 0.22`），质心恒等于 `±1.0`。导致最危险的脱线边缘处**比例误差饱和不变、微分项 `d(pos)/dt` 归零**！
@@ -116,13 +116,13 @@ flowchart TD
   1. **覆盖全量程的 15 档占空比 (`0.06 ~ 0.95`)**：`max_duty` 默认提升至 `0.95`，标定阶梯扩展为 `{0.06, 0.09, 0.12, 0.15, 0.18, 0.21, 0.24, 0.30, 0.38, 0.46, 0.55, 0.65, 0.75, 0.85, 0.95}`（低速 3% 细步长测起转死区，中高占空比覆盖至 95%）。
   2. **双模式 × 5 轮均测满 15 档**：支持 **`mcal air 5`**（架空空载 5 轮 × 15 档）与 **`mcal ground 5`**（地面带载 5 轮 × 15 档：每步脉冲后主动刹车 80 ms 控制单步位移，每轮结束后依靠编码器里程计带航向纠偏自动倒车回到原点，配合 `<18cm` 超声防撞）。
   3. **15 点分段插值前馈 (`lf_wheel_feedforward`)**：`speed_control()` 优先在 15 点实测曲线上做分段线性反插值并叠加左右独立死区/满速斜率，做到“想让轮子转多快、不靠 PI 就能直接跑到对应转速附近”，支持 `vtest VL VR MS` 一键验证。
-  4. **Agent 优先的蓝牙上位机归档（RAM-first，免写 Flash）**：上位机 [tools/host_station.py](file:///c:/Users/Seraphina/Documents/ESD/firmware/line-following-car/tools/host_station.py) 提供无界面 CLI 自动收发 JSON 接口与可视化 GUI，批量采集保存至 `data/` 目录；待实地采到赛道红外数据后，再依据实测波形评估硬件模拟 PID 电路（`R39/R40`、`R41/R42`、`RV_V`、`JP_V 2-3`、`R60`、`RV_P`、`RV_D`）。
+  4. **Agent 优先的蓝牙上位机归档（RAM-first，免写 Flash）**：上位机 [tools/host_station.py](../tools/host_station.py) 提供无界面 CLI 自动收发 JSON 接口与可视化 GUI，批量采集保存至 `data/` 目录；待实地采到赛道红外数据后，再依据实测波形评估硬件模拟 PID 电路（`R39/R40`、`R41/R42`、`RV_V`、`JP_V 2-3`、`R60`、`RV_P`、`RV_D`）。
 
 ---
 
 ## 4. 配套工程文档索引
 
-- 代码全景说明（供全组同学快速读懂全部代码）：[docs/codebase-guide.md](file:///c:/Users/Seraphina/Documents/ESD/firmware/line-following-car/docs/codebase-guide.md)
-- 硬件开发板与 MCU 引脚逐脚对接详单：[docs/hardware-interface-manual.md](file:///c:/Users/Seraphina/Documents/ESD/firmware/line-following-car/docs/hardware-interface-manual.md)
-- 引脚速查 CSV 表：[docs/board-pin-map.csv](file:///c:/Users/Seraphina/Documents/ESD/firmware/line-following-car/docs/board-pin-map.csv)
-- 实车操作、ST-LINK 下载/调试与 VS Code `Serial Monitor` 蓝牙调参手册：[README.md](file:///c:/Users/Seraphina/Documents/ESD/firmware/line-following-car/README.md)
+- 代码全景说明（供全组同学快速读懂全部代码）：[docs/codebase-guide.md](codebase-guide.md)
+- 硬件开发板与 MCU 引脚逐脚对接详单：[docs/hardware-interface-manual.md](hardware-interface-manual.md)
+- 引脚速查 CSV 表：[docs/board-pin-map.csv](board-pin-map.csv)
+- 实车操作、ST-LINK 下载/调试与 VS Code `Serial Monitor` 蓝牙调参手册：[README.md](../README.md)

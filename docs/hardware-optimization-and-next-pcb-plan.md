@@ -1,6 +1,6 @@
 # 现板硬件改造方案、下一版 PCB 优化方向与按键/输出快速排错手册
 
-> **证据基准**：本文档严格对照当前主板实时导出网表 [live-main-netlist.json](file:///c:/Users/Seraphina/Documents/ESD/firmware/line-following-car/docs/live-main-netlist.json)、核心板原理图 [STM32G474VET6V1.1原理图.pdf](file:///C:/Users/Seraphina/Documents/ESD/DataSheet/STM32G474VET6V1.1%E5%8E%9F%E7%90%86%E5%9B%BE.pdf)、前期审图记录 [主扩展板原理图与PCB设计审查.md](file:///c:/Users/Seraphina/Documents/ESD/reviews/2026-10-29-main-expansion/%E4%B8%BB%E6%89%A9%E5%B1%95%E6%9D%BF%E5%8E%9F%E7%90%86%E5%9B%BE%E4%B8%8EPCB%E8%AE%BE%E8%AE%A1%E5%AE%A1%E6%9F%A5.md) 与视频排查结论 [硬件PID弯道失效分析与台架排查.md](file:///c:/Users/Seraphina/Documents/ESD/reviews/2026-11-16-hardware-pid-video/%E7%A1%AC%E4%BB%B6PID%E5%BC%AF%E9%81%93%E5%A4%B1%E6%95%88%E5%88%86%E6%9E%90%E4%B8%8E%E5%8F%B0%E6%9E%B6%E6%8E%92%E6%9F%A5.md) 编写。
+> **证据基准**：本文档严格对照当前主板实时导出网表 [live-main-netlist.json](live-main-netlist.json)、核心板原理图 STM32G474VET6V1.1原理图.pdf（外部资料，未随仓库提供）、前期审图记录 主扩展板原理图与PCB设计审查.md（外部资料，未随仓库提供） 与视频排查结论 硬件PID弯道失效分析与台架排查.md（外部资料，未随仓库提供） 编写。
 >
 > 本文档分为三大工程部分：**① 现板不重制 PCB 的改焊/飞线优化方案**、**② 下一版原理图与 PCB 重画清单**、**③ 三路按键与 MCU 全输出通路的快速定位与自检手册**。
 
@@ -8,16 +8,16 @@
 
 ## 一、现板电路网表状态核对（哪些问题已解决，哪些仍需改造）
 
-对比早期 `2026-10-29` 制板前审查记录 `F01 ~ F13` 与当前主板实时网表 [live-main-netlist.json](file:///c:/Users/Seraphina/Documents/ESD/firmware/line-following-car/docs/live-main-netlist.json)，以下早期阻塞项在当前网表中**已修改落地**（若手上实物属于更早试产批次，仍需按实板核对）：
+对比早期 `2026-10-29` 制板前审查记录 `F01 ~ F13` 与当前主板实时网表 [live-main-netlist.json](live-main-netlist.json)，以下早期阻塞项在当前网表中**已修改落地**（若手上实物属于更早试产批次，仍需按实板核对）：
 
-| 原审查项 | 早期问题 | 当前实时网表 [live-main-netlist.json](file:///c:/Users/Seraphina/Documents/ESD/firmware/line-following-car/docs/live-main-netlist.json) 实测状态 |
+| 原审查项 | 早期问题 | 当前实时网表 [live-main-netlist.json](live-main-netlist.json) 实测状态 |
 | :--- | :--- | :--- |
 | **F01** 主电源模式 | `PS/SYNC` 误接 GND | **已修正**：`U1.4 (TPS63060)` 已接 `VM_BAT`（强制 PWM）；舵机支路 `U2.4` 保持接 `GND` |
 | **F02 / F03** 舵机/跳线封装 | `2.50mm` 错料、JR 针序相反 | **已修正**：`J_SRV` 与 `JP_V` 均已换为 `2.54mm LAIL-PZ2.54-3P-L`，`J_SRV` 针序已统一为 `1=SERVO_PWM, 2=SERVO_5V, 3=GND` |
 | **F04** 核心板排母 | `2.6mm` 短焊盘贴片排母 | **已更换**：`J_C1`、`J_C2` 已换为直插排母 `HC-PM254-8.5H-2x22PZ` (`HDR-TH_44P-P2.54-V-F-R2-C22-S2.54`) |
 | **F06 (部分)** 停止或门 | 下拉 `10kΩ` 负载过重 | `R89` 在实时网表中已改为 `100k 1%`（静态负载减轻约 10 倍，但仍建议下一版改用真实 OR 逻辑门） |
-| **LCD** 供电/电平接口 | 曾规划 `TPS7A2031 + LVC8T245` | 当前网表 `J_LCD` 直接接 `MCU_3V3` 与 `PB3/PB5/PD10..13`，已与固件 [Board/lcd_st7735.c](file:///c:/Users/Seraphina/Documents/ESD/firmware/line-following-car/Board/lcd_st7735.c)（`128×160 竖屏`）一致 |
-| **`VREF+` 基准供电** | 审图 §3.2 曾注明 `J2-5 VREF NC`，需核心板 `J5` 接 `3.3V` | 实车实测 `VREF+` 悬空并被复位默认 `VREFBUF (HIZ=0)` 拉向 `VSSA` 导致四路 ADC 漂移满偏 `4095`；**固件已在 [Board/board.c](file:///c:/Users/Seraphina/Documents/ESD/firmware/line-following-car/Board/board.c) 自动探测并启用内部 `2.90V VREFBUF`**，下一版主板建议将 `J_C2-5` 经磁珠接 `MCU_3V3` 以恢复满 `3.30V` 量程 |
+| **LCD** 供电/电平接口 | 曾规划 `TPS7A2031 + LVC8T245` | 当前网表 `J_LCD` 直接接 `MCU_3V3` 与 `PB3/PB5/PD10..13`，已与固件 [Board/lcd_st7735.c](../Board/lcd_st7735.c)（`128×160 竖屏`）一致 |
+| **`VREF+` 基准供电** | 审图 §3.2 曾注明 `J2-5 VREF NC`，需核心板 `J5` 接 `3.3V` | 实车实测 `VREF+` 悬空并被复位默认 `VREFBUF (HIZ=0)` 拉向 `VSSA` 导致四路 ADC 漂移满偏 `4095`；**固件已在 [Board/board.c](../Board/board.c) 自动探测并启用内部 `2.90V VREFBUF`**，下一版主板建议将 `J_C2-5` 经磁珠接 `MCU_3V3` 以恢复满 `3.30V` 量程 |
 
 但当前主板在**纯硬件模拟 PID 循迹性能**与**局部保护电路**上仍存在 5 个核心硬件制约，其中前 4 项**无需重新制板即可直接通过改焊阻容或跳线验证改善**。
 
@@ -36,7 +36,7 @@
 
 ### 2.2 零飞线：纯换焊贴片阻容即可完成的 4 项核心升级
 
-> 以下位号与阻容值均直接提取自 [live-main-netlist.json](file:///c:/Users/Seraphina/Documents/ESD/firmware/line-following-car/docs/live-main-netlist.json)，换焊时请用万用表电阻档再次确认焊盘所属网络。
+> 以下位号与阻容值均直接提取自 [live-main-netlist.json](live-main-netlist.json)，换焊时请用万用表电阻档再次确认焊盘所属网络。
 
 1. **★ 最优先改造（扩展 D 级微分阻尼 3×~10×）：换焊 `C50` 与 `R54`（可选调 `R61`）**
    - **现状瓶颈**：`C50 = 100 nF`、`R54 = 22 kΩ`、`R55 = 4.7 kΩ`、`RV_D = 100 kΩ`、`C60 = 10 nF`、`R61 = 20 kΩ`。当前整条 D 支路最大微分时间常数仅为 $(R_{55}+R_{V\_D})C_{50} = 104.7\text{ k}\Omega \times 100\text{ nF} = 10.47\text{ ms}$。在 $K_p = 2 \sim 5$ 时，等效微分相对超前时间常数只有 $2 \sim 5\text{ ms}$，且 $72.34\text{ Hz}$ 高通拐点使低频弯道入弯角速度阶段几乎给不出有效阻尼，这是纯硬件连续 S 弯过冲甩尾的头号原因。
@@ -95,20 +95,20 @@
 
 ### 4.1 关键结论：三个按键在硬件上都能被 MCU 正常检测，但我们刚刚修复了一个固件里的 P0 级极性错误！
 
-经核对主板网表 [live-main-netlist.json](file:///c:/Users/Seraphina/Documents/ESD/firmware/line-following-car/docs/live-main-netlist.json) 与核心板原理图 [STM32G474VET6V1.1原理图.pdf](file:///C:/Users/Seraphina/Documents/ESD/DataSheet/STM32G474VET6V1.1%E5%8E%9F%E7%90%86%E5%9B%BE.pdf)：
+经核对主板网表 [live-main-netlist.json](live-main-netlist.json) 与核心板原理图 STM32G474VET6V1.1原理图.pdf（外部资料，未随仓库提供）：
 
 1. **循迹键 `SW2 -> PD0`（★ 刚刚捕获并修复的 P0 Bug）**
    - **真实硬件电路**：`SW2` 按下将 `KEY_TRACK_N` 短接到 `GND`（松开时由 `R118 = 10 kΩ` 上拉至 `SYS_5V`）。主板确实有一级反相器 `U3 (74AHCT14)` 把 `KEY_TRACK_N` 反相为 `KEY_TRACK_P`，**但 `U3` 反相器仅喂给了纯硬件触发器 `U16.3`！**
    - **`J_C1.19 -> PD0` 采样的是 `U3` 之前的信号 `KEY_TRACK_N`**：经 `R124 (47 kΩ)` 和 `R114 (100 kΩ)` 分压进入 `PD0`。
      - **未按下时**：$V(\text{KEY\_TRACK\_N}) \approx 4.682\text{ V}$，$V(\text{PD0}) = 5.0 \times \frac{100}{10 + 47 + 100} = 3.185\text{ V}$ -> **高电平 (`SET`)**。
      - **按下时**：$V(\text{KEY\_TRACK\_N}) = 0\text{ V}$，$V(\text{PD0}) = 0\text{ V}$ -> **低电平 (`RESET`)**。
-   - **修复结果**：旧版固件误以为 `PD0` 接在 `U3` 后面而写了 `== GPIO_PIN_SET`（高电平有效），上电会误判“一直被按住”而屏蔽真实按键！现已在 [Board/board.c](file:///c:/Users/Seraphina/Documents/ESD/firmware/line-following-car/Board/board.c) 中的 `board_track_pressed()` **修正为 `== GPIO_PIN_RESET`（低电平有效）**，且保持 `PD0` 为 `GPIO_NOPULL`（绝不开内部上拉以免与 `5V` 分压电阻互灌）。
+   - **修复结果**：旧版固件误以为 `PD0` 接在 `U3` 后面而写了 `== GPIO_PIN_SET`（高电平有效），上电会误判“一直被按住”而屏蔽真实按键！现已在 [Board/board.c](../Board/board.c) 中的 `board_track_pressed()` **修正为 `== GPIO_PIN_RESET`（低电平有效）**，且保持 `PD0` 为 `GPIO_NOPULL`（绝不开内部上拉以免与 `5V` 分压电阻互灌）。
 
 2. **探测键 `SW3 -> PD1`（电路与代码一致，正常）**
    - `SW3` 直接连接 `KEY_PROBE_MCU <-> GND`，主板配 `R119 = 10 kΩ` 上拉至 `MCU_3V3` 与 `C88 = 100 nF` 滤波电容。未按下 `3.3 V` (`HIGH`)，按下 `0 V` (`LOW`)，`board_probe_pressed()` 为 `== GPIO_PIN_RESET`，正常。
 
 3. **核心板用户键 `SW2 -> PD15`（电路与代码一致，但依赖内部弱上拉）**
-   - 根据核心板原理图，`SW2` 一端接 `PD15`，另一端接 `GND`，**核心板上没有任何外部上拉电阻**，完全依赖 [Board/board.c](file:///c:/Users/Seraphina/Documents/ESD/firmware/line-following-car/Board/board.c) 配置的 `GPIO_PULLUP`（约 `40 kΩ` 内部弱上拉）。未按下 `3.3 V` (`HIGH`)，按下 `0 V` (`LOW`)，`board_core_pressed()` 为 `== GPIO_PIN_RESET`，正常。
+   - 根据核心板原理图，`SW2` 一端接 `PD15`，另一端接 `GND`，**核心板上没有任何外部上拉电阻**，完全依赖 [Board/board.c](../Board/board.c) 配置的 `GPIO_PULLUP`（约 `40 kΩ` 内部弱上拉）。未按下 `3.3 V` (`HIGH`)，按下 `0 V` (`LOW`)，`board_core_pressed()` 为 `== GPIO_PIN_RESET`，正常。
 
 ---
 
@@ -125,7 +125,7 @@ IO_ENC,TIM4_L=0,TIM3_R=0,ADC=3120,3105,3090,3140
 分别**按住**三颗按键时再连发 `io`：
 - **预期变化**：按哪颗键，对应的 `PD0` / `PD1` / `PD15` 必须从 **`H (0)` 跳变为 `L (1)`**，松开变回 **`H (0)`**。
 - **若 `io` 显示从 `H` 变 `L`（说明电气和 GPIO 完全正常），但短按依然不触发功能**：
-  1. **按压时间过短或过长**：固件 [Core/Src/main.c](file:///c:/Users/Seraphina/Documents/ESD/firmware/line-following-car/Core/Src/main.c) 需要按住 **`>= 25 ms`** 才算有效消抖（松开触发短按，`>= 1000 ms` 触发长按校准）。
+  1. **按压时间过短或过长**：固件 [Core/Src/main.c](../Core/Src/main.c) 需要按住 **`>= 25 ms`** 才算有效消抖（松开触发短按，`>= 1000 ms` 触发长按校准）。
   2. **处于状态保护拒绝期（最常见！）**：例如还没运行过 8 秒红外校准 (`cal` / 长按 `PD1` 或 `PD15` 1 秒)，直接按 `SW2` 循迹键启动会因 `!cal.valid` 触发 `FAULT_UNCALIBRATED` 或串口拒签（可同时观察蓝牙提示 `DENIED` 和核心板红/蓝灯状态）；或者处于 `MOTOR_CAL` / `CALIBRATING` 状态期间按键会被拒绝或转成紧急停机。
 
 #### 第 2 步：若按住按键时 `io` 始终显示 `H`（电压下不去 `0V`）→ 万用表顺藤摸瓜

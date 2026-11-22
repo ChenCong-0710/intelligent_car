@@ -80,6 +80,88 @@
  */
 #define LF_PROBE_MIN_INLIERS 3U
 
+/* ---------------------------------------------------------------------------
+ * M2 侧视横扫（SIDE_LOCK / SIDE_SCAN / SIDE_MOVE + 复测）常数
+ * 全部是宏，不占 Flash 参数区（LfProbeConfig 只放需要现场用蓝牙微调的量）
+ * ------------------------------------------------------------------------- */
+
+/** @brief 面内样本滑动窗口长度（8 点最小二乘 d = h0 + k·s，k 吸收车不平行造成的线性漂移） */
+#define LF_SIDE_RING 8U
+
+/** @brief 重建面内基线所需最少样本数（换向后重新建立 d(s) 模型；不足该数不做外点判定） */
+#define LF_SIDE_RING_MIN 6U
+
+/**
+ * @brief 判定一个新边界前，自上次边界以来至少要有这么多帧「面内」样本
+ * @note  台架实测：盒子边缘处回波断续（擦边），换向后只重建了 4 帧基线就连续丢帧，
+ *        曾被误判成第二个边界，把宽度算成 -7 mm。要求 ~10 帧（≈36 mm @50 mm/s）面内证据
+ *        后，擦边区的丢帧不会立即触发边界确认；真实边界的面内段远长于 10 帧。
+ */
+#define LF_SIDE_EDGE_MIN_INFACE 10U
+
+/** @brief 面内直线拟合斜率钳位（|k| 上限，≈14°）：4~6 个噪声样本可能拟合出荒唐斜率，钳住防止预测发散 */
+#define LF_SIDE_K_LIMIT 0.25f
+
+/**
+ * @brief 边界确认帧数（距离域“跳变”型）
+ * @note  有回波但偏离模型（比如面外 60 mm 的墙/邻面）是强证据，连续 3 帧就确认。
+ *        单个丢帧也是“偏离”，所以不能只用 2 帧——15% 丢帧率下 2 帧会有 2% 的假边界概率。
+ */
+#define LF_SIDE_EDGE_JUMP_FRAMES 3U
+
+/**
+ * @brief 边界确认帧数（整段无回波型）
+ * @note  丢帧与“真的出界了”在单帧上不可区分，只能靠持续时间。按 15% 独立丢帧率估算：
+ *        单窗口 6 连丢 = 0.15^6 ≈ 1.1e-5，一面扫掠约 90 个窗口 → 整面出一次假边界的概率约 0.1%；
+ *        取 5 帧时整面累计约 0.6%，台架偶发“宽度不对”会被误当成算法 bug。
+ *        边界位置仍取「最后一个面内样本 + 第一个外点样本」的中点，确认帧数不影响定位精度，
+ *        只影响“确认前多走几帧”，所以复测/REV 的行程上限必须把这段确认距离算进去。
+ */
+#define LF_SIDE_EDGE_ZERO_FRAMES 10U
+
+/** @brief 侧视锁定：舵机 90° 到位等待时间 (ms)。实测 1500→2400 的 90° 行程 ≤0.4 s（含 60 ms 测距节拍） */
+#define LF_SIDE_LOCK_WAIT_MS 400U
+
+/** @brief 侧视锁定：连测帧数（每 60 ms 一帧，取中位数） */
+#define LF_SIDE_LOCK_FRAMES 5U
+
+/** @brief 侧视锁定：|h - (rho + pan_x)| 自检容差 (mm)。rho 比卷尺大 15~20 mm，故放到 40 mm */
+#define LF_SIDE_LOCK_TOL_MM 40.0f
+
+/** @brief 侧视站立距离 h 的物理有效区间 (mm)（<80 近盲区/自回波，>350 回波太弱） */
+#define LF_SIDE_H_MIN_MM 80.0f
+#define LF_SIDE_H_MAX_MM 350.0f
+
+/** @brief 侧视锁定超时 (ms)：400 ms 舵机 + 5 帧 × 60 ms = 700 ms，留 2.5 s 余量 */
+#define LF_SIDE_LOCK_TIMEOUT_MS 2500U
+
+/** @brief 侧扫/开位末段降速：|err| 小于它时降到低速，避免过冲 */
+#define LF_SIDE_SLOW_DIST_MM 20.0f
+#define LF_SIDE_SLOW_SPEED_MM_S 25.0f
+
+/** @brief 侧扫到位判据 (mm) 与到位后的主动制动稳定时间 (ms) */
+#define LF_SIDE_ARRIVE_MM 2.0f
+#define LF_SIDE_SETTLE_MS 150U
+
+/** @brief SIDE_MOVE 单次驱动超时 (ms)：最长的“扫失败后退回原点”约 280 mm，50 mm/s 需要 5.6 s */
+#define LF_SIDE_MOVE_TIMEOUT_MS 10000U
+
+/**
+ * @brief 复测扫描的额外安全余量 (mm)：行程 = w/2 + h·tanγ + 确认距离 + 该余量
+ * @note  h·tanγ（波束足印）与「连续 6 帧确认距离」都随 h/速度变化，**不能写死一个固定值**：
+ *        早期版本写死 w/2+50，在 h>265 mm 时会在边界确认完成前就撞上行程上限，复测必失败。
+ */
+#define LF_SIDE_CONFIRM_EXTRA_MM 10.0f
+
+/** @brief 复测一致性判据 (mm)：|s_m2 - s_m| 小于它才取平均放行 */
+#define LF_SIDE_VERIFY_TOL_MM 8.0f
+
+/** @brief 台架手推模式超时 (ms)：人工推 300 mm 大约 5~10 s */
+#define LF_SIDE_PUSH_TIMEOUT_MS 25000U
+
+/** @brief 超声触发周期 (ms)：侧扫按这个节拍取一帧（与 board.c TIM17 单脉冲节拍一致） */
+#define LF_SIDE_PING_MS 60U
+
 /**
  * @brief 顶层运行状态机枚举
  */
@@ -126,8 +208,45 @@ typedef enum {
     LF_PROBE_DRIVE_EDGE2,   /**< 6: 沿下一侧面外侧直线行驶至中心垂线处（带航向角纠偏） */
     LF_PROBE_TURN_IN,       /**< 7: 原地转体 90°（顺时针绕行时右转），使车头垂直正对下一个平面 */
     LF_PROBE_APPROACH,      /**< 8: 向前缓慢逼近新平面至超声距离 <= obstacle_stop_mm 处刹停，准备下一面瞄准 */
-    LF_PROBE_COMPLETE_BEEPS /**< 9: 全部平面完成后，保持停止并连续发出 3 组“两短一长”蜂鸣器鸣叫 */
+    LF_PROBE_COMPLETE_BEEPS,/**< 9: 全部平面完成后，保持停止并连续发出 3 组“两短一长”蜂鸣器鸣叫 */
+    /* ---- 以下为 v2 侧视法新增，数值 10~18 由《接口契约_M1.md》§3 冻结 ---- */
+    LF_PROBE_SQUARE,        /**< 10: 模式 A（角度扫掠）占位，暂不实现 */
+    LF_PROBE_EDGE,          /**< 11: 模式 A 占位，暂不实现 */
+    LF_PROBE_CENTER,        /**< 12: 模式 A 占位，暂不实现 */
+    LF_PROBE_ALIGN,         /**< 13: 模式 A 占位，暂不实现 */
+    LF_PROBE_TURN_PAR,      /**< 14: 原地转到与面平行（M3 实现；M2 由人工/台架摆位替代） */
+    LF_PROBE_SIDE_LOCK,     /**< 15: 舵机掰到侧视 ±90°，连测 5 帧取中位数得到站立距离 h 并自检 */
+    LF_PROBE_SIDE_SCAN,     /**< 16: 沿面平移扫掠，靠回波跳变找左右两个边界 */
+    LF_PROBE_SIDE_MOVE,     /**< 17: 沿面开到中点并停车（内部含 SETTLE 与 SIDE_VERIFY 复测子状态） */
+    LF_PROBE_LEG            /**< 18: 沿切线绕到下一面的三段式绕行（M3 实现） */
 } LfProbePhase;
+
+/** @brief 侧视横扫子状态（LfController::side_stage） */
+typedef enum {
+    LF_SIDE_FWD = 0,   /**< 0: 沿 +u∥ 正扫（先找 +s 侧边界） */
+    LF_SIDE_REV = 1,   /**< 1: 折返沿 -u∥ 反扫（找 -s 侧边界） */
+    LF_SIDE_DONE = 2   /**< 2: 两边界齐 */
+} LfSideStage;
+
+/** @brief SIDE_MOVE 子状态（LfController::side_move_stage） */
+typedef enum {
+    LF_SIDE_MOVE_DRIVE = 0,   /**< 0: 沿面直行到 side_target */
+    LF_SIDE_MOVE_SETTLE = 1,  /**< 1: 主动制动 150 ms 等停稳 */
+    LF_SIDE_MOVE_VERIFY = 2,  /**< 2: 复测扫描（可选，probe_side_verify） */
+    LF_SIDE_MOVE_DONE = 3     /**< 3: 就位，进入 LASER */
+} LfSideMoveStage;
+
+/**
+ * @brief 侧扫遥测事件位掩码（LfController::side_event，供 main.c 打印 PROBE_SIDE_* 日志后清零）
+ * @note  用位掩码而不是单值：REV 找到第二个边界的那一拍既产生「边界」事件、又立即由调用方
+ *        判定「中点确定」，单值会把边界事件覆盖掉（PROBE_SIDE_EDGE,i=1 永远打不出来）。
+ */
+typedef enum {
+    LF_SIDE_EVENT_NONE = 0x00,  /**< 无事件 */
+    LF_SIDE_EVENT_EDGE = 0x01,  /**< 找到一个边界 */
+    LF_SIDE_EVENT_MID = 0x02,   /**< 中点/宽度确定（含复测后更新） */
+    LF_SIDE_EVENT_FAIL = 0x04   /**< 本次扫描 / SIDE_LOCK 失败 */
+} LfSideEvent;
 
 /**
  * @brief 四面顺时针障碍物探测与激光打靶 (LF_PROBING) 可调参数结构体
@@ -150,6 +269,19 @@ typedef struct {
     float edge1_mm;           /**< 阶段4 离面越角直行距离 (mm，默认 220 mm) */
     float edge2_mm;           /**< 阶段6 沿侧面对中直行距离 (mm，默认 220 mm) */
     float approach_max_mm;    /**< 阶段8 逼近下一面的最大前移安全距离 (mm，默认 260 mm) */
+
+    /* ---- M2 侧视横扫参数（Flash v7 起保存；均可用蓝牙 set probe_* 在线微调） ---- */
+    uint8_t scan_mode;        /**< 0 = 角度法过渡流程（保留 M1 行为）；1 = 侧视横扫（默认，主方案） */
+    bool side_left;           /**< true = 箱体在左、逆时针巡边（M3 的 TURN_PAR/LEG 用） */
+    uint16_t side_us;         /**< 侧视舵机脉宽 (us，默认 2400 = 右掰 90°，即箱体在车左侧) */
+    float fit_rms_mm;         /**< 面拟合残差上限 (mm，默认 15；纸盒起伏实测 rms 6~13) */
+    float side_speed_mm_s;    /**< 侧扫/开位速度 (mm/s，默认 50；60 ms 走 3 mm 即一个样本) */
+    float side_reach_mm;      /**< 单方向最大扫描行程 (mm，默认 260；从扫描起点算，FWD/REV 各一份) */
+    float side_band_mm;       /**< 面内判据带宽 (mm，默认 8；实测静止噪声 ±2 mm) */
+    float side_jump_mm;       /**< 跳变判据阈值 (mm，默认 25；必须大于 side_band_mm) */
+    float beam_half_deg;      /**< 波束半角 γ (deg，默认 7.5，不标定：只影响宽度，不影响中点) */
+    float pan_x_mm;           /**< 云台轴相对轮轴的前移量 (mm，默认 30；只用于 SIDE_LOCK 自检) */
+    bool side_verify;         /**< true = 发射前以 s_m 为中心复测一次（默认 1；计时紧张时可关） */
 } LfProbeConfig;
 
 /**
@@ -292,7 +424,7 @@ typedef struct {
     bool buzzer;        /**< 蜂鸣器开关 (控制 PC9 MCU_BUZZER) */
     bool laser;         /**< 激光发射器开关 (控制 PC8 MCU_LASER_EN) */
     bool servo_enable;  /**< 云台舵机独立 5V 电源与门控开关 (控制 PC7 MCU_SERVO_PWR_EN) */
-    uint16_t servo_us;  /**< 云台舵机目标脉宽 (控制 PA15 TIM2_CH1，单位 us，900 ~ 2100) */
+    uint16_t servo_us;  /**< 云台舵机目标脉宽 (控制 PA15 TIM2_CH1，单位 us，600 ~ 2400 = 0° ~ 180°) */
 } LfOutput;
 
 /**
@@ -391,6 +523,43 @@ typedef struct {
     uint16_t aim_center_us;                       /**< 本轮 AIM 扫掠中心脉宽 (us)：第一段 = servo_center，第二段对准粗测法线 */
     uint8_t aim_pass;                             /**< 0 = 粗扫，1 = 细扫 */
     LfFace aim_first;                             /**< 粗扫结果备份（细扫失败时回退） */
+
+    /* --- M2 侧视横扫：SIDE_LOCK / SIDE_SCAN / SIDE_MOVE + 复测 --- */
+    uint8_t side_stage;        /**< 侧扫子状态 LF_SIDE_FWD / REV / DONE */
+    uint8_t side_edges;        /**< 本次扫描已找到的边界数 0~2（0 号在 FWD 先发现，1 号在 REV 发现） */
+    uint8_t side_bad;          /**< 当前连续外点帧数 */
+    uint8_t side_out_zero;     /**< 当前外点段里"真无回波(d==0)"的帧数（跳变型与无回波型边界分开确认） */
+    uint8_t side_ring_n;       /**< 面内样本滑动环已填充帧数 0~8（SIDE_LOCK 期间当作 5 帧缓冲用） */
+    uint8_t side_ring_i;       /**< 面内样本滑动环写入下标 */
+    uint8_t side_retry;        /**< 侧扫失败后已经“退回原点重扫”的次数 0~1 */
+    uint8_t side_warn;         /**< 侧扫告警：0=初测正常 / 1=宽度超范围 / 2=复测一致取平均 / 3=复测不一致 / 4=开位超时（仅供日志） */
+    uint8_t side_move_stage;   /**< SIDE_MOVE 子状态 LF_SIDE_MOVE_DRIVE / SETTLE / VERIFY / DONE */
+    uint8_t side_verify_mode;  /**< 1 = 当前这一遍扫描是发射前复测（reach 收窄、原点已重锁存） */
+    uint8_t side_verify_done;  /**< 1 = 本面已经做过一次复测（避免重复进 VERIFY） */
+    uint8_t side_rescan;       /**< 1 = SIDE_MOVE 到位后回到 SIDE_SCAN 重扫一次 */
+    uint8_t side_locked;       /**< 1 = 侧视锁定成功：LASER 必须保持 side_us 发射（性质①） */
+    uint8_t side_bench;        /**< 1 = 台架侧扫命令启动（不走 AIM/LEG，单面结束） */
+    uint8_t side_push;         /**< 1 = 台架手推模式：电机断电，人工沿面推车扫描 */
+    uint8_t side_event;        /**< 侧扫遥测事件 LF_SIDE_EVENT_*，main.c 打印日志后清零 */
+    float side_ring_s[LF_SIDE_RING]; /**< 最近 8 个面内样本的扫描坐标 s (mm) */
+    float side_ring_d[LF_SIDE_RING]; /**< 最近 8 个面内样本的侧视回波距离 d (mm) */
+    uint16_t side_inface;      /**< 当前这一遍扫描累计面内帧数（PROBE_SIDE_EDGE 的 n 用） */
+    uint8_t side_edge_frames;  /**< 找到边界时累计的面内帧数（诊断用：正常 15~30） */
+    float side_s_last_good;    /**< 最后一个面内样本的扫描坐标 (mm) */
+    float side_s_out_first;    /**< 第一个外点样本的扫描坐标 (mm) */
+    float side_s_edge[2];      /**< 两个边界的扫描坐标 (mm，未排序；边界 = 最后一个面内点与第一个外点的中点) */
+    float side_s_turn;         /**< FWD 折返点的扫描坐标 (mm) */
+    float side_h0;             /**< 面内直线模型截距 d = h0 + k·s (mm) */
+    float side_k;              /**< 面内直线模型斜率 d = h0 + k·s (无量纲，吸收车不平行) */
+    float side_h;              /**< SIDE_LOCK 实测的侧视站立距离 (mm) */
+    float side_target;         /**< SIDE_MOVE 的目标扫描坐标 (mm，绝对量，正=车头方向) */
+    float side_s_m_ref;        /**< 复测前的中点（扫描坐标，mm），用于一致性比较 */
+    float side_verify_offset;  /**< 复测扫描原点在原扫描坐标系里的位置 (mm) */
+    float side_w_prev;         /**< 复测前测得的面宽（复测失败时回退用，mm） */
+    float side_origin_x_mm;    /**< 侧扫轴原点世界坐标 x (mm)：从 SIDE_SCAN 起点锁存，跨 SIDE_MOVE/复测共用 */
+    float side_origin_y_mm;    /**< 侧扫轴原点世界坐标 y (mm) */
+    float side_origin_rad;     /**< 侧扫轴方向（原点处的车头航向，rad） */
+    uint32_t side_ping_since;  /**< 上一次取侧扫样本的时间戳 (ms)，按 60 ms 超声节拍取帧 */
 
     /* --- 左右轮电机死区与全量程转速自动标定 (LF_MOTOR_CAL：地面带载为主、空载作参考) --- */
     LfMcalMode mcal_mode;                   /**< 当前正在扫描的模式：LF_MCAL_AIR 或 LF_MCAL_GROUND */
@@ -497,6 +666,17 @@ bool lf_start(LfController *c, uint32_t now_ms);
 
 /** @brief 启动顺时针四面障碍物目标探测与激光打靶任务 */
 bool lf_start_probe(LfController *c, uint32_t now_ms);
+
+/**
+ * @brief 台架侧扫专用入口：跳过 AIM（车由人工摆成与面平行），直接 SIDE_LOCK -> SIDE_SCAN -> SIDE_MOVE -> LASER
+ * @param c      控制器指针
+ * @param now_ms 当前毫秒时间戳
+ * @param push   true = 手推模式（电机断电，人工沿面推车，找齐两边界后打印 PROBE_SIDE_MID 并结束）；
+ *               false = 自走模式（车辆以 probe_side_speed_mm_s 自己沿面平移扫描）
+ * @return true 启动成功；false 当前非停止状态、有故障、或 probe_scan_mode=0
+ * @note   M2 台架验收用（《问题排查手册》§17.12 第 4、7 步）；M3 起正常流程由 AIM->TURN_PAR 自动进入。
+ */
+bool lf_start_side_probe(LfController *c, uint32_t now_ms, bool push);
 
 /** @brief 请求停止（若正在运动则先执行短时主动电磁制动，再关断驱动） */
 void lf_stop(LfController *c, uint32_t now_ms);

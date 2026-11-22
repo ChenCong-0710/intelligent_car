@@ -1,91 +1,134 @@
 {
   "date": "2026-11-22",
   "mcu": "STM32G474VET6",
+  "milestone": "M2 side-view scan implemented, flashed and bench-verified (log-based; no tape available)",
   "hardware_flash_performed": true,
+  "flashed_image": "build/Debug-make/line-following.elf (STM32CubeProgrammer, SWD 1000 kHz, verify OK)",
   "real_track_verified": false,
+  "bench_verified": true,
   "profiles": {
     "Debug": {
-      "bin_bytes": 98776,
-      "bin_sha256": "98c7641b0566d7c440704136b7dd4a555a4ba9c4467103d1cceee64f22e752a4",
+      "bin_bytes": 106296,
+      "bin_sha256": "9367ab0fce8ecc31d8f8c7ccfccb40161e6b43dc814ae8b956be4a6f79502796",
       "initial_stack": "0x20018000",
       "warnings": 0,
-      "interrupt_vectors": "strong handlers present",
+      "interrupt_vectors": "strong handlers present (HardFault/SysTick/USART1)",
       "hex_checksums": "pass",
-      "rwx_segments": false
+      "hex_records": 6650,
+      "rwx_segments": false,
+      "flashed": true
     },
     "Release": {
-      "bin_bytes": 93648,
-      "bin_sha256": "8511cd1255d3d8f2583c752329b10cef85df3c38a4571982150bde1d972e6898",
+      "bin_bytes": 100288,
+      "bin_sha256": "71ff0aa3cae8e5c520c1c5d99832aed0e71472b0f14d1a692c7c1a90534cf988",
       "initial_stack": "0x20018000",
       "warnings": 0,
-      "interrupt_vectors": "strong handlers present",
+      "interrupt_vectors": "strong handlers present (HardFault/SysTick/USART1)",
       "hex_checksums": "pass",
-      "rwx_segments": false
+      "hex_records": 6275,
+      "rwx_segments": false,
+      "flashed": false
     }
   },
   "host_tests": {
     "c_unit_tests_passed": 31,
     "c_unit_tests_failed": 0,
-    "python_host_station_selftest": "PASS"
+    "new_tests": [
+      "probeside (12 synthetic side-scan scenarios + config/phase checks)"
+    ]
   },
+  "build_environment_note": "本机 DSH 沙箱下 Ninja 1.13 在第二个子进程起会卡死，故用 CMake MinGW Makefiles 生成器 + mingw32-make 验证/产出；编译与链接参数和 CMakePresets 的 Ninja 完全一致（同一 CMakeLists.txt / cmake/arm-gcc.cmake）。产物在 build/Debug-make、build/Release-make。",
+  "static_checks": [
+    "host build: gcc 15.1.0 -std=c11 -Wall -Wextra -Wpedantic -Werror (0 warnings)",
+    "firmware Debug/Release: arm-none-eabi-gcc 14.3.1 -Wall -Wextra -Wpedantic -Werror (0 warnings)",
+    "clangd 本轮未重跑（沙箱下 Arm clangd 19.1.2 的 sysroot/IncludeCleaner 受限）；gcc -Werror 覆盖同类诊断"
+  ],
   "configuration_checks": [
     "JSON syntax",
-    "official installed stlinkgdbtarget launch property names",
-    "installed GDB/server/programmer paths",
-    "TIM1 AF2 pin-mux verified against CubeMX GPIO-STM32G47x_gpio_v1_0_Modes.xml",
-    "TIM6 ADC trigger freeing TIM2 for PA15 servo PWM",
-    "TIM17 one-pulse ultrasonic trigger + TIM8 hardware PWM input capture",
-    "HC-04 V2.6 boot auto-baud negotiation (9600->115200 before IWDG, AT without CRLF) & J_BT netlist pin verification",
-    "ST7735S 1.8in TFT LCD (ZJY180S0800TG01) SPI1 10MHz PB3/PB5 AF5 non-blocking dirty-slice telemetry",
-    "GROUND-primary motor calibration priority over AIR-reference (5 passes x 15 steps 0.06..0.95)",
-    "1:1 Hardware Analog PID digital twin simulation (hwemu + hwmap) verified against live-main-netlist.json",
-    "Agent-first Bluetooth CLI + human GUI host_station.py",
-    "build task successful",
-    "Three-key polarity verification (SW2 PD0 low-active before U3 + SW3 PD1 + CORE_KEY PD15 internal pullup) + io/outtest diagnostics",
-    "Portrait 128x160 ST7735S LCD + 500ms HC-04 auto-baud cooldown + live COM10 bidirectional BT verification",
-    "Portrait 0xC0 upright LCD + voltage-proportional bar + TIM3/4 IC1 encoder reversal + VREFBUF 2.9V auto-rescue",
-    "Suspended motor polarity check (bench) + 5-pass mcal air 5 + vtest saved to data/",
-    "Auto servo+ultrasonic plane-normal (perpendicular) search right after <15cm obstacle stop (AUTO_PROBE_ON_OBSTACLE) + LED blink indicator + probeaim host test",
-    "Servo held at mechanical center while arming/tracking so the <15cm ultrasonic stop range is measured along the heading (TRACK_SERVO_CENTER)",
-    "Servo pulse range widened 900..2100 -> 600..2400 us (LF_SERVO_US_MIN/MAX) for side-view ±90° probing; outtest servo now accepts 600..2400 and holds up to 30 s",
-    "M1 plane model: two-pass AIM (coarse ±30° then fine ±12° around the coarse normal), 180 ms dwell with 120 ms skip, run splitting on 40 mm jump + nearest-run selection, rms/inlier band 15 mm; PROBE_FACE log; bench verified on 150 mm and 50 mm faces"
+    "M1 面模型（两段式 AIM、驻留 180 ms/丢弃 120 ms、40 mm 切段+最近段、rms/内点带 15 mm）保持原样",
+    "M2 SIDE_LOCK：舵机→probe_side_us、等 400 ms、5 帧中位数、|h-(rho+pan_x)|<=40 mm 且 h∈[80,350]、失败 FAIL+停机；台架手推模式在 LOCK 即断电",
+    "M2 SIDE_SCAN：60 ms 超声节拍、8 点最小二乘、边界确认分两类（跳变 3 帧且 |d-h|>jump；真无回波 10 帧）、且要求自上次边界以来 >=10 帧面内证据、基线重建 6 帧、斜率钳位 +-0.25、行程 FWD/REV 相对原点对称",
+    "M2 SIDE_MOVE(+VERIFY)：末段 20 mm 降到 25 mm/s、到位 2 mm、150 ms 制动；复测行程动态 w/2+h*tan(gamma)+确认距离；一致判据 8 mm，开位超时 warn=4+FAIL",
+    "M2 失败处理：扫描失败回原点重扫一次→仍失败停机；宽度离谱回原点重扫一次→仍离谱 FAIL+停机；台架 LOCK 失败 FAIL+停机",
+    "M2 自动流程保持 M1（<15 cm → probe → AIM → 正面 LASER），侧扫只能由台架 side/side push 进入（M3 接 TURN_PAR 后才改）",
+    "M2 日志：PROBE_MODE / PROBE_SIDE_LOCK / PROBE_SIDE_EDGE / PROBE_SIDE_MID / PROBE_SIDE_FAIL / PROBE_SIDE_CFG；side_event 改位掩码（同拍可同时报告边界+中点）；PROBE 遥测只追加 3 字段",
+    "M2 参数：11 个 probe_* 落地（默认 band 15 / jump 40 / gamma 7.5 / us 2400 / spd 50 / reach 260 / verify 1）",
+    "FLASH_STORAGE_VERSION 6→7；board_flash_load 先校验 magic+version 再 CRC/拷贝，版本不符回退默认值",
+    "Flash 106296 B (Debug, 103.8 KB < 110 KB) / RAM 11680 B (< 16 KB)；Release 100288 B",
+    "台架：4 次侧扫全部找到一正一负边界（n=22~64），s_m 修正量 9.0/6.5/-2.2/-0.1 mm，w=136~155 mm，SIDE_VERIFY 一致 3 次/不一致 1 次，均按设计处理"
   ],
-  "source_sha256": {
-    "Control\\bridge_logic.c": "d6a00e152c698aee11aad7c34edb8adf5018fa837903079f9fcc8be368978e02",
-    "Control\\line_follower.c": "001cfbdf0388f72619e023134702eae553c2e9ee4622790ab1b701e44f70c720",
-    "Board\\board.c": "2dfabe0fea9aa637ece52d4085fe5d02573cbfe594eadd306b00e105500d804c",
-    "Board\\lcd_st7735.c": "3d6cceb53f70629ed40caaa93295574160fcfdec35978ca8ab7fa10f60ec0c3b",
-    "Control\\line_follower.h": "62e42315ac8d5ca9db1c6fd70b3de021092a9cb2fd24de6e72368a2f7a766bea",
-    "Core\\Src\\main.c": "d5d12ba9c1a5eb84ec5daf96e0a88bf433eb08588ce2595db66ffa23865152f0",
-    "tests\\test_controller.c": "7632a62d6435c797b04801c22f805cf953e096a36a8e8a190bc030afad30f59f",
-    "Core\\Src\\syscalls.c": "d482a68c95a5259666c79aa6d9b8fe6a0aee9fdd6175e9f468131779e8bcb5ff",
-    "tools\\host_station.py": "ed6e44d233b05ea88ec21ae91d0c4188944a35e6027d1ff277f6729dc1fa321a"
-  },
-  "clangd_checks": [
-    {
-      "file": "Board/board.c",
-      "exit_code": 0,
-      "error_messages": 0
-    },
-    {
-      "file": "Board/lcd_st7735.c",
-      "exit_code": 0,
-      "error_messages": 0
-    },
-    {
-      "file": "Core/Src/main.c",
-      "exit_code": 0,
-      "error_messages": 0
-    },
-    {
-      "file": "Control/line_follower.c",
-      "exit_code": 0,
-      "error_messages": 0
-    },
-    {
-      "file": "Control/bridge_logic.c",
-      "exit_code": 0,
-      "error_messages": 0
+  "bench_verification": {
+    "date": "2026-11-22",
+    "method": "板上侧扫自走 side 命令 + 蓝牙 COM3 遥测；4 次完整扫描（每次 LOCK→SCAN→MOVE→VERIFY→LASER）",
+    "tape_measurement": "现场无卷尺，绝对尺寸未用卷尺复核；用户目视确认 3 次停车位置几乎无差别。下表为日志值。",
+    "runs": [
+      {
+        "run": 1,
+        "h_mm": 170.0,
+        "edge_plus_s_true": 70.0,
+        "edge_plus_n": 27,
+        "edge_minus_s_true": -68.9,
+        "edge_minus_n": 51,
+        "s_m_mm": 9.0,
+        "w_mm": 136.3,
+        "verify": "inconsistent(8.4mm) -> used verify"
+      },
+      {
+        "run": 2,
+        "h_mm": 163.0,
+        "edge_plus_s_true": 70.7,
+        "edge_plus_n": 30,
+        "edge_minus_s_true": -53.9,
+        "edge_minus_n": 25,
+        "s_m_mm": 6.5,
+        "w_mm": 130.5,
+        "verify": "consistent(1.9mm) -> averaged"
+      },
+      {
+        "run": 4,
+        "h_mm": 173.0,
+        "edge_plus_s_true": 69.1,
+        "edge_plus_n": 35,
+        "edge_minus_s_true": -75.7,
+        "edge_minus_n": 60,
+        "s_m_mm": -2.2,
+        "w_mm": 145.8,
+        "verify": "consistent(1.1mm) -> averaged"
+      },
+      {
+        "run": 5,
+        "h_mm": 135.0,
+        "edge_plus_s_true": 69.8,
+        "edge_plus_n": 22,
+        "edge_minus_s_true": -73.4,
+        "edge_minus_n": 56,
+        "s_m_mm": -0.1,
+        "w_mm": 155.4,
+        "verify": "consistent(1.7mm) -> averaged"
+      }
+    ],
+    "conclusions": [
+      "边界确认在真实噪声下不再假判：4 次全部找到一正一负两个边界，n=22~64 帧（加固前曾出现 n=4 假边界导致 s_m 偏 45 mm）",
+      "s_m 重复性：各次相对本遍起点的修正量 9.0/6.5/-2.2/-0.1 mm；用户目视 3 次停车位置几乎一致",
+      "w（γ=7.5° 补偿后）：136~155 mm，均值≈147，落在 150±8 判据内（早期把一次异常扫描当 γ 真值改成 10.5°，导致 w 偏窄到 130，已改回 7.5）",
+      "SIDE_VERIFY 保护生效：3 次判一致取平均（retry=2），1 次差 8.4 mm 判不一致改以复测为准（retry=3）"
+    ],
+    "tuned_defaults": {
+      "probe_side_band_mm": 15.0,
+      "probe_side_jump_mm": 40.0,
+      "probe_beam_half_deg": 7.5,
+      "note": "车在动时侧视噪声实测 ±15 mm（静止 ±2 mm），背景在 500~900 mm"
     }
-  ]
+  },
+  "source_sha256": {
+    "Control\\line_follower.c": "08082b4e0659f922b469bcd9fb6339006018b425d2f73565246f4a03dc06071e",
+    "Control\\line_follower.h": "38e827d2dcfb11fbc5c845342644b23db64724e1bf076d25d13eb72155b35a9d",
+    "Control\\bridge_logic.c": "d6a00e152c698aee11aad7c34edb8adf5018fa837903079f9fcc8be368978e02",
+    "Board\\board.c": "d852c9cbb45058ef2e3abef49523e6ed7a9b682f1711498dbf9389eace87b2ba",
+    "Board\\lcd_st7735.c": "3d6cceb53f70629ed40caaa93295574160fcfdec35978ca8ab7fa10f60ec0c3b",
+    "Core\\Src\\main.c": "9a9dc41c56588a776b786e1d8be3dc48d04f73cdb0509567b149cd0212e77a41",
+    "Core\\Src\\syscalls.c": "d482a68c95a5259666c79aa6d9b8fe6a0aee9fdd6175e9f468131779e8bcb5ff",
+    "tests\\test_controller.c": "41c85706ff684f13f16685c629f6ac67c9594ffb80318191b731eaf6b4c037bc",
+    "tools\\host_station.py": "ed6e44d233b05ea88ec21ae91d0c4188944a35e6027d1ff277f6729dc1fa321a"
+  }
 }

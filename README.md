@@ -1,6 +1,6 @@
 # STM32G474 智能小车固件工程：快速循迹、电机死区自标定与全流程控制
 
-本工程是智能小车项目的核心固件工作区，支持 **200 Hz 快速软件 PID 循迹、左右轮电机死区与转速增益多次自动标定（`mcal`）、`<15cm` 超声波主动电枢短接制动停车（`LF_OBSTACLE_STOP`）、停车后自动步进扫掠求障碍物平面法线（垂直位置）并用 LED 闪烁指示、3 分钟顺时针四面障碍物瞄准与 10s 激光打靶（`LF_PROBING`）、片内 Flash 掉电参数自动保存，以及辅助纯硬件模拟 PID 排查的蓝牙实时诊断（`diag`）**。
+本工程是智能小车项目的核心固件工作区，支持 **200 Hz 快速软件 PID 循迹、左右轮电机死区与转速增益多次自动标定（`mcal`）、`<15cm` 超声波主动电枢短接制动停车（`LF_OBSTACLE_STOP`）、停车后自动步进扫掠求障碍物平面法线（垂直位置，M1 两段式 AIM 面模型）、侧视横扫找障碍面左右边界与中点（M2：`SIDE_LOCK/SIDE_SCAN/SIDE_MOVE`，台架命令 `side`/`side push`）、3 分钟顺时针四面障碍物瞄准与 10s 激光打靶（`LF_PROBING`）、片内 Flash 掉电参数自动保存，以及辅助纯硬件模拟 PID 排查的蓝牙实时诊断（`diag`）**。
 
 ---
 
@@ -10,7 +10,13 @@
 > - ✅ **纯硬件模拟电路循迹**：已完成改板焊接与实车跑通（见 [docs/pure-analog-rework-and-calibration.md](docs/pure-analog-rework-and-calibration.md)）。
 > - ✅ **软件闭环循迹与电机死区标定**：已完成全量程地面带载曲线标定（`data/latest_calibration.json`）与软件循迹闭环。
 > - ✅ **停车后自动寻找障碍物“垂直位置”（平面法线方向）**：`<15cm` 停车 → 300 ms 内自动舵机步进扫掠 + 超声波 `1/r = a·cosθ+b·sinθ` 最小二乘拟合 → 锁定正对角度 → **LED 150 ms 周期闪烁**（`PROBE_LOCK` 蓝牙回传角度与距离）。
-> - 🚀 **交接下一阶段（队友负责）—— 四面顺时针目标探测与 10 秒激光打靶**：**完整 8 阶段可调状态机框架与蓝牙串口标定/采集命令 (`probe-scan` / `probe-odom` / `probe-run`) 已全部就绪**，请直接从 **[docs/teammate-targeting-handover.md](docs/teammate-targeting-handover.md)** 开始！
+> - ✅ **M1 面模型（2026-11-22 已烧录）**：两段式 AIM（粗扫 ±30° + 细扫 ±12°）输出 `face.phi/rho/rms/hits` 与 `PROBE_FACE` 日志。
+> - ✅ **M2 侧视横扫（2026-11-22 已烧录并完成 4 次台架全流程验证）**：
+>   `SIDE_LOCK`（舵机掰 90° 测站立距离 h 并自检）→ `SIDE_SCAN`（沿面平移，回波跳变找左右边界，位置域中点）→
+>   `SIDE_MOVE`（沿切线开到中点，含发射前复测）→ 侧向 10 s 激光。台架入口：**`side`（自走）/ `side push`（人工推车）**。
+>   详细落地记录见《手册》§3.9、《方案》§13.4、《问题排查手册》§17.14。
+> - 🚀 **下一阶段 M3**：`TURN_PAR`（原地转到与面平行）+ `LEG`（绕到下一面），在 `AIM` 与 `SIDE_LOCK` 之间插入 `TURN_PAR`，自动流程才启用侧扫（`AIM→TURN_PAR→SIDE_LOCK→…→LEG`）完成四面循环；
+>   接手请读 **[docs/teammate-targeting-handover.md](docs/teammate-targeting-handover.md)**。
 
 为了让每位组员无需翻阅底层寄存器即可快速掌握整个项目，所有软件与硬件对接文档均整理在本工作区 `docs/` 目录下：
 
@@ -20,7 +26,7 @@
 4. **[docs/hardware-interface-manual.md](docs/hardware-interface-manual.md)**：**《STM32G474 核心板与主扩展板硬件接口逐脚对应手册》** —— 详细到每一个 MCU 引脚、核心板排针、主扩展板排母、逻辑门芯片引脚与外部传感器/电机的电气对接关系。
 5. **[docs/software-architecture-and-review.md](docs/software-architecture-and-review.md)**：**《固件审查与软件总体架构设计》** —— 记录硬件复用修复、定时器零冲突分配矩阵与快速循迹专项优化设计。
 6. **[docs/board-pin-map.csv](docs/board-pin-map.csv)**：全车 27 项 MCU 引脚、网络名与外设复用速查表格。
-7. **[docs/validation.json](docs/validation.json)**：每次代码修改后的 Debug/Release 编译、clangd 静态检查与 **31 项**自动化单元测试通过记录。
+7. **[docs/validation.json](docs/validation.json)**：每次代码修改后的 Debug/Release 编译、静态检查、**31 项**自动化单元测试与**台架验证**记录；M2 台架遥测在 [data/m2_side_bench_20261122.csv](data/m2_side_bench_20261122.csv)。
 
 ---
 
@@ -46,7 +52,7 @@
 - **命令面板方式**：按 `Ctrl + Shift + P` → 输入并选择 **`Tasks: Run Task`** → 选择：
   - **`Build Debug`**：编译带调试符号的 Debug 固件（输出至 `build/Debug/line-following.elf/.hex/.bin`）。
   - **`Build Release`**：编译体积与速度优化的 Release 固件（输出至 `build/Release/line-following.elf/.hex/.bin`）。
-  - **`Test Controller`**：在电脑本机运行全部 **23 项控制算法自动化单元测试**（无需连接开发板）。
+  - **`Test Controller`**：在电脑本机运行全部 **31 项控制算法自动化单元测试**（无需连接开发板）。
 
 ---
 
@@ -64,7 +70,7 @@
 
 **等价终端命令**（也可在 VS Code 终端中直接粘贴执行）：
 ```powershell
-# 仅编译 Debug / Release / 运行 23 项主机测试：
+# 仅编译 Debug / Release / 运行 31 项主机测试：
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\build.ps1 -Configuration Debug
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\build.ps1 -Configuration Release
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\build.ps1 -Test
@@ -191,8 +197,11 @@ bench 0 0.22 800
 1. **八秒红外校准**：将车放回赛道，按住探测键或核心板按键 1 秒，或点击上位机 **“③ 8s 红外校准 (`cal`)”**，8 秒内让四路探头各自多次经过黑带与白底。校准值保存在 RAM 中（若最终赛前需要断电永久保持，可手动输入一次 `save` 写入 Flash）。
 2. **开始高速循迹**：放回黑线上，单击主板**循迹键**（或发送 `start`），等待 2 秒后发车。
 3. **`<15cm` 自动制动停车**：超声波测得前方 `<150 mm` 障碍物时，立即进入 `OBSTACLE_STOP`（`1111` 主动电磁短接制动保持、停车灯常亮、蜂鸣器长鸣 1s）。*桌面纯调循迹可先 `set obstacle 0`。* 行驶期间云台舵机被锁定并保持供电在机械中位（`TRACK_SERVO_CENTER=1`），保证测距方向始终是车头正前方。
-4. **停车后自动寻找障碍物垂直位置（法线方向）**：停稳约 300 ms（`AUTO_PROBE_SETTLE_MS`）后**无需按键**自动进入 `PROBING/AIM`，舵机以 ±600 µs 步进扫掠（默认 17 个角度点、每点驻留 ≥60 ms 覆盖一次 60 ms 超声触发周期），对回波做 `1/r = a·cosθ + b·sinθ` 最小二乘拟合求出**平面法线（真正正对/垂直的方向）**，比单点最小距离更抗噪；随后锁定该角度并进入 10 s 激光+蜂鸣器阶段，**核心板 LED 以 150 ms 周期闪烁表示“已找到垂直位置”**，完成后保持闪烁 10 s。
-   - 也可随时手动发送 `probe`（或在 `OBSTACLE_STOP` 下按探测键）重新开始一轮寻找；`set probe_faces 4` + `PROBE_TEST_ONE_FACE 0` 可恢复四面顺时针绕行打靶流程。
+4. **停车后自动寻找障碍物垂直位置（法线方向，M1）**：停稳约 300 ms（`AUTO_PROBE_SETTLE_MS`）后**无需按键**自动进入 `PROBING/AIM`，舵机做**两段式**步进扫掠（粗扫 ±300 µs / 10 点，再以粗测法线为中心细扫 ±120 µs / 10 点，每点驻留 ≥180 ms、开头丢弃 120 ms），对回波做 `1/r = a·cosθ + b·sinθ` 最小二乘拟合，输出**面模型** `PROBE_FACE,phi,rho,rms,hits,valid`；`probe_scan_mode=0` 时随后锁定该角度进入 10 s 激光+蜂鸣器阶段，**核心板 LED 以 150 ms 周期闪烁表示“已找到垂直位置”**。
+   - 也可随时手动发送 `probe`（或在 `OBSTACLE_STOP` 下按探测键）重新开始一轮寻找；`set probe_faces 4` + `PROBE_TEST_ONE_FACE 0` 可恢复四面打靶流程。
+5. **M2 侧视横扫（`probe_scan_mode=1`，默认）**：车头平行于目标面、舵机掰到 `probe_side_us`（默认 2400 µs = 右掰 90°、箱体在左侧固定）后，**沿面的切线方向平移扫掠**，用 8 点最小二乘 `d = h0 + k·s` 拟合面内距离（k 吃掉车不平行造成的线性漂移），靠回波跳变找左右两个边界；中点 `s_m=(s_L+s_R)/2` 是**位置域**量，不受 `pan_x`、侧角是否正好 90° 影响（扫描与发射同轴同角 → 仿射抵消）；宽度按波束半角 γ 补偿 `w=(s_R-s_L)-2·h·tanγ` 后判窄/宽面；随后沿切线开到 `s_m` 停稳、可选复测、保持同侧角发射 10 s 激光。
+   - **台架入口（M3 之前自动流程还不能转平行，必须用这两个命令）**：`side` = 自走扫描；`side push` = 电机断电、人工沿面推车扫描（到边界后按 `PROBE_SIDE_EDGE` 日志反向推）。
+   - 日志：`PROBE_SIDE_LOCK`（h/自检）、`PROBE_SIDE_EDGE`（两个边界）、`PROBE_SIDE_MID`（中点/宽度/宽窄/retry）、`PROBE_SIDE_FAIL`（失败原因）；参数见下方 `probe_side_*` 表。
 
 ---
 
@@ -208,7 +217,7 @@ bench 0 0.22 800
      ```powershell
      python tools/host_station.py hwemu --port AUTO --w-out 0.333 --kp 2.2 --kd-ms 18 --v-base 2.30 --run --seconds 25 --stop-after
      ```
-   - 或串口发送 **`hwmap`**，直接把仿真最优参数 1:1 翻译为实板需要旋转的电位器阻值与建议改焊的贴片阻容/飞线方案（并在板载 1.8 寸 LCD 上实时观测四路 IR 电压、`PID_E` 与 `vL/vR`）。完整现板改焊方案、下一版原理图/PCB 演进规划及按键/输出硬件故障排查手册见 [docs/hardware-optimization-and-next-pcb-plan.md](file:///c:/Users/Seraphina/Documents/ESD/firmware/line-following-car/docs/hardware-optimization-and-next-pcb-plan.md)。
+   - 或串口发送 **`hwmap`**，直接把仿真最优参数 1:1 翻译为实板需要旋转的电位器阻值与建议改焊的贴片阻容/飞线方案（并在板载 1.8 寸 LCD 上实时观测四路 IR 电压、`PID_E` 与 `vL/vR`）。完整现板改焊方案、下一版原理图/PCB 演进规划及按键/输出硬件故障排查手册见 [docs/hardware-optimization-and-next-pcb-plan.md](docs/hardware-optimization-and-next-pcb-plan.md)。
 3. **关键物理硬约束提醒**：据实板网表，`JP_V` 插在 `1-2` 会把 `V_BASE` 锁死在 `≥2.50 V`（最小占空比 `≥48.5%`）；若仿真验证需要降低基速（`D0 < 48.5%`），必须将 **`JP_V` 改插 `2-3`（接 `R68 = 6.2 kΩ` 到地）**。
 
 ---
@@ -224,7 +233,7 @@ bench 0 0.22 800
 | `diag` | 打印四路红外电压 (V)、`PID_E`/`PID_C` 等效电压与左右电机不对称度报告 |
 | `io` | **硬件 I/O 自检**：实时输出三路按键 (`PD0/PD1/PD15`) 原始高低电平与按下判定、`PC4/PC10/PC6`、编码器 `TIM4/TIM3` 与 4 路 `ADC` |
 | `lcdflip 0\|1` | **切换 1.8 寸竖屏方向**：`0`=默认正竖屏 (`0xC0`，含上下左右同步 180° 正向)，`1`=旋转 180° 倒竖屏 (`0x00`) |
-| `outtest <目标> <值> [ms]` | **单路输出台架点亮测试**：逐项测试 `lamp`/`buz`/`laser`/`led` (`0`/`1`) 与 `servo` (`900..2100`)（最长 `3000 ms`，自动超时关闭；电机请用 `bench`） |
+| `outtest <目标> <值> [ms]` | **单路输出台架点亮测试**：逐项测试 `lamp`/`buz`/`laser`/`led` (`0`/`1`) 与 `servo` (`600..2400`，舵机最长可保持 `30000 ms`；其余 `3000 ms` 自动关闭；电机请用 `bench`) |
 | `servosweep [period_ms]` | **舵机连续往返台架测试**：以 `900..2100 us` 三角波持续扫掠，`period_ms` 默认 `2000`（范围 `500..10000`）；发送 `stop` 或 `servosweep stop` 立即停止。也可用 `python tools/servo_sweep.py --port COM3` |
 | `hwmap` | 将当前 `HW-EMU` 硬件仿真参数 1:1 翻译为物理电阻/电容/电位器阻值与跳线建议 |
 | `mcal [ground\|air] [passes=5]` | 执行 `passes` 轮（默认 `ground` 地面往返 5 轮）15 档 (`0.06~0.95`) 电机标定 |
@@ -235,6 +244,7 @@ bench 0 0.22 800
 | `calset CH BLACK WHITE` | 手动写入第 `CH` (0..3) 路的黑、白 ADC 标定值至 RAM |
 | `start` | 启动 2 秒倒计时并发车循迹 |
 | `probe` | 手动启动探测/瞄准任务（`<15cm` 停车后已默认自动启动，无需按键） |
+| `side` / `side push` | **M2 台架侧扫**：跳过 AIM 直接 `SIDE_LOCK→SIDE_SCAN→SIDE_MOVE→LASER`；`push` = 电机断电、人工推车 |
 | `stop` | 立即刹车停止并清除当前故障状态 |
 | `save` / `load` / `defaults` | 手动将当前 RAM 参数写入 Flash / 从 Flash 加载 / 恢复编译期默认参数 |
 | `log 0` / `log 1` | 关闭 / 开启每 100 ms (10 Hz) 的 CSV 实时遥测数据流输出 |
@@ -266,9 +276,20 @@ bench 0 0.22 800
 | `cross_ms` | `80` | `20 ~ 1000` | 四路全黑（起终点横线/十字交叉口）平顺保持最大允许时长 (ms) |
 | `obstacle` / `obs_mm` | `1` / `150` | `0/1` / `50~500` | 超声波自动避障停车开关与停车距离阈值 (mm，默认 `150 mm = 15 cm`) |
 | `servo_us` | `1500` | `900 ~ 2100` | 水平云台舵机正对前方的中位脉宽 (µs) |
-| `probe_aim_ms` | `2000` | `200 ~ 5000` | 单面瞄准总时长 (ms)：前 150 ms 归位稳定，其余时间均分为离散扫描点 |
-| `probe_sweep_us` | `600` | `20 ~ 600` | 相对中位的单侧扫掠半幅 (µs，`1500±600 = 900..2100 µs`) |
-| `probe_step_us` | `75` | `20 ~ 200` | 步进扫掠相邻采样点的脉宽间隔 (µs)；越小角度越密，但单点驻留时间越短 |
+| `probe_aim_ms` | `2000` | `200 ~ 5000` | **每段** AIM 扫掠时长 (ms)；粗扫+细扫合计约 4 s（前 150 ms 归位稳定，其余均分为离散扫描点） |
+| `probe_sweep_us` | `300` | `20 ~ 600` | 粗扫相对中位的单侧扫掠半幅 (µs)；默认 ±300 µs = ±30°（单面测试编译开关会覆盖成 600） |
+| `probe_step_us` | `60` | `20 ~ 200` | 粗扫步进扫掠的脉宽间隔 (µs)；细扫固定 20 µs（2°） |
+| `probe_fit_rms_mm` | `15` | `2 ~ 20` | M2：面拟合残差上限 (mm) |
+| `probe_scan_mode` | `1` | `0` 或 `1` | M2：`1`=侧视横扫（主方案）；`0`=M1 过渡流程（AIM→正面发射→方阵巡边） |
+| `probe_side_left` | `1` | `0` 或 `1` | M2：`1`=箱体在左（逆时针巡边），M3 起决定转弯方向 |
+| `probe_side_us` | `2400` | `600 ~ 2400` | M2：侧视舵机脉宽 (µs)；2400=右掰 90°，顶死就降到 2200~2350 |
+| `probe_side_spd_mm_s` | `50` | `20 ~ 100` | M2：侧扫/开位速度 (mm/s)；50 对应 60 ms 走 3 mm 一个样本 |
+| `probe_side_reach_mm` | `260` | `80 ~ 400` | M2：单方向最大扫描行程 (mm) |
+| `probe_side_band_mm` | `15` | `4 ~ 30` | M2：面内判据带宽 (mm，车动时实测噪声 ±15 mm) |
+| `probe_side_jump_mm` | `40` | `10 ~ 80` | M2：跳变阈值 (mm)，必须大于 band；背景 500~900 mm 下 40 仍安全 |
+| `probe_side_verify` | `1` | `0` 或 `1` | M2：发射前以 `s_m` 为中心复测一次（关掉可省 2~3 s/面） |
+| `probe_beam_half_deg` | `7.5` | `2 ~ 15` | M2：超声波束半角 γ（只影响宽度，不影响中点；不标定） |
+| `probe_pan_x_mm` | `30` | `0 ~ 120` | M2：云台轴相对轮轴前移量，只用于 `SIDE_LOCK` 自检 |
 | `probe_aim_min` / `probe_aim_max` | `40` / `400` | `20~500` / `100~2000` | 参与法线拟合的有效回波距离窗口 (mm)，滤除地面与远端杂波 |
 | `probe_laser_ms` | `10000` | `200 ~ 30000` | 找到法线后激光+蜂鸣器保持时长 (ms) |
 | `enc_l` / `enc_r` / `motor_l` / `motor_r` | `1` | `-1` 或 `1` | 左右编码器与左右电机的方向极性修正系数 |

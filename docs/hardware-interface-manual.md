@@ -1,6 +1,6 @@
 # STM32G474 核心板与主扩展板硬件接口逐脚对应手册
 
-本文档基于主扩展板嘉立创 EDA 实时导出网表 [live-main-netlist.json](file:///c:/Users/Seraphina/Documents/ESD/firmware/line-following-car/docs/live-main-netlist.json)、[hardware-relevant-parts.json](file:///c:/Users/Seraphina/Documents/ESD/firmware/line-following-car/docs/hardware-relevant-parts.json) 与《STM32G474VET6V1.1 核心板原理图》编制，详细列出 **每一个 MCU 引脚 → 核心板排针 → 主扩展板排母 → 板上调理电路/多路选择器 → 外部传感器/执行器** 的完整物理与电气对接关系。
+本文档基于主扩展板嘉立创 EDA 实时导出网表 [live-main-netlist.json](live-main-netlist.json)、[hardware-relevant-parts.json](hardware-relevant-parts.json) 与《STM32G474VET6V1.1 核心板原理图》编制，详细列出 **每一个 MCU 引脚 → 核心板排针 → 主扩展板排母 → 板上调理电路/多路选择器 → 外部传感器/执行器** 的完整物理与电气对接关系。
 
 ---
 
@@ -112,7 +112,7 @@
 
 ### 2.8 纯硬件模拟 PID 主电路实网参数与软件仿真 (`HW-EMU`) 1:1 映射表
 
-以下数据全部核对自当前工作区 [live-main-netlist.json](file:///c:/Users/Seraphina/Documents/ESD/firmware/line-following-car/docs/live-main-netlist.json)：
+以下数据全部核对自当前工作区 [live-main-netlist.json](live-main-netlist.json)：
 
 | 功能模块 | 关键芯片与网络 | 实网器件参数 | 与固件 `hwemu` 参数对应关系 |
 | --- | --- | --- | --- |

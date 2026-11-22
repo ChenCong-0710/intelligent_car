@@ -129,13 +129,41 @@ static void start_probe(uint32_t now) {
     g_lf.cfg.probe.aim_ms = PROBE_TEST_AIM_MS;
 #endif
     clear_aux_modes();
-    board_log(lf_start_probe(&g_lf, now) ?
-              "PROBE: starting %u-face %s target probing (laser=%ums, aim=%ums, edge=%.0f/%.0fmm, turn=%.1fdeg).\r\n" :
-              "DENIED: must be in OBSTACLE_STOP or STOPPED with no fault.\r\n",
-              (unsigned)g_lf.cfg.probe.faces, g_lf.cfg.probe.clockwise ? "CW" : "CCW",
-              (unsigned)g_lf.cfg.probe.laser_ms, (unsigned)g_lf.cfg.probe.aim_ms,
-              (double)g_lf.cfg.probe.edge1_mm, (double)g_lf.cfg.probe.edge2_mm,
-              (double)g_lf.cfg.probe.turn_deg);
+    if (lf_start_probe(&g_lf, now)) {
+        board_log("PROBE: starting %u-face %s target probing (scan=%c, laser=%ums, aim=%ums, edge=%.0f/%.0fmm, turn=%.1fdeg).\r\n",
+                  (unsigned)g_lf.cfg.probe.faces,
+                  g_lf.cfg.probe.scan_mode != 0U
+                      ? (g_lf.cfg.probe.side_left ? "CCW-side" : "CW-side")
+                      : (g_lf.cfg.probe.clockwise ? "CW" : "CCW"),
+                  g_lf.cfg.probe.scan_mode != 0U ? 'B' : 'A',
+                  (unsigned)g_lf.cfg.probe.laser_ms, (unsigned)g_lf.cfg.probe.aim_ms,
+                  (double)g_lf.cfg.probe.edge1_mm, (double)g_lf.cfg.probe.edge2_mm,
+                  (double)g_lf.cfg.probe.turn_deg);
+        board_log("PROBE_MODE,scan=%c,side=%c,us=%u\r\n",
+                  g_lf.cfg.probe.scan_mode != 0U ? 'B' : 'A',
+                  g_lf.cfg.probe.side_left ? 'L' : 'R', (unsigned)g_lf.cfg.probe.side_us);
+    } else {
+        board_log("DENIED: must be in OBSTACLE_STOP or STOPPED with no fault.\r\n");
+    }
+}
+
+/**
+ * @brief 台架侧扫（M2 验收用）：跳过 AIM/避障流程，直接 SIDE_LOCK -> SIDE_SCAN -> SIDE_MOVE -> LASER
+ * @param push true = 手推模式（电机断电，人工沿面推车），对应《问题排查手册》§17.12 第 7 步
+ * @note  车必须由人工摆成与目标面平行、云台轴距面约 180 mm；盒子在车的 probe_side_left 指定一侧。
+ */
+static void start_side_probe(uint32_t now, bool push) {
+    clear_aux_modes();
+    if (lf_start_side_probe(&g_lf, now, push)) {
+        board_log("SIDE: starting side-view bench scan (push=%u, us=%u, spd=%.0fmm/s, reach=%.0fmm, verify=%u).\r\n",
+                  (unsigned)(push ? 1U : 0U), (unsigned)g_lf.cfg.probe.side_us,
+                  (double)g_lf.cfg.probe.side_speed_mm_s, (double)g_lf.cfg.probe.side_reach_mm,
+                  (unsigned)(g_lf.cfg.probe.side_verify ? 1U : 0U));
+        board_log("PROBE_MODE,scan=B,side=%c,us=%u\r\n",
+                  g_lf.cfg.probe.side_left ? 'L' : 'R', (unsigned)g_lf.cfg.probe.side_us);
+    } else {
+        board_log("SIDE DENIED (need STOPPED/OBSTACLE_STOP, no fault, and probe_scan_mode=1).\r\n");
+    }
 }
 
 /** @brief 将上电 HC-04 波特率探测结果枚举转换为可读标签 */
@@ -323,6 +351,11 @@ static void print_us(void) {
         (unsigned)pr->laser_ms, (double)pr->turn_deg, (double)pr->edge1_mm, (double)pr->edge2_mm,
         (double)pr->approach_max_mm, (double)pr->turn_speed_mm_s, (double)pr->drive_speed_mm_s,
         (double)pr->approach_speed_mm_s);
+    board_log("PROBE_SIDE_CFG,scan=%u,left=%u,us=%u,spd=%.0f,reach=%.0f,band=%.1f,jump=%.1f,verify=%u,gamma=%.1f,pan_x=%.0f,fit_rms=%.1f\r\n",
+        (unsigned)pr->scan_mode, (unsigned)pr->side_left, (unsigned)pr->side_us,
+        (double)pr->side_speed_mm_s, (double)pr->side_reach_mm, (double)pr->side_band_mm,
+        (double)pr->side_jump_mm, (unsigned)pr->side_verify, (double)pr->beam_half_deg,
+        (double)pr->pan_x_mm, (double)pr->fit_rms_mm);
 }
 
 /* ============================================================================
@@ -361,7 +394,15 @@ static const Parameter parameters[] = {
     PARAM("probe_approach_mm", probe.approach_max_mm, 30.0f, 1000.0f),
     PARAM("probe_turn_spd", probe.turn_speed_mm_s, 20.0f, 300.0f),
     PARAM("probe_drive_spd", probe.drive_speed_mm_s, 20.0f, 400.0f),
-    PARAM("probe_approach_spd", probe.approach_speed_mm_s, 20.0f, 300.0f)
+    PARAM("probe_approach_spd", probe.approach_speed_mm_s, 20.0f, 300.0f),
+    /* M2 侧视横扫（float 参数统一走 offsetof 表；uint8/bool 在下面单独处理） */
+    PARAM("probe_fit_rms_mm", probe.fit_rms_mm, 2.0f, 20.0f),
+    PARAM("probe_side_spd_mm_s", probe.side_speed_mm_s, 20.0f, 100.0f),
+    PARAM("probe_side_reach_mm", probe.side_reach_mm, 80.0f, 400.0f),
+    PARAM("probe_side_band_mm", probe.side_band_mm, 4.0f, 30.0f),
+    PARAM("probe_side_jump_mm", probe.side_jump_mm, 10.0f, 80.0f),
+    PARAM("probe_beam_half_deg", probe.beam_half_deg, 2.0f, 15.0f),
+    PARAM("probe_pan_x_mm", probe.pan_x_mm, 0.0f, 120.0f)
 };
 
 static bool set_parameter(const char *name, float value) {
@@ -421,7 +462,9 @@ static bool set_parameter(const char *name, float value) {
         !strcmp(name, "cross_ms") || !strcmp(name, "obs_mm") || !strcmp(name, "servo_us") ||
         !strcmp(name, "probe_cw") || !strcmp(name, "probe_faces") || !strcmp(name, "probe_aim_ms") ||
         !strcmp(name, "probe_sweep_us") || !strcmp(name, "probe_step_us") || !strcmp(name, "probe_laser_ms") ||
-        !strcmp(name, "probe_aim_min") || !strcmp(name, "probe_aim_max") || !strcmp(name, "probe_timeout_ms")) {
+        !strcmp(name, "probe_aim_min") || !strcmp(name, "probe_aim_max") || !strcmp(name, "probe_timeout_ms") ||
+        !strcmp(name, "probe_scan_mode") || !strcmp(name, "probe_side_left") ||
+        !strcmp(name, "probe_side_us") || !strcmp(name, "probe_side_verify")) {
         if (floorf(value) != value) return false;
         if (!strcmp(name, "search_ms") && value >= 0 && value <= 1000) { candidate.search_ms = (uint16_t)value; known = true; }
         if (!strcmp(name, "lost_brake_ms") && value >= 0 && value <= 500) { candidate.lost_brake_ms = (uint16_t)value; known = true; }
@@ -437,6 +480,13 @@ static bool set_parameter(const char *name, float value) {
         if (!strcmp(name, "probe_aim_min") && value >= 20 && value <= 500) { candidate.probe.aim_min_mm = (uint16_t)value; known = true; }
         if (!strcmp(name, "probe_aim_max") && value >= 100 && value <= 2000) { candidate.probe.aim_max_mm = (uint16_t)value; known = true; }
         if (!strcmp(name, "probe_timeout_ms") && value >= 500 && value <= 15000) { candidate.probe.phase_timeout_ms = (uint16_t)value; known = true; }
+        /* M2 侧视横扫开关类参数 */
+        if (!strcmp(name, "probe_scan_mode") && (value == 0 || value == 1)) { candidate.probe.scan_mode = (uint8_t)value; known = true; }
+        if (!strcmp(name, "probe_side_left") && (value == 0 || value == 1)) { candidate.probe.side_left = value != 0; known = true; }
+        if (!strcmp(name, "probe_side_us") && value >= (float)LF_SERVO_US_MIN && value <= (float)LF_SERVO_US_MAX) {
+            candidate.probe.side_us = (uint16_t)value; known = true;
+        }
+        if (!strcmp(name, "probe_side_verify") && (value == 0 || value == 1)) { candidate.probe.side_verify = value != 0; known = true; }
     }
     if (!known || !lf_config_valid(&candidate)) return false;
     g_lf.cfg = candidate;
@@ -478,6 +528,9 @@ static void command(char *line, uint32_t now) {
         board_log("set kp/ki/kd/k3/speed/curve_min/max_turn/max_duty/speed_kp/speed_ki VALUE\r\n");
         board_log("set db_l/db_r/fs_l/fs_r VALUE; set speed_loop/reverse/brake_pwm/obstacle 0/1; enc_l/r motor_l/r -1/1\r\n");
         board_log("PROBE: set probe_cw/probe_faces/probe_aim_ms/probe_sweep_us/probe_step_us/probe_laser_ms/probe_turn_deg/probe_edge1_mm/probe_edge2_mm/probe_approach_mm V\r\n");
+        board_log("SIDE:  set probe_scan_mode(0=A/1=B) probe_side_left probe_side_us probe_side_spd_mm_s probe_side_reach_mm\r\n");
+        board_log("       set probe_side_band_mm probe_side_jump_mm probe_side_verify probe_beam_half_deg probe_pan_x_mm probe_fit_rms_mm V\r\n");
+        board_log("SIDE-BENCH: side          (自走侧扫台架)  |  side push  (电机断电，人工推车扫)\r\n");
         board_log("PROBE-CAL: scan [span_us=220] [step_us=20] [dwell_ms=140] | drive MM [SPD=120] | turn DEG [SPD=90] | outtest lamp/buz/laser/servo/led/stop VAL [MS]\r\n");
         board_log("SERVO: servosweep [period_ms=2000] (continuous 900..2100us) | servosweep stop | stop\r\n");
         board_log("HW-EMU: hw_preset stock|group_b; set hw_emu/hw_netlist/hw_r45_5v/hw_i/hw_coast 0/1; mcurve/vtest/bench/calset/defaults\r\n");
@@ -500,6 +553,13 @@ static void command(char *line, uint32_t now) {
     }
     if (!strcmp(cmd, "start")) { start(now); return; }
     if (!strcmp(cmd, "probe")) { start_probe(now); return; }
+    if (!strcmp(cmd, "side")) {
+        /* 台架侧扫：side = 自走扫描；side push = 电机断电、人工推车扫（§17.12 第 7 步） */
+        char *m = strtok(NULL, " \t");
+        if (m && strcmp(m, "push")) { board_log("SIDE ERROR (usage: side | side push)\r\n"); return; }
+        start_side_probe(now, m != NULL);
+        return;
+    }
     if (!strcmp(cmd, "servosweep")) {
         /* 舵机连续往返台架测试：默认 2 s 一个完整 900->2100->900 周期，直到 stop 或 servosweep stop */
         char *v = strtok(NULL, " \t");
@@ -879,6 +939,33 @@ int main(void) {
             if (request == 6) calibrate_motors(LF_MCAL_GROUND, 5, now);
             lf_step(&g_lf, &sample, now, dt);
 
+            /* M2 侧扫遥测事件：控制器置位 -> 这里打印 -> 清零（事件只在发生的那个 5 ms 拍有效） */
+            if (g_lf.side_event != (uint8_t)LF_SIDE_EVENT_NONE) {
+                uint8_t side_ev = g_lf.side_event;
+                g_lf.side_event = (uint8_t)LF_SIDE_EVENT_NONE;
+                const LfProbeConfig *sp = &g_lf.cfg.probe;
+                float side_reach = g_lf.side_h * tanf((float)sp->beam_half_deg * 0.01745329252f);
+                /* 事件是位掩码：REV 找到第二个边界的那一拍会同时置 EDGE 和 MID，两条日志都要打 */
+                if ((side_ev & (uint8_t)LF_SIDE_EVENT_EDGE) && g_lf.side_edges > 0U) {
+                    /* 0 号是 FWD 先发现的 +s 侧（右）边界，1 号是 REV 发现的 -s 侧（左）边界 */
+                    uint8_t i = (uint8_t)(g_lf.side_edges - 1U);
+                    float s = g_lf.side_s_edge[i];
+                    float s_true = i == 0U ? s - side_reach : s + side_reach;
+                    board_log("PROBE_SIDE_EDGE,i=%u,s=%.1f,s_true=%.1f,n=%u\r\n",
+                              (unsigned)i, (double)s, (double)s_true, (unsigned)g_lf.side_edge_frames);
+                }
+                if (side_ev & (uint8_t)LF_SIDE_EVENT_MID) {
+                    board_log("PROBE_SIDE_MID,s_m=%.1f,w=%.1f,kind=%s,retry=%u\r\n",
+                              (double)g_lf.face.s_m, (double)g_lf.face.w,
+                              g_lf.face.kind == 0U ? "NARROW" : "WIDE", (unsigned)g_lf.side_warn);
+                }
+                if (side_ev & (uint8_t)LF_SIDE_EVENT_FAIL) {
+                    board_log("PROBE_SIDE_FAIL,stage=%u,edges=%u,retry=%u,h=%.1f\r\n",
+                              (unsigned)g_lf.side_stage, (unsigned)g_lf.side_edges,
+                              (unsigned)g_lf.side_retry, (double)g_lf.side_h);
+                }
+            }
+
 #if TRACK_SERVO_CENTER
             /* 起跑/循迹/取线/障碍停车期间把云台锁在机械中位并保持 5V 供电：
              * 否则舵机断电后会被振动带偏，导致“<15 cm 停车”的超声测距方向不再是车头正前方。 */
@@ -1061,7 +1148,9 @@ int main(void) {
                 previous_state = g_lf.state;
             }
             if (g_lf.probe_phase != previous_probe_phase) {
-                if (previous_probe_phase == LF_PROBE_AIM && g_lf.probe_phase == LF_PROBE_LASER) {
+                /* AIM 结束：模式 B 转 SIDE_LOCK，模式 A / AIM 失败则直接进 LASER（两种都要打 PROBE_FACE） */
+                if (previous_probe_phase == LF_PROBE_AIM &&
+                    (g_lf.probe_phase == LF_PROBE_LASER || g_lf.probe_phase == LF_PROBE_SIDE_LOCK)) {
                     /* M1：面模型（法线角/垂直距离/残差/内点数），侧视横扫的自检与绕行距离都靠它 */
                     board_log("PROBE_FACE,phi=%.2f,rho=%.1f,rms=%.1f,hits=%u,valid=%u\r\n",
                         (double)(g_lf.face.phi * 57.2957795f), (double)g_lf.face.rho,
@@ -1074,6 +1163,14 @@ int main(void) {
                         (unsigned)g_lf.cfg.servo_center_us, (double)angle_deg,
                         (unsigned)(g_lf.best_obstacle_mm == UINT16_MAX ? 0U : g_lf.best_obstacle_mm),
                         (unsigned)g_lf.scan_points);
+                }
+                /* 侧视锁定自检结果：h 与 rho + pan_x 的差就是「转角不对/认错面」的唯一报警 */
+                if (previous_probe_phase == LF_PROBE_SIDE_LOCK) {
+                    const LfProbeConfig *lp = &g_lf.cfg.probe;
+                    float pred = g_lf.face.rho > 1.0f ? g_lf.face.rho + lp->pan_x_mm : 0.0f;
+                    board_log("PROBE_SIDE_LOCK,h=%.1f,pred=%.1f,us=%u,ok=%u\r\n",
+                              (double)g_lf.side_h, (double)pred, (unsigned)lp->side_us,
+                              (unsigned)(g_lf.probe_phase == LF_PROBE_SIDE_SCAN ? 1U : 0U));
                 }
                 board_log("PROBE_EVENT,%lu,%u,%s,%u,%u,%.1f,%.2f\r\n",
                     (unsigned long)now, (unsigned)g_lf.probe_face, lf_probe_phase_name(g_lf.probe_phase),
@@ -1088,14 +1185,16 @@ int main(void) {
         if (telemetry && g_lf.state != LF_MOTOR_CAL && !scan_active && poll_now - last_log >= telemetry_ms) {
             last_log = poll_now;
             if (probe_log_en || g_lf.state == LF_PROBING || g_lf.state == LF_OBSTACLE_STOP) {
-                board_log("PROBE,%lu,%u,%u,%s,%u,%u,%u,%u,%u,%.1f,%.2f,%u,%u\r\n",
+                /* M2 只追加 3 个侧扫字段，旧字段顺序不变（《接口契约》§4「新字段只追加」） */
+                board_log("PROBE,%lu,%u,%u,%s,%u,%u,%u,%u,%u,%.1f,%.2f,%u,%u,%.1f,%.1f,%u\r\n",
                     (unsigned long)poll_now, (unsigned)g_lf.state, (unsigned)g_lf.probe_face,
                     lf_probe_phase_name(g_lf.probe_phase),
                     (unsigned)g_lf.last_obstacle_mm, (unsigned)g_lf.last_obstacle_valid,
                     (unsigned)g_lf.out.servo_us, (unsigned)g_lf.best_servo_us,
                     (unsigned)(g_lf.best_obstacle_mm == UINT16_MAX ? 0U : g_lf.best_obstacle_mm),
                     (double)g_lf.odo.distance_mm, (double)(g_lf.odo.heading_rad * 57.2957795f),
-                    (unsigned)g_lf.out.laser, (unsigned)g_lf.out.buzzer);
+                    (unsigned)g_lf.out.laser, (unsigned)g_lf.out.buzzer,
+                    (double)g_lf.side_h, (double)g_lf.face.s_m, (unsigned)g_lf.side_edges);
             } else {
                 board_log("CSV,%lu,%u,%u,%u,%u,%u,%u,%.2f,%.2f,%.2f,%.2f,%.3f,%.2f,%.1f,%.1f,%.1f,%.1f,%.3f,%.3f\r\n",
                     (unsigned long)poll_now, (unsigned)g_lf.state, (unsigned)g_lf.fault,

@@ -64,31 +64,31 @@ flowchart LR
     B -->|"输出 LfOutput<br/>(左右占空比 + 制动 + 舵机/激光/灯/蜂鸣器)"| C["3. 硬件执行<br/>board_apply()<br/>(Board/board.c)"]
 ```
 
-1. **第一步：硬件感知 `board_sample(&sample)`（位于 [Board/board.c](file:///c:/Users/Seraphina/Documents/ESD/firmware/line-following-car/Board/board.c)）**
+1. **第一步：硬件感知 `board_sample(&sample)`（位于 [Board/board.c](../Board/board.c)）**
    - 读取已经过 DMA 5 次硬件平均的四路红外 ADC 值 `raw[0..3]`（`0 ~ 4095`）。
    - 读取左轮（`TIM4`）、右轮（`TIM3`）编码器在过去 5 ms 内走过的脉冲数 `encoder_delta[0..1]`。
    - 读取 `DRV8833` 电机驱动芯片是否报错（`PC4` 引脚），以及 `TIM8` 硬件捕获到的最新超声波障碍物距离 `obstacle_mm`。
-2. **第二步：算法决策 `lf_step(&g_lf, &sample, now, dt)`（位于 [Control/line_follower.c](file:///c:/Users/Seraphina/Documents/ESD/firmware/line-following-car/Control/line_follower.c)）**
+2. **第二步：算法决策 `lf_step(&g_lf, &sample, now, dt)`（位于 [Control/line_follower.c](../Control/line_follower.c)）**
    - 根据当前所处的状态（如红外校准 `LF_CALIBRATING`、电机死区标定 `LF_MOTOR_CAL`、正常循迹 `LF_TRACKING`、障碍物停车 `LF_OBSTACLE_STOP`、四面打靶 `LF_PROBING`），计算出本周期应该给左右电机的占空比 `duty[0..1]`、是否主动电磁制动 `brake`，以及停车灯、蜂鸣器、激光和云台舵机的控制指令，填入 `g_lf.out`。
-3. **第三步：硬件执行 `board_apply(&g_lf.out, &g_lf.cfg)`（位于 [Board/board.c](file:///c:/Users/Seraphina/Documents/ESD/firmware/line-following-car/Board/board.c)）**
-   - 调用 [Control/bridge_logic.c](file:///c:/Users/Seraphina/Documents/ESD/firmware/line-following-car/Control/bridge_logic.c) 中的 `bridge_compare()`，把占空比转换成 `TIM1` 四个通道的 PWM 寄存器值，同步更新给 `DRV8833` 驱动电机，并更新停车灯、蜂鸣器、激光和舵机引脚。
+3. **第三步：硬件执行 `board_apply(&g_lf.out, &g_lf.cfg)`（位于 [Board/board.c](../Board/board.c)）**
+   - 调用 [Control/bridge_logic.c](../Control/bridge_logic.c) 中的 `bridge_compare()`，把占空比转换成 `TIM1` 四个通道的 PWM 寄存器值，同步更新给 `DRV8833` 驱动电机，并更新停车灯、蜂鸣器、激光和舵机引脚。
 
 ---
 
 ## 3. 各源码文件与核心代码块详解
 
-### 3.1 [Control/bridge_logic.h](file:///c:/Users/Seraphina/Documents/ESD/firmware/line-following-car/Control/bridge_logic.h) 与 [Control/bridge_logic.c](file:///c:/Users/Seraphina/Documents/ESD/firmware/line-following-car/Control/bridge_logic.c)
+### 3.1 [Control/bridge_logic.h](../Control/bridge_logic.h) 与 [Control/bridge_logic.c](../Control/bridge_logic.c)
 - **作用**：将范围在 `[-1.0, +1.0]` 的电机占空比指令，翻译成 `DRV8833` H 桥芯片两个输入端（`IN1`、`IN2`）的 PWM 计数值（`0 ~ 4000`）。
 - **核心原理**：
   - 当需要**主动电枢短接刹车（`brake = true`）**时，令 `IN1 = 4000, IN2 = 4000`（即 `11` 状态），此时 H 桥把电机正负极直接短接，电机旋转产生的反电动势形成强大的电磁制动扭矩，实现 `<15cm` 瞬时刹停。
   - 在正常驱动时，默认采用 **`drive_brake = true`（驱动/制动模式，即慢衰减 Slow Decay）**：正转时 `IN1` 保持高电平 `4000`，`IN2` 输出 `4000 - active`。这样在 PWM 的关断间隙电机处于续流制动状态，不僅使“占空比—转速”关系更加线性，而且在连续 S 弯内轮减小占空比时能立即提供减速力，防止内轮滑行冲出赛道。
 
-### 3.2 [Control/line_follower.h](file:///c:/Users/Seraphina/Documents/ESD/firmware/line-following-car/Control/line_follower.h) 与 [Control/line_follower.c](file:///c:/Users/Seraphina/Documents/ESD/firmware/line-following-car/Control/line_follower.c)
+### 3.2 [Control/line_follower.h](../Control/line_follower.h) 与 [Control/line_follower.c](../Control/line_follower.c)
 这是整个工程最核心的算法文件，内部按注释清晰划分为 **9 个独立功能模块**：
 
 1. **模块 1 & 2：基础工具与配置校验（`lf_default_config`, `lf_config_valid`）**
    - 集中定义所有默认控制参数，并在每次运行前检查参数是否在安全范围内（如最大占空比不能超过 `1.0`、弯道最低速不能高于直线巡航速等），防止输错参数导致飞车。
-2. **模块 3：外部状态触发接口（`lf_calibrate`, `lf_calibrate_motors`, `lf_start`, `lf_start_probe`, `lf_stop`）**
+2. **模块 3：外部状态触发接口（`lf_calibrate`, `lf_calibrate_motors`, `lf_start`, `lf_start_probe`, `lf_start_side_probe`, `lf_stop`）**
    - 供按键或蓝牙命令调用，安全地切换顶层状态机并清零历史积分。
 3. **模块 4：四路红外信号处理与黑线位置估计（`read_line`）**
    - 将每路红外 ADC 原始值根据各自的黑白标定值 `[black[i], white[i]]` 归一化为 **`darkness[i]`（见黑强度，`0.0` 代表纯白底，`1.0` 代表纯黑带）**。
@@ -105,16 +105,23 @@ flowchart LR
 6. **模块 7：5 轮空载与 5 轮地面带载自动往返电机标定状态机（`step_motor_cal`）**
    - 支持 **`mcal air 5`** 与 **`mcal ground 5`** 均完整扫描 **`0.06 ~ 0.95` 共 15 档占空比**（地面模式每档步间主动刹车 `80 ms`，每轮结束后依托编码器里程计带航向纠偏自动倒车回原点）。
    - 5 轮结束后自动对左右轮分别做**最小二乘线性回归拟合**，并通过蓝牙回传 15 点实测曲线至上位机保存在电脑 `data/` 目录（**不主动磨损片内 Flash**）。
-7. **模块 8：提高部分（2）四面顺时针目标探测状态机（`step_probing`）与模块 8a 平面法线拟合**
-   - `<15cm` 障碍物主动短接制动停车后（`AUTO_PROBE_ON_OBSTACLE=1`），**无需按键**约 300 ms 后自动进入瞄准阶段：舵机在 `900..2100 µs` 内按 `scan_step_us`（默认 75 µs）做**台阶式步进扫掠**，每个角度点驻留 ≥60 ms 覆盖一次硬件超声触发周期，逐点记录平均回波距离。
-   - 扫掠结束后由 `probe_fit_normal()` 对连续有效回波段做 `1/r = a·cosθ + b·sinθ` 最小二乘拟合，取法线角 `θ* = atan2(b, a)` 作为**真正正对（垂直）平面的方向**；若拟合残差 >12% 则自动退回“三点平滑最小值”兜底（与参考工程 `Tracker_ChooseNormal` 算法一致）。
-   - 锁定角度后开启激光与蜂鸣器同步持续 10 秒（核心板 LED 以 150 ms 周期闪烁表示已找到垂直位置）→ 利用编码器里程计顺时针绕过长方体拐角前往下一面 → 全部 4 面完成后发出 3 组“两短一长”蜂鸣器鸣叫。
-   - 蓝牙回传 `PROBE_LOCK,face=,servo_us=,center_us=,angle_deg=,dist_mm=,points=` 便于现场核对瞄准偏角。
+7. **模块 8：提高部分（2）目标探测状态机（`step_probing`），模块 8a 平面法线拟合 + 模块 8b 侧视横扫**
+   - **模块 8a（M1，已烧录）**：`<15cm` 停车后（`AUTO_PROBE_ON_OBSTACLE=1`）自动进入 `AIM`，舵机做**两段式**台阶步进扫掠（粗扫 `1500±300 µs`/10 点 → 以粗测法线为中心细扫 `±120 µs`/10 点，每点驻留 ≥180 ms、开头丢 120 ms），对回波做 `1/r = a·cosθ + b·sinθ` 最小二乘，输出面模型 `face.phi/rho/rms/hits`（`PROBE_FACE` 日志）。拟合残差门限 `probe_fit_rms_mm`（默认 15 mm）、内点带 ±15 mm、内点 ≥3。
+   - **模块 8b（M2，已烧录 + 4 次台架验证）**：侧扫只能从**台架入口**（`side` / `side push` → `lf_start_side_probe()`）进入，
+     自动流程（`<15cm` 停车 → `probe`）在 M2 保持 M1 的 `AIM → 正面 LASER`（M3 接上 TURN_PAR 后才自动启用侧扫）。
+     侧扫流程为 `SIDE_LOCK → SIDE_SCAN → SIDE_MOVE(+VERIFY) → LASER`：
+     - `SIDE_LOCK`：舵机锁到 `probe_side_us`（2400 µs = 右掰 90°），等 400 ms 后按 60 ms 超声节拍连测 5 帧取中位数得站立距离 h，并自检 `|h-(rho+pan_x)|≤40 mm`、`h∈[80,350]`；
+     - `SIDE_SCAN`：车沿面切线平移（50 mm/s，60 ms 一帧 = 3 mm），用 8 点最小二乘 `d=h0+k·s` 拟合面内距离（k 吸收车不平行漂移），边界确认分两类证据（跳变型 3 帧且 |d−h|>jump / 真无回波型 6 帧），FWD 找 +s 边界、REV 找 −s 边界，行程上限相对扫描原点对称 ±`side_reach_mm`；
+     - 边界取「最后一个面内样本 + 第一个外点样本」中点，`s_m=(lo+hi)/2`、`w=(hi−lo)−2·h·tanγ`、`kind=(w<100?窄:宽)`；
+     - `SIDE_MOVE`：沿切线开到 `s_m`（末段 20 mm 降到 25 mm/s，到位 2 mm 停车 + 150 ms 主动制动），可选 `SIDE_VERIFY` 复测（原点改锁到中点，行程 ±(w/2+h·tanγ+确认距离) 动态算，|s_m2−s_m|<8 取平均）；开位超时会置 `side_warn=4`，留给复测自愈；
+     - `LASER`：**保持 side_us 不动**发射 10 s（扫描与发射同轴同角 → 中点与 `pan_x`/侧角无关）；侧视模式但未锁定时先等 400 ms 再点灯（自动流程里舵机本来就在法线角，等于无额外动作）。
+     - 台架入口 `lf_start_side_probe(c, now, push)`（`side` / `side push` 命令）跳过 AIM 直接进 `SIDE_LOCK`，用于《问题排查手册》§17.12 的台架验收。
+   - 蓝牙回传 `PROBE_MODE`、`PROBE_FACE`、`PROBE_SIDE_LOCK`、`PROBE_SIDE_EDGE`、`PROBE_SIDE_MID`、`PROBE_SIDE_FAIL`、`PROBE_SIDE_CFG` 等日志，现场可直接核对法线角/站立距离/两个边界/中点是否与卷尺一致。
 8. **模块 9：200 Hz 主控制步进与外侧单调外推快速循迹（`lf_step`）**
    - 包含完整的安全检查（参数检查、周期检查、`DRV8833` 过流检查、ADC 超时检查、编码器接反检查、电机堵转检查）。
    - **外侧单路边缘单调外推**：当急弯中黑带即将滑出最外侧探头（仅 `L2` 或 `R2` 见黑且灰度从 `0.90` 向 `0.20` 減弱）时，将控制误差从 `±1.0` 单调外推至 `±1.60`，配合三次方渐进比例增益 `line_k3`，在脱线前爆发出最大转向力矩把车头拉回赛道。
 
-### 3.3 [Board/board.h](file:///c:/Users/Seraphina/Documents/ESD/firmware/line-following-car/Board/board.h)、[Board/board.c](file:///c:/Users/Seraphina/Documents/ESD/firmware/line-following-car/Board/board.c) 与 [Board/lcd_st7735.c](file:///c:/Users/Seraphina/Documents/ESD/firmware/line-following-car/Board/lcd_st7735.c)
+### 3.3 [Board/board.h](../Board/board.h)、[Board/board.c](../Board/board.c) 与 [Board/lcd_st7735.c](../Board/lcd_st7735.c)
 负责所有 STM32G474 硬件外设初始化与底层读写：
 1. **外设句柄与双缓冲定义**：定义 `ADC1` 40 半字 DMA 缓冲区（每 5 次 1 kHz 扫描求一次均值，产生 200 Hz 硬件同步节拍）。
 2. **片内 Flash CRC-32 存储定义**：将 `LfCalibration` 与 `LfConfig` 打包为 `FlashRecord`，保存在 `0x0807F800`（Flash 最后一个 2 KB 页），按需手动 `save` 后掉电恢复。
@@ -124,9 +131,9 @@ flowchart LR
    - `lcd_st7735_init()` & `lcd_st7735_service()`：启用 `SPI1`（10 MHz, `PB3/PB5 AF5`, `PD10..13`）驱动 **`128×160` 竖屏** 1.8 寸彩屏（支持 `lcdflip 0/1` 正倒切换），在主循环空闲期轮询单槽位刷新四路红外电压、`PID_E` 与左右实测轮速，不阻塞 200 Hz 控制。
    - `uart_init()`：上电先等待并自动探测 `HC-04`（将出厂 `9600` 自动升级至 `115200` 并恢复透明传输），随后开启 `USART1` 非阻塞环形收发中断。
 
-### 3.4 [Core/Src/main.c](file:///c:/Users/Seraphina/Documents/ESD/firmware/line-following-car/Core/Src/main.c) 与 [tools/host_station.py](file:///c:/Users/Seraphina/Documents/ESD/firmware/line-following-car/tools/host_station.py)
+### 3.4 [Core/Src/main.c](../Core/Src/main.c) 与 [tools/host_station.py](../tools/host_station.py)
 负责顶层协调、蓝牙上位机通信与人机交互：
-- 默认采用 **RAM-first** 模式，不在标定或调参时频繁擦写 Flash；所有 5 轮电机曲线与赛道红外遥测由上位机软件 [tools/host_station.py](file:///c:/Users/Seraphina/Documents/ESD/firmware/line-following-car/tools/host_station.py) 批量采集并保存至 `data/` 目录，可随时一键下发至小车 RAM（若需比赛前脱机断电固化，才手动使用 `save`）。
+- 默认采用 **RAM-first** 模式，不在标定或调参时频繁擦写 Flash；所有 5 轮电机曲线与赛道红外遥测由上位机软件 [tools/host_station.py](../tools/host_station.py) 批量采集并保存至 `data/` 目录，可随时一键下发至小车 RAM（若需比赛前脱机断电固化，才手动使用 `save`）。
 - 在 200 Hz 硬件节拍下调用 `board_sample()` → `buttons()` → `lf_step()` → `board_apply()` → `snapshot()`。
 - 解析来自蓝牙上位机或 `Serial Monitor` 的控制命令（`mcal air/ground 5`、`vtest`、`mcurve`、`cal`、`start`、`probe`、`stop`、`status`、`diag`、`hwmap`、`io`、`outtest`、`set`、`bench` 等），并以 10 Hz 频率非阻塞输出 CSV 遥测数据流。
 - 注意主板循迹键 `SW2 (PD0)` 按现板实网网表在 `U3` 反相器**前**经 `47k/100k` 分压直采 `KEY_TRACK_N`，三路按键（`PD0`/`PD1`/`PD15`）已统一为低电平有效（按下 `0V`），并新增 `io` / `outtest` 蓝牙命令辅助按键与硬件输出故障隔离。

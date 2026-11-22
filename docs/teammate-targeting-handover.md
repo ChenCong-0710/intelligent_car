@@ -1,19 +1,45 @@
 # 队友交接指南：全软件任务架构与四面激光打靶（蓝牙标定/录数）开发手册
 
-> **交接背景**：纯硬件模拟电路循迹已改板实车跑通（详见 [pure-analog-rework-and-calibration.md](file:///C:/Users/Seraphina/Documents/ESD/firmware/line-following-car/docs/pure-analog-rework-and-calibration.md)），软件闭环循迹与电机死区/前馈标定均已完成并归档。  
+> **交接背景**：纯硬件模拟电路循迹已改板实车跑通（详见 [pure-analog-rework-and-calibration.md](pure-analog-rework-and-calibration.md)），软件闭环循迹与电机死区/前馈标定均已完成并归档。  
 > **当前版本**：已完成**全部软件任务的主体状态机框架与蓝牙标定/采集工具链**，插上 STM32G474 核心板即可直接开展**提高部分（2）四面顺时针目标探测与 10 秒激光打靶**的实车标定与优化。
 
 ---
+
+## 零、2026-11-22 进展补记（先读这段）
+
+> 本文件正文写于 M1 之前，描述的是「8 阶段矩形绕行」框架（即 M1 过渡流程，`probe_scan_mode=0` 时仍可用）。
+> 现在的实现已按**侧视横扫（模式 B）**重构；**当前参数默认值、日志格式、状态机以 [接口契约_M1.md](../../接口契约_M1.md)、[手册_M1-M5实施步骤.md](../../手册_M1-M5实施步骤.md) 为准**。
+
+| 里程碑 | 状态 | 关键内容 |
+| --- | --- | --- |
+| M1 | ✅ 已烧录并台架验证 | 两段式 AIM（粗扫 ±30°/10 点 + 细扫 ±12°/10 点）输出 `face.phi/rho/rms/hits`；`PROBE_FACE` 日志 |
+| M2 | ✅ 已烧录 + 4 次台架全流程验证 | 侧视横扫 `SIDE_LOCK → SIDE_SCAN → SIDE_MOVE(+VERIFY) → LASER`；台架命令 `side` / `side push`；11 个 `probe_side_*` 参数；**自动流程在 M2 仍保持 M1**（AIM→正面 LASER），侧扫只在台架入口可用 |
+| M3（下一步） | ⏳ | `TURN_PAR`（原地转到与面平行）+ `LEG`（三段绕行），把自动流程接成 `AIM→TURN_PAR→SIDE_LOCK→…→LEG` 完成四面 |
+| M4 | ⏳ | 四面循环、假边界/地图纠正、`probetour` |
+| M5 | ⏳ | 参数冻结、`probe_dry_run`、报告与日志归档 |
+
+### 新增 / 变更的命令
+
+| 命令 | 作用 |
+| --- | --- |
+| `side` / `side push` | M2 台架侧扫：自走 / 电机断电、人工沿面推车（跳过 AIM，直接 SIDE_LOCK） |
+| `set probe_scan_mode 0/1` | 0 = M1 过渡流程（AIM→正面 LASER）；1 = 侧视（默认；M2 阶段只影响 `side` 是否可用） |
+| `set probe_side_us/left/spd_mm_s/reach_mm/band_mm/jump_mm/verify` | 侧扫参数（默认 2400 / 1 / 50 / 260 / 15 / 40 / 1） |
+| `set probe_beam_half_deg` / `probe_pan_x_mm` / `probe_fit_rms_mm` | γ=7.5°（只影响宽度）/ 云台前移 30 mm / 面拟合 rms 门限 15 mm |
+| 新日志 | `PROBE_MODE`、`PROBE_SIDE_LOCK`、`PROBE_SIDE_EDGE`、`PROBE_SIDE_MID`、`PROBE_SIDE_FAIL`、`PROBE_SIDE_CFG`（格式见契约 §4） |
+
+> **下文旧表已过时**（M1 之前冻结的默认值）：`probe_sweep_us` 600→**300**（粗扫半幅；单面测试编译开关会覆盖成 600）、`probe_step_us` 75→**60**、舵机行程→**600~2400 µs**、`probe_side_band_mm`=**15**、`probe_side_jump_mm`=**40**。
+
 
 ## 一、全部软件任务总览与当前就绪状态
 
 | 软件任务模块 | 核心状态机 / 触发方式 | 当前状态 | 关键代码位置 |
 | :--- | :--- | :---: | :--- |
-| **1. 软件高速循迹** | `LF_CALIBRATING` -> `LF_ARMING (2s)` -> `LF_TRACKING`（按 `SW2` 或蓝牙 `start`） | ✅ 已跑通（后续可继续提速优化） | [Control/line_follower.c](file:///C:/Users/Seraphina/Documents/ESD/firmware/line-following-car/Control/line_follower.c) |
-| **2. 超声波 `<15cm` 避障刹停** | 循迹中超声连续命中 `<= 150 mm` -> `LF_OBSTACLE_STOP`（主动短接制动 + 停车灯常亮 + 1s 长鸣；行驶期间舵机锁中位保证测距朝前） | ✅ 已集成并过单测 | [Control/line_follower.c](file:///C:/Users/Seraphina/Documents/ESD/firmware/line-following-car/Control/line_follower.c) |
+| **1. 软件高速循迹** | `LF_CALIBRATING` -> `LF_ARMING (2s)` -> `LF_TRACKING`（按 `SW2` 或蓝牙 `start`） | ✅ 已跑通（后续可继续提速优化） | [Control/line_follower.c](../Control/line_follower.c) |
+| **2. 超声波 `<15cm` 避障刹停** | 循迹中超声连续命中 `<= 150 mm` -> `LF_OBSTACLE_STOP`（主动短接制动 + 停车灯常亮 + 1s 长鸣；行驶期间舵机锁中位保证测距朝前） | ✅ 已集成并过单测 | [Control/line_follower.c](../Control/line_follower.c) |
 | **3. 停车后自动寻找“垂直位置”** | `LF_OBSTACLE_STOP` 后 300 ms 自动进入 `LF_PROBING/AIM`：舵机步进扫掠 + `1/r=a·cosθ+b·sinθ` 最小二乘拟合求平面法线，锁定角度后核心板 LED 150 ms 周期闪烁 | ✅ 已实现并新增 `probeaim` 精度单测 | `step_probing()` / 模块 8a `probe_fit_normal()` |
-| **4. 四面顺时针目标探测与 10s 打靶** | 在 `LF_OBSTACLE_STOP` 或 `LF_STOPPED` 下按 `SW3` 或蓝牙 `probe` -> `LF_PROBING`（8 阶段矩形绕行 + 3 组两短一长结束提示） | ✅ **完整可调框架已就绪，待实车标定几何/云台参数** | [Control/line_follower.c](file:///C:/Users/Seraphina/Documents/ESD/firmware/line-following-car/Control/line_follower.c#L807-L925) |
-| **5. 蓝牙串口数据采集与在线标定** | `host_station.py`：`mcal` / `push` / `capture` / **`probe-scan`** / **`probe-odom`** / **`probe-run`** | ✅ **已全部打通并过自检** | [tools/host_station.py](file:///C:/Users/Seraphina/Documents/ESD/firmware/line-following-car/tools/host_station.py) |
+| **4. 四面顺时针目标探测与 10s 打靶** | 在 `LF_OBSTACLE_STOP` 或 `LF_STOPPED` 下按 `SW3` 或蓝牙 `probe` -> `LF_PROBING`（8 阶段矩形绕行 + 3 组两短一长结束提示） | ✅ **完整可调框架已就绪，待实车标定几何/云台参数** | [Control/line_follower.c](../Control/line_follower.c#L807-L925) |
+| **5. 蓝牙串口数据采集与在线标定** | `host_station.py`：`mcal` / `push` / `capture` / **`probe-scan`** / **`probe-odom`** / **`probe-run`** | ✅ **已全部打通并过自检** | [tools/host_station.py](../tools/host_station.py) |
 
 ---
 
@@ -126,7 +152,7 @@ python tools/host_station.py probe-run --push --faces 4 --laser-ms 10000 --edge1
 
 ## 四、编译、单测与烧录命令速查
 
-所有构建均封装在 [tools/build.ps1](file:///C:/Users/Seraphina/Documents/ESD/firmware/line-following-car/tools/build.ps1) 中：
+所有构建均封装在 [tools/build.ps1](../tools/build.ps1) 中：
 
 ```powershell
 # 编译 Debug / Release STM32G474 固件
@@ -148,11 +174,11 @@ python tools/host_station.py --selftest
 ## 五、二次开发与算法优化入口指引
 
 1. **打靶瞄准算法（已完成：步进扫掠 + 平面法线最小二乘拟合）**：
-   - 实现见 [Control/line_follower.c](file:///C:/Users/Seraphina/Documents/ESD/firmware/line-following-car/Control/line_follower.c) 模块 8a：`probe_scan_plan()` 规划离散角度点、`case LF_PROBE_AIM` 逐点驻留采样、`probe_fit_normal()` 对 `1/r = a·cosθ + b·sinθ` 做最小二乘并输出法线方向（残差 >12% 时自动退回三点平滑最小值）。
+   - 实现见 [Control/line_follower.c](../Control/line_follower.c) 模块 8a：`probe_scan_plan()` 规划离散角度点、`case LF_PROBE_AIM` 逐点驻留采样、`probe_fit_normal()` 对 `1/r = a·cosθ + b·sinθ` 做最小二乘并输出法线方向（残差 >12% 时自动退回三点平滑最小值）。
    - 现场若发现扫掠角度覆盖不足，用 `set probe_sweep_us 600` / `set probe_step_us 50` / `set probe_aim_ms 2400` 在线调整；瞄准结果由 `PROBE_LOCK,face=,servo_us=,angle_deg=,dist_mm=,points=` 回传。
 2. **改进绕障路径（如边走边用超声测角、动态识别障碍物宽度）**：
-   - 修改 [Control/line_follower.c](file:///C:/Users/Seraphina/Documents/ESD/firmware/line-following-car/Control/line_follower.c) 中的 `LF_PROBE_DRIVE_EDGE1` / `LF_PROBE_DRIVE_EDGE2` / `LF_PROBE_APPROACH`。
+   - 修改 [Control/line_follower.c](../Control/line_follower.c) 中的 `LF_PROBE_DRIVE_EDGE1` / `LF_PROBE_DRIVE_EDGE2` / `LF_PROBE_APPROACH`。
 3. **固化现场标定好的默认参数**：
-   - 调出最优参数后，直接写回 [Control/line_follower.c](file:///C:/Users/Seraphina/Documents/ESD/firmware/line-following-car/Control/line_follower.c) 的 `lf_default_config()`，重新编译烧录即可断电永久保存。
+   - 调出最优参数后，直接写回 [Control/line_follower.c](../Control/line_follower.c) 的 `lf_default_config()`，重新编译烧录即可断电永久保存。
 4. **硬件接口逐脚定义与排错**：
-   - 详见 [docs/hardware-interface-manual.md](file:///C:/Users/Seraphina/Documents/ESD/firmware/line-following-car/docs/hardware-interface-manual.md) 与 [docs/codebase-guide.md](file:///C:/Users/Seraphina/Documents/ESD/firmware/line-following-car/docs/codebase-guide.md)。
+   - 详见 [docs/hardware-interface-manual.md](hardware-interface-manual.md) 与 [docs/codebase-guide.md](codebase-guide.md)。

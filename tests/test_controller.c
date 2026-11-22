@@ -24,7 +24,8 @@
  *   23. motorcal     : 左右轮不同死区与斜率的 3 轮自动扫描拟合及前馈不对称补偿验证
  *   24. probeaim     : 云台步进扫掠 + 平面法线(垂直位置)最小二乘拟合精度验证
  *   25. probefit    : M1 面模型（phi/rho/rms/hits）在无噪声/噪声/丢帧/无回波下的精度
- *   26~28. probecenter / probeturn / probetour : M2~M4 骨架（现为 SKIP）
+ *   26. probeside    : M2 侧视横扫（SIDE_LOCK / SIDE_SCAN / SIDE_MOVE + 复测）在合成侧扫世界里的中点/宽度精度
+ *   27~28. probeturn / probetour : M3/M4 骨架（现为 SKIP）
  */
 
 #include "line_follower.h"
@@ -185,6 +186,9 @@ static void obstacle(void) {
 }
 static void probe(void) {
     LfController c;ready(&c);uint32_t now=0;
+    /* 本用例验证模式 A 的完整「AIM -> LASER -> 方阵巡边 -> APPROACH -> 下一面」流程；
+     * M2 起默认 probe_scan_mode=1（侧视），故这里显式选 0 保持旧流程回归覆盖。 */
+    c.cfg.probe.scan_mode=0U;
     LfInput in=input(3000,500,500,3000);
     in.obstacle_valid=true;in.obstacle_mm=130;
     tick(&c,&in,&now,2);assert(c.state==LF_OBSTACLE_STOP);
@@ -238,6 +242,9 @@ static void probe(void) {
  * 而不是简单返回“单点最小距离”所在的 ±60° 边缘。 */
 static void probeaim(void) {
     LfController c;ready(&c);uint32_t now=0;
+    /* 本用例只验证 AIM 面拟合本身（进入 LASER 后即结束），固定走模式 A 的过渡流程，
+     * 避免将来 M3 把自动流程改成 AIM→TURN_PAR→SIDE_LOCK 时影响本用例。 */
+    c.cfg.probe.scan_mode=0U;
     LfInput in=input(3000,500,500,3000);
     in.obstacle_valid=true;in.obstacle_mm=130;
     tick(&c,&in,&now,2);assert(c.state==LF_OBSTACLE_STOP);
@@ -314,9 +321,10 @@ static void aim_run(LfController *c, LfInput *in, uint32_t *now,
         lf_step(c, in, *now, 0.005f);
     }
 }
-/** 起一次完整的单面探测流程 */
+/** 起一次完整的单面探测流程（模式 A 过渡流程：AIM 后直接进 LASER，供 AIM 面拟合类用例使用） */
 static void probe_start(LfController *c, LfInput *in, uint32_t *now) {
     ready(c);
+    c->cfg.probe.scan_mode = 0U;
     *in = input(3000, 500, 500, 3000);
     in->obstacle_valid = true;
     in->obstacle_mm = 130;
@@ -377,8 +385,322 @@ static void probefit(void) {
         assert(!c.face.valid);
     }
 }
-/** M2：边界二分 + 波束补偿 + 中点（位置域）。 */
-static void probecenter(void) { probe_pending("probecenter"); }
+/* ============================================================================
+ * M2：侧视横扫（SIDE_LOCK / SIDE_SCAN / SIDE_MOVE + 复测）的合成侧扫世界
+ * ==========================================================================*/
+
+/** @brief 侧扫虚拟世界：面沿扫描轴的区间、侧视站立距离、车不平行斜率、噪声/丢帧/背景回波 */
+typedef struct {
+    float center_mm;  /**< 面中心在扫描坐标（车初始轮轴位置为 0）里的位置 */
+    float half_w_mm;  /**< 面半宽：25 = 窄面 50 mm，75 = 宽面 150 mm */
+    float h_mm;       /**< s=0 处的侧视站立距离 */
+    float tilt;       /**< 横向倾斜：h(s) = h_mm + tilt·s（模拟车头与面不平行） */
+    float gamma_deg;  /**< 超声波束半角 */
+    float sigma_mm;   /**< 回波距离噪声（±均匀） */
+    float drop;       /**< 丢帧率 0~1 */
+    float bg_mm;      /**< 面外回波距离（0 = 无回波；>0 模拟旁边的墙/邻面） */
+} SynthSide;
+
+/** @brief 合成侧视回波：波束足印 [s-fp, s+fp] 与面区间有交集才有回波，否则返回背景距离或 0 */
+static uint16_t synth_side_echo(const SynthSide *w, float s) {
+    float h = w->h_mm + w->tilt * s;
+    if (h < 20.0f) h = 20.0f;
+    float fp = h * tanf(w->gamma_deg * 0.01745329252f); /* 波束足印半宽 = h·tanγ */
+    float d;
+    if (fabsf(s - w->center_mm) <= w->half_w_mm + fp) d = h;
+    else d = w->bg_mm;
+    if (d > 0.0f && w->sigma_mm > 0.0f) {
+        d += (synth_rand01() * 2.0f - 1.0f) * w->sigma_mm;
+        if (d < 1.0f) d = 1.0f;
+    }
+    if (w->drop > 0.0f && synth_rand01() < w->drop) d = 0.0f;
+    return d > 0.0f ? (uint16_t)(d + 0.5f) : 0U;
+}
+
+/** @brief 台架侧扫启动：不跑 AIM/避障流程，人工已把车摆成与面平行，直接进 SIDE_LOCK */
+static void side_start(LfController *c, LfInput *in, uint32_t *now, bool verify, bool push,
+                       uint16_t side_us) {
+    lf_init(c);
+    c->cal.valid = true;
+    c->cfg.arm_delay_ms = 0;
+    for (unsigned i = 0; i < 4U; ++i) { c->cal.black[i] = 500; c->cal.white[i] = 3000; }
+    c->cfg.probe.side_verify = verify;
+    if (side_us != 0U) c->cfg.probe.side_us = side_us;
+    *in = input(3000, 500, 500, 3000);
+    in->obstacle_valid = true;
+    in->obstacle_mm = 180U;
+    *now = 0;
+    assert(lf_start_side_probe(c, *now, push));
+    assert(c->state == LF_PROBING && c->probe_phase == LF_PROBE_SIDE_LOCK);
+}
+
+/**
+ * @brief 跑完一次台架侧扫：按 60 ms 超声节拍喂合成回波，并按控制器目标轮速（或人工推车速度）
+ *        生成编码器脉冲，直到进入 LASER / COMPLETE_BEEPS 或退出 PROBING。
+ */
+static void side_run(LfController *c, LfInput *in, uint32_t *now, const SynthSide *w,
+                     bool push, float push_mm_s) {
+    const float mm_per_count = 3.14159265f * c->cfg.wheel_diameter_mm / c->cfg.encoder_counts_per_rev;
+    float frac[2] = {0.0f, 0.0f};
+    unsigned ping = 0U, guard = 0U;
+    while (c->state == LF_PROBING && ++guard < 80000U) {
+        if (c->probe_phase == LF_PROBE_LASER || c->probe_phase == LF_PROBE_COMPLETE_BEEPS) break;
+        if (++ping >= 12U) { /* 12 × 5 ms = 60 ms：与 board.c TIM17 超声触发节拍一致 */
+            ping = 0U;
+            uint16_t d = synth_side_echo(w, c->odo.x_mm);
+            in->obstacle_mm = d;
+            in->obstacle_valid = d != 0U;
+        }
+        float v[2] = {0.0f, 0.0f};
+        if (push && c->probe_phase == LF_PROBE_SIDE_SCAN) {
+            /* 手推模式：人跟着控制器的 FWD/REV 子状态来回推 */
+            float dir = c->side_stage == (uint8_t)LF_SIDE_FWD ? 1.0f : -1.0f;
+            v[0] = v[1] = push_mm_s * dir;
+        } else if (!push) {
+            v[0] = c->target_mm_s[0];
+            v[1] = c->target_mm_s[1];
+        }
+        for (unsigned i = 0; i < 2U; ++i) {
+            float counts = v[i] * 0.005f / mm_per_count + frac[i];
+            int16_t whole = (int16_t)(counts >= 0.0f ? floorf(counts) : ceilf(counts));
+            frac[i] = counts - (float)whole;
+            in->encoder_delta[i] = whole;
+        }
+        *now += 5U;
+        lf_step(c, in, *now, 0.005f);
+    }
+    assert(guard < 80000U);
+}
+
+/** @brief 侧扫用例公共断言：两边界齐、宽度 γ 补偿正确、中点误差在容差内、宽窄分类正确 */
+static void side_expect(const LfController *c, float center_mm, float half_w_mm, float mid_tol,
+                        float w_tol) {
+    assert(c->side_edges == 2U);
+    assert(c->face.valid);
+    assert(fabsf(c->face.w - 2.0f * half_w_mm) <= w_tol);
+    assert(fabsf(c->face.s_m - center_mm) <= mid_tol);
+    assert(c->face.kind == (half_w_mm < 50.0f ? 0U : 1U));
+}
+
+/**
+ * M2：侧视横扫。合成回波按「波束足印 ∩ 面区间」生成（γ=7.5°，与固件默认 probe_beam_half_deg 一致），覆盖 12 组场景：
+ *   宽面居中（含 SIDE_MOVE 实际到位检查）、宽面+复测（含 side_warn=2、LASER 保持 side_us）、
+ *   偏心 40 mm、窄面、车不平行 8°（斜率拟合必须吸收漂移）、15% 丢帧×3 种子、面外背景墙、
+ *   近距背景（band<dev<jump，不许误判边界）、手推台架模式、完全无回波、
+ *   SIDE_SCAN 失败→退回原点重扫→停机、SIDE_LOCK 的 rho+pan_x 自检失败→FAIL+停机、
+ *   M2 自动流程保持 M1（AIM→LASER，不进侧扫）。
+ * 另含 11 个新参数越界校验与 5 个新相位名。
+ * 判据来自《方案》§12 / 《接口契约》§8：宽面 |s_m|<3 mm、w=150±8；偏心 |s_m-40|<5；
+ * 窄面 |s_m|<5 且判窄；不平行 |s_m|<5；15% 丢帧不误判边界；激光必须保持扫描侧角（性质①）。
+ */
+static void probeside(void) {
+    /* ① 宽面居中：±75 mm、h=180、σ=2 mm、10% 丢帧（关复测，验证基本流程 + SIDE_MOVE 到位） */
+    {
+        LfController c; LfInput in; uint32_t now;
+        SynthSide w = {0.0f, 75.0f, 180.0f, 0.0f, 7.5f, 2.0f, 0.10f, 0.0f};
+        side_start(&c, &in, &now, false, false, 2400U);
+        side_run(&c, &in, &now, &w, false, 0.0f);
+        assert(c.probe_phase == LF_PROBE_LASER);
+        assert(c.side_locked == 1U);
+        side_expect(&c, 0.0f, 75.0f, 3.0f, 8.0f);
+        assert(fabsf(c.face.h - 180.0f) < 5.0f);
+        assert(fabsf(c.odo.x_mm - c.face.s_m) < 4.0f); /* SIDE_MOVE 确实开到了中点 */
+        assert(c.face.id == 0U);
+    }
+    /* ② 宽面居中 + 发射前复测：SIDE_VERIFY 跑完、两次中点一致 */
+    {
+        LfController c; LfInput in; uint32_t now;
+        SynthSide w = {0.0f, 75.0f, 180.0f, 0.0f, 7.5f, 2.0f, 0.10f, 0.0f};
+        side_start(&c, &in, &now, true, false, 2300U);
+        /* 把 AIM 的"最佳角"故意设成中位 1500：激光阶段若误用 best_servo_us 就会被下面一条断言抓住 */
+        c.best_servo_us = c.cfg.servo_center_us;
+        side_run(&c, &in, &now, &w, false, 0.0f);
+        assert(c.probe_phase == LF_PROBE_LASER);
+        assert(c.side_verify_done == 1U);
+        assert(c.side_warn == 2U); /* 2 = 复测一致、已取平均 */
+        side_expect(&c, 0.0f, 75.0f, 3.0f, 8.0f);
+        assert(fabsf(c.odo.x_mm - c.face.s_m) < 4.0f);
+        /* 《方案》§3.3 性质①：发射必须保持扫描时的 side_us（而不是 AIM 的 best_servo_us） */
+        tick(&c, &in, &now, 1U);
+        assert(c.out.servo_us == 2300U);
+        assert(c.out.laser && c.out.park_lamp);
+    }
+    /* ③ 宽面偏心 40 mm：中点必须跟着偏 */
+    {
+        LfController c; LfInput in; uint32_t now;
+        SynthSide w = {40.0f, 75.0f, 180.0f, 0.0f, 7.5f, 2.0f, 0.10f, 0.0f};
+        side_start(&c, &in, &now, false, false, 2400U);
+        side_run(&c, &in, &now, &w, false, 0.0f);
+        assert(c.probe_phase == LF_PROBE_LASER);
+        side_expect(&c, 40.0f, 75.0f, 5.0f, 8.0f);
+        assert(fabsf(c.odo.x_mm - 40.0f) < 5.0f);
+    }
+    /* ④ 窄面 ±25 mm：补偿后 50 mm，必须判为窄面 */
+    {
+        LfController c; LfInput in; uint32_t now;
+        SynthSide w = {0.0f, 25.0f, 180.0f, 0.0f, 7.5f, 2.0f, 0.10f, 0.0f};
+        side_start(&c, &in, &now, false, false, 2400U);
+        side_run(&c, &in, &now, &w, false, 0.0f);
+        assert(c.probe_phase == LF_PROBE_LASER);
+        side_expect(&c, 0.0f, 25.0f, 5.0f, 8.0f);
+    }
+    /* ④b 远距离 h=300 mm + 复测：复测行程必须按 h·tanγ（≈39.5 mm）与确认距离动态算，
+     *      固定 w/2+50 会在边界确认完成前撞上限；REV 也必须相对原点对称，否则折返点再走 260 mm 不够 */
+    {
+        LfController c; LfInput in; uint32_t now;
+        SynthSide w = {0.0f, 75.0f, 300.0f, 0.0f, 7.5f, 2.0f, 0.10f, 0.0f};
+        side_start(&c, &in, &now, true, false, 2400U);
+        side_run(&c, &in, &now, &w, false, 0.0f);
+        assert(c.probe_phase == LF_PROBE_LASER);
+        side_expect(&c, 0.0f, 75.0f, 5.0f, 8.0f);
+        assert(fabsf(c.face.h - 300.0f) < 6.0f);
+        assert(c.side_warn == 2U); /* 复测成功且取平均 */
+    }
+    /* ⑤ 车不平行 8°（tan8°≈0.14，比实车 3~5° 更狠）：h 随 s 漂移 ±14 mm，
+     *    面内判据必须靠 8 点拟合（含斜率 k）把它吃掉、不能判成外点 */
+    {
+        LfController c; LfInput in; uint32_t now;
+        SynthSide w = {0.0f, 75.0f, 180.0f, 0.1405f, 7.5f, 2.0f, 0.10f, 0.0f};
+        side_start(&c, &in, &now, false, false, 2400U);
+        side_run(&c, &in, &now, &w, false, 0.0f);
+        assert(c.probe_phase == LF_PROBE_LASER);
+        side_expect(&c, 0.0f, 75.0f, 5.0f, 8.0f);
+    }
+    /* ⑥ 15% 丢帧 × 3 个随机种子：单帧/双帧丢回波不许被当成边界 */
+    for (unsigned seed = 0; seed < 3U; ++seed) {
+        LfController c; LfInput in; uint32_t now;
+        SynthSide w = {0.0f, 75.0f, 180.0f, 0.0f, 7.5f, 2.0f, 0.15f, 0.0f};
+        g_synth_rng = 20261122U + seed * 7919U;
+        side_start(&c, &in, &now, false, false, 2400U);
+        side_run(&c, &in, &now, &w, false, 0.0f);
+        assert(c.probe_phase == LF_PROBE_LASER);
+        side_expect(&c, 0.0f, 75.0f, 5.0f, 8.0f);
+    }
+    /* ⑦ 邻面/背景回波：面外 60 mm 处有墙，不许把墙当边界，也不许把宽度扫大 */
+    {
+        LfController c; LfInput in; uint32_t now;
+        SynthSide w = {0.0f, 75.0f, 180.0f, 0.0f, 7.5f, 2.0f, 0.10f, 240.0f};
+        side_start(&c, &in, &now, false, false, 2400U);
+        side_run(&c, &in, &now, &w, false, 0.0f);
+        assert(c.probe_phase == LF_PROBE_LASER);
+        side_expect(&c, 0.0f, 75.0f, 5.0f, 8.0f);
+    }
+    /* ⑧ 台架手推模式：电机断电、人工跟 FWD/REV 来回推，找齐边界后进完成提示 */
+    {
+        LfController c; LfInput in; uint32_t now;
+        SynthSide w = {0.0f, 75.0f, 180.0f, 0.0f, 7.5f, 2.0f, 0.10f, 0.0f};
+        side_start(&c, &in, &now, false, true, 2400U);
+        side_run(&c, &in, &now, &w, true, 40.0f);
+        assert(c.probe_phase == LF_PROBE_COMPLETE_BEEPS);
+        assert(c.side_push == 1U);
+        side_expect(&c, 0.0f, 75.0f, 5.0f, 8.0f);
+    }
+    /* ⑨ 完全无回波：SIDE_LOCK 超时 -> 台架模式直接优雅停机，不许崩 */
+    {
+        LfController c; LfInput in; uint32_t now;
+        SynthSide dead = {1000.0f, 75.0f, 180.0f, 0.0f, 7.5f, 0.0f, 0.0f, 0.0f};
+        side_start(&c, &in, &now, false, false, 2400U);
+        side_run(&c, &in, &now, &dead, false, 0.0f);
+        assert(c.state != LF_PROBING && c.fault == LF_OK);
+        assert(c.side_locked == 0U);
+        tick(&c, &in, &now, 30U);
+        assert(c.state == LF_STOPPED);
+    }
+    /* ⑨b SIDE_SCAN 失败 → 退回本遍扫描原点重扫一次 → 仍失败 → 优雅停机
+     *     （failure 时车已跑出 200+ mm，这条"先回原点再重扫"的路径最容易写错） */
+    {
+        LfController c; LfInput in; uint32_t now;
+        SynthSide w = {0.0f, 75.0f, 180.0f, 0.0f, 7.5f, 2.0f, 0.10f, 0.0f};
+        side_start(&c, &in, &now, false, false, 2400U);
+        c.cfg.probe.side_reach_mm = 80.0f; /* 真实边界在 ±98.7 mm，reach 不够 → 两次都必然失败 */
+        side_run(&c, &in, &now, &w, false, 0.0f);
+        assert(c.state != LF_PROBING && c.fault == LF_OK);
+        assert(c.side_retry == 1U); /* 失败一次 + 退回原点重扫一次 */
+        assert((c.side_event & (uint8_t)LF_SIDE_EVENT_FAIL) != 0U);
+        assert((c.side_event & (uint8_t)LF_SIDE_EVENT_EDGE) == 0U); /* 一个边界都没扫到 */
+        tick(&c, &in, &now, 30U);
+        assert(c.state == LF_STOPPED);
+    }
+    /* ⑨c 面外回波只比 h 远 20 mm（落在 band=15 与 jump=40 之间的歧义带）：不许当成边界，
+     *     扫到 reach 仍找不到边界 → 重扫一次 → 停机（宁可这一面失败，也不拿假边界算中点） */
+    {
+        LfController c; LfInput in; uint32_t now;
+        SynthSide w = {0.0f, 75.0f, 180.0f, 0.0f, 7.5f, 2.0f, 0.10f, 200.0f};
+        side_start(&c, &in, &now, false, false, 2400U);
+        side_run(&c, &in, &now, &w, false, 0.0f);
+        assert(c.state != LF_PROBING && c.fault == LF_OK);
+        assert(c.side_retry == 1U);
+        assert((c.side_event & (uint8_t)LF_SIDE_EVENT_FAIL) != 0U);
+        tick(&c, &in, &now, 30U);
+        assert(c.state == LF_STOPPED);
+    }
+    /* ⑩ M2 的自动流程必须保持 M1 行为：默认 probe_scan_mode=1，但侧扫只能从台架入口进入，
+     *     所以「<15cm 停车 → probe」在 AIM 成功后直接进 LASER，不会去侧甩舵机/误锁邻墙 */
+    {
+        LfController c; ready(&c); uint32_t now = 0;
+        LfInput in = input(3000, 500, 500, 3000);
+        in.obstacle_valid = true; in.obstacle_mm = 130U;
+        tick(&c, &in, &now, 2U);
+        assert(c.state == LF_OBSTACLE_STOP);
+        assert(lf_start_probe(&c, now));
+        assert(c.cfg.probe.scan_mode == 1U); /* 默认就是侧视模式 */
+        aim_run(&c, &in, &now, 0.0f, 150.0f, 75.0f, 2.0f, 0.10f);
+        assert(c.probe_phase == LF_PROBE_LASER); /* M2：自动流程 = M1（不进侧扫） */
+        assert(c.side_locked == 0U);
+        assert((c.side_event & (uint8_t)LF_SIDE_EVENT_EDGE) == 0U);
+        assert(c.face.valid);
+    }
+    /* ⑩b 台架 SIDE_LOCK 的 rho+pan_x 自检分支：h 本身落在 [80,350] 但和 rho+pan_x 差 80 mm，
+     *      必须拒绝、不写 h、置 FAIL 并停机（这是「转错角/认错面」的唯一报警） */
+    {
+        LfController c; LfInput in; uint32_t now;
+        side_start(&c, &in, &now, false, false, 2400U);
+        c.face.valid = true;   /* 注入 AIM 面模型（真实台架入口没有 AIM，故 pred=0 跳过自检） */
+        c.face.rho = 150.0f;   /* pred = rho + pan_x = 180 mm */
+        unsigned guard = 0U, ping = 0U;
+        while (c.state == LF_PROBING && ++guard < 2000U) {
+            if (++ping >= 12U) { ping = 0U; in.obstacle_mm = 100U; in.obstacle_valid = true; }
+            in.encoder_delta[0] = in.encoder_delta[1] = 0;
+            now += 5U;
+            lf_step(&c, &in, now, 0.005f);
+        }
+        assert(guard < 2000U);
+        assert(c.side_locked == 0U);
+        assert(c.side_h == 0.0f);                              /* 没通过自检不许写 h */
+        assert((c.side_event & (uint8_t)LF_SIDE_EVENT_FAIL) != 0U);
+        tick(&c, &in, &now, 30U);
+        assert(c.state == LF_STOPPED && c.fault == LF_OK);
+    }
+    /* ⑪ 配置校验：M2 新增参数越界必须被拒 */
+    {
+        LfConfig def = lf_default_config();
+        assert(lf_config_valid(&def));
+        LfConfig bad = def; bad.probe.side_band_mm = 2.0f; assert(!lf_config_valid(&bad));
+        bad = def; bad.probe.side_jump_mm = 5.0f; assert(!lf_config_valid(&bad));
+        bad = def; bad.probe.side_jump_mm = bad.probe.side_band_mm; assert(!lf_config_valid(&bad));
+        bad = def; bad.probe.side_speed_mm_s = 5.0f; assert(!lf_config_valid(&bad));
+        bad = def; bad.probe.side_reach_mm = 20.0f; assert(!lf_config_valid(&bad));
+        bad = def; bad.probe.side_us = 500U; assert(!lf_config_valid(&bad));
+        bad = def; bad.probe.side_us = 2500U; assert(!lf_config_valid(&bad));
+        bad = def; bad.probe.scan_mode = 2U; assert(!lf_config_valid(&bad));
+        bad = def; bad.probe.fit_rms_mm = 50.0f; assert(!lf_config_valid(&bad));
+        bad = def; bad.probe.beam_half_deg = 30.0f; assert(!lf_config_valid(&bad));
+        bad = def; bad.probe.pan_x_mm = 200.0f; assert(!lf_config_valid(&bad));
+    }
+    /* ⑫ 新相位名（日志解析用）与台架入口守卫 */
+    assert(!strcmp(lf_probe_phase_name(LF_PROBE_TURN_PAR), "TURN_PAR"));
+    assert(!strcmp(lf_probe_phase_name(LF_PROBE_SIDE_LOCK), "SIDE_LOCK"));
+    assert(!strcmp(lf_probe_phase_name(LF_PROBE_SIDE_SCAN), "SIDE_SCAN"));
+    assert(!strcmp(lf_probe_phase_name(LF_PROBE_SIDE_MOVE), "SIDE_MOVE"));
+    assert(!strcmp(lf_probe_phase_name(LF_PROBE_LEG), "LEG"));
+    {
+        LfController c;
+        lf_init(&c);
+        c.cal.valid = true;
+        c.cfg.probe.scan_mode = 0U;
+        assert(!lf_start_side_probe(&c, 0U, false)); /* 角度法模式下台架侧扫入口必须拒绝 */
+    }
+}
 /** M3：车体对正 SQUARE + 偏心挪车 ALIGN。 */
 static void probeturn(void) { probe_pending("probeturn"); }
 /** M4：切线绕行（edge1/edge2 由实测值计算）。 */
@@ -584,7 +906,7 @@ int main(int argc,char **argv) {
     else if(!strcmp(name,"probe"))probe();
     else if(!strcmp(name,"probeaim"))probeaim();
     else if(!strcmp(name,"probefit"))probefit();
-    else if(!strcmp(name,"probecenter"))probecenter();
+    else if(!strcmp(name,"probeside"))probeside();
     else if(!strcmp(name,"probeturn"))probeturn();
     else if(!strcmp(name,"probetour"))probetour();
     else if(!strcmp(name,"motorcal"))motorcal();
