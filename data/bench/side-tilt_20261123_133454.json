@@ -1,0 +1,137 @@
+{
+  "case": "side-tilt",
+  "ok": false,
+  "checks": [
+    {
+      "name": "scan_mode=1（侧扫模式 B）",
+      "ok": true,
+      "detail": "scan=1"
+    },
+    {
+      "name": "side_left=1",
+      "ok": true,
+      "detail": "left=1"
+    },
+    {
+      "name": "side_us=600",
+      "ok": true,
+      "detail": "us=600"
+    },
+    {
+      "name": "前置摆角：MOVE_DONE.mode=TURN",
+      "ok": true,
+      "detail": "TURN"
+    },
+    {
+      "name": "前置摆角：目标角与命令一致",
+      "ok": true,
+      "detail": "target=10.0 cmd=10.0"
+    },
+    {
+      "name": "前置摆角：到位误差 <= 2.0°",
+      "ok": true,
+      "detail": "actual=10.16 err=+0.16"
+    },
+    {
+      "name": "前置摆角：未超时",
+      "ok": true,
+      "detail": "timeout=0"
+    },
+    {
+      "name": "SIDE_LOCK ok=1（锁面成功）",
+      "ok": false,
+      "detail": "ok=0"
+    },
+    {
+      "name": "舵机用的就是配置的 side_us",
+      "ok": true,
+      "detail": "us=600"
+    },
+    {
+      "name": "h1 在物理有效区间 [80, 450] mm",
+      "ok": true,
+      "detail": "139.0 in [80, 450]"
+    },
+    {
+      "name": "h2 在物理有效区间 [80, 450] mm",
+      "ok": true,
+      "detail": "199.0 in [80, 450]"
+    },
+    {
+      "name": "h3 在物理有效区间 [80, 450] mm",
+      "ok": false,
+      "detail": "0.0 in [80, 450]"
+    },
+    {
+      "name": "warn=0（测斜无告警）",
+      "ok": true,
+      "detail": "warn=0"
+    },
+    {
+      "name": "平移段真的走了约 60 mm（ds >= 50）",
+      "ok": true,
+      "detail": "ds=60"
+    },
+    {
+      "name": "h2 与 h1 独立且等于预期 Δh=-10.6 mm",
+      "ok": false,
+      "detail": "h2-h1=+60.0"
+    },
+    {
+      "name": "h2 确实被重新采样（h2 不等于 h1）",
+      "ok": true,
+      "detail": "h1=139.0 h2=199.0"
+    },
+    {
+      "name": "corr 符号/幅度正确（期望 -10.0 ±4°）",
+      "ok": false,
+      "detail": "corr=+15.0°"
+    },
+    {
+      "name": "收到 PROBE_SIDE_MID",
+      "ok": false,
+      "detail": "侧扫没跑完"
+    },
+    {
+      "name": "没有 PROBE_SIDE_FAIL",
+      "ok": false,
+      "detail": "PROBE_SIDE_FAIL,lock_stage=4,edges=0,retry=0,h=0.0"
+    },
+    {
+      "name": "最终回到停机状态且无故障",
+      "ok": true,
+      "detail": "EVENT 869849 STOPPED OK"
+    }
+  ],
+  "metrics": {
+    "pre_skew": {
+      "cmd_deg": 10.0,
+      "target": 10.0,
+      "actual_deg": 10.16,
+      "ms": 187,
+      "timeout": 0,
+      "err_deg": 0.16000000000000014
+    },
+    "skew_deg": 10.0,
+    "left": true,
+    "side_us": 600,
+    "h": 0.0,
+    "h1": 139.0,
+    "h2": 199.0,
+    "h3": 0.0,
+    "corr_deg": 15.0,
+    "warn": 0,
+    "ds_mm": 60.0,
+    "pred": 0.0,
+    "expect_dh_mm": -10.579618842507898,
+    "expect_corr_deg": -10.0,
+    "dh_mm": 60.0
+  },
+  "notes": [
+    "摆位：箱子在车体左侧，云台轴距面 180~400 mm；车轴与面夹角 = skew=+10.0°"
+  ],
+  "elapsed_ms": 9169.75530000127,
+  "port": "COM3",
+  "saved_at": "2026-11-23T13:34:54",
+  "log_file": "side-tilt_20261123_133454.log"
+}

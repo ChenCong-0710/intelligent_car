@@ -20,7 +20,12 @@
 > - ✅ **M4 Gate 0 实车（2026-11-23，已烧录）**：**G0-2 TURN_PAR 通过**（`cmd=-90.4 / ach=-91.0`，误差 0.6°，`SIDE_LOCK h=192 ok=1`）；**G0-4 faces=2 自动通过**（面1 `w=182.0 WIDE` → LEG `DRIVE1 302.8 / TURN 90.7 / DRIVE2 172.8` → 面2 `w=65.9 NARROW` → COMPLETE，无 FAIL）；**G0-3 窄→宽通过**（不重新 `side`，窄面 `w=71.2 NARROW` → 下一面 `w=170.8 WIDE h=160 ok=1`）。Gate 0 三项齐。
 >   这一轮新增：LEG 侧距连续采样 `PROBE_LEG,seg=PROX/PROX2`、`SIDE_LOCK` 沿面 60 mm 平移测斜、`seg=BACKUP` 收尾倒回 40 mm、宽窄判据 130→100、锁定容差 40→70 mm。记录见 **[docs/M4-gate0-20261123.md](docs/M4-gate0-20261123.md)**。
 > - ✅ **M4e 残余偏航一次性修正（2026-11-23 已实现 + 实车验证，M4e 判据 PASS）**：删掉 `SIDE_MOVE` 到位后的原地转（**扫描开始到 LASER 结束之间不许转身**）、`h_leg` 去掉 `side_k`、测斜死区 `1.5°→7°`、窄面基线 30 mm、每面最多转 1 次；`PROBE_SIDE_LOCK` 只追加 `eps=/shift=`。提交 `2e00745`/`8575ecd`/`a6ee2fe`/`a75e1b0`；主机单测 **37/37**、Debug 112312 B / Release 105200 B、零告警。**2026-11-23 18:04 烧录、18:12~18:21 跑 4 次 4 面全流程**：face0 `eps=-2.9°` 死区不转、face2 `eps=+14.9°` 只转一次、窄面 `shift=30`（`warn=8` 按设计跳过）、`SIDE_MID→LASER` 无 `PROBE_TURN` 且单拍航向跳变 ≤0.5° —— **三条判据 PASS**；有一次跑到 3 面激光（87.5 s）。**全 4 面未跑通不是代码回归**：摆位超 AIM 包络（`phi=25.9/31.7°`）、烧录后 RAM 电机标定丢失（`MCAL=0` 时侧扫航向漂 10.3°）、场地中间撞到无关物体；逐条见 `docs/validation.json` 的 `m4e.real_car.open_issues`。A/B/C 受控摆位组仍欠一次专测。
-> - 🚀 **下一阶段 M4**：四面循环、回 AIM 重试、`h_pred`/`pred` 跨面、面宽分类、`probetour`、参数/Flash 8；计划见根目录 **[M4计划_评审与修订.md](../M4计划_评审与修订.md)**。
+> - ✅ **M4e 四面全流程通过（2026-11-23 22:46，已烧录）**：`faces=4 / laser=10000 ms`，AIM→COMPLETE_BEEPS **145.7 s**（限 180 s）；四面 `SIDE_LOCK ok=1 warn=0`、三段 LEG 全 `stop=E`（DRIVE2 认面事件停车）、转角 90.2/90.1/90.5。
+>   本轮把"测量链"砍到最短：DRIVE2 认到面即停（再补 `d_B/2`+波束足印）、站距锁**首面** `h_ref`（不再逐面 +20 外扩）、
+>   `SIDE_LOCK` 去掉 `|h−pred|` 相对门禁（改 `warn=13`）并加"行进均值兜底(warn=10) / 沿面搜索(warn=11)"、
+>   **关闭扫描后二次微调**（`LF_SIDE_YAW_ENABLE 0`）、去掉 LASER 后 `w>20` 停机门禁。
+>   四面逐项数据与两份日志见 **[docs/validation.json](docs/validation.json)** 的 `m4e.full4_20261123`。遗留：宽度实测散布 −22…+33 mm（`w` 只判宽窄，不进控制）。
+> - 🚀 **下一阶段 M4**：回 AIM 重试、`probetour`、参数/Flash 8；计划见根目录 **[M4计划_评审与修订.md](../M4计划_评审与修订.md)**。
 >   接手先读 **Gate 0**：[docs/M3-task-handover.md](docs/M3-task-handover.md)、[docs/teammate-targeting-handover.md](docs/teammate-targeting-handover.md)。
 
 为了让每位组员无需翻阅底层寄存器即可快速掌握整个项目，所有软件与硬件对接文档均整理在本工作区 `docs/` 目录下：

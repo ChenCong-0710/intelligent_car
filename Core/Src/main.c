@@ -1033,17 +1033,21 @@ int main(void) {
                      * ≈ h_leg + margin：下一面 SIDE_LOCK 实测 h 与它一比就知道"转向/认面"对不对，
                      * 不必等 SIDE_SCAN 去和窄面窗口较劲（2026-11-22 的 389 mm 就是这么漏判的）。
                      * M4e 起 h_leg 就是 side_h（去掉 side_k·s_m，见 probe_leg_tick）：诊断值必须与控制一致。 */
-                    float h_leg = g_lf.side_h;
+                    /* h_pred = 下一面的期望侧距 = 本段 LEG 认面窗口的中心（= 首面站距 h_ref） */
                     board_log("PROBE_LEG,seg=TURN,cmd=%.1f,ach=%.1f,ms=%lu,dir=%c,h_pred=%.0f\r\n",
                               (double)g_lf.turn_cmd_deg, (double)g_lf.turn_ach_deg,
                               (unsigned long)g_lf.turn_ms,
                               g_lf.turn_cmd_deg >= 0.0f ? 'L' : 'R',
-                              (double)(h_leg + LF_LEG_MARGIN_MM));
+                              (double)g_lf.leg_h_expected);
                 }
                 if (leg_ev & (uint8_t)LF_LEG_EVENT_DRIVE2) {
-                    board_log("PROBE_LEG,seg=DRIVE2,len=%.1f,ach=%.1f,hdg=%.2f\r\n",
+                    /* stop：E = 认到面事件停车（s = 认到面时的 DRIVE2 行程）、
+                     *       L = 一直没认到面，走到死算上限 L2 停车。 */
+                    board_log("PROBE_LEG,seg=DRIVE2,len=%.1f,ach=%.1f,hdg=%.2f,stop=%c,s=%.0f\r\n",
                               (double)g_lf.leg_cmd_mm, (double)g_lf.leg_ach_mm,
-                              (double)g_lf.leg_hdg_deg);
+                              (double)g_lf.leg_hdg_deg,
+                              g_lf.leg_stop_reason == 1U ? 'E' : (g_lf.leg_stop_reason == 2U ? 'L' : 'T'),
+                              (double)g_lf.leg_face_s_mm);
                 }
                 if (leg_ev & (uint8_t)LF_LEG_EVENT_PROX) {
                     /* 行进中的侧距轨迹：窄面经过时 h 落在 pred 附近，无关挡块会明显偏小 */
@@ -1289,7 +1293,8 @@ int main(void) {
                 /* 侧视锁定自检结果：h 与 rho + pan_x 的差就是「转角不对/认错面」的唯一报警 */
                 if (previous_probe_phase == LF_PROBE_SIDE_LOCK) {
                     const LfProbeConfig *lp = &g_lf.cfg.probe;
-                    float pred = g_lf.face.rho > 1.0f ? g_lf.face.rho + lp->pan_x_mm : 0.0f;
+                    /* pred 必须读控制器实际用的那个值（面 1~3 是 h_leg+margin，不是 rho+pan_x） */
+                    float pred = g_lf.side_pred_mm;
                     board_log("PROBE_SIDE_LOCK,h=%.1f,pred=%.1f,us=%u,ok=%u,h1=%.1f,h2=%.1f,h3=%.1f,corr=%.1f,warn=%u,ds=%.0f,eps=%.1f,shift=%.0f\r\n",
                               (double)g_lf.side_h, (double)pred, (unsigned)lp->side_us,
                               (unsigned)(g_lf.probe_phase == LF_PROBE_SIDE_SCAN ? 1U : 0U),

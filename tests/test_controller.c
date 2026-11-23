@@ -663,26 +663,30 @@ static void probeside(void) {
         assert((c.side_event & (uint8_t)LF_SIDE_EVENT_EDGE) == 0U);
         assert(c.face.valid);
     }
-    /* ⑩b 台架 SIDE_LOCK 的 rho+pan_x 自检分支：h 本身落在 [80,350] 但和 rho+pan_x 差 80 mm，
-     *      必须拒绝、不写 h、置 FAIL 并停机（这是「转错角/认错面」的唯一报警） */
+    /* ⑩b SIDE_LOCK 的期望值自检已改为**只诊断不拦**（2026-11-23 22:25）：
+     *      h 落在 [80,450] 但和 rho+pan_x 差 80 mm 时照样锁定并进扫描，只记 warn=13。
+     *      理由：LEG 只用 kind 的标称宽窄（不依赖实测 w/h 的绝对值），扫描种子窗口用的是
+     *      实测 h（自洽）；用"死算落点"当门禁会把 21:36（差 5.8 mm）、21:56（差 1.0 mm）
+     *      这种正常落点判死。 */
     {
         LfController c; LfInput in; uint32_t now;
         side_start(&c, &in, &now, false, false, 2400U);
         c.face.valid = true;   /* 注入 AIM 面模型（真实台架入口没有 AIM，故 pred=0 跳过自检） */
-        c.face.rho = 150.0f;   /* pred = rho + pan_x = 180 mm */
-        unsigned guard = 0U, ping = 0U;
-        while (c.state == LF_PROBING && ++guard < 2000U) {
-            if (++ping >= 12U) { ping = 0U; in.obstacle_mm = 100U; in.obstacle_valid = true; }
+        c.face.rho = 150.0f;   /* pred = rho + pan_x = 180 mm；实测 100 → 差 80 */
+        unsigned guard = 0U;
+        while (c.probe_phase != LF_PROBE_SIDE_SCAN && ++guard < 2000U) {
+            in.obstacle_mm = 100U;
+            in.obstacle_valid = true;
             in.encoder_delta[0] = in.encoder_delta[1] = 0;
             now += 5U;
             lf_step(&c, &in, now, 0.005f);
         }
         assert(guard < 2000U);
-        assert(c.side_locked == 0U);
-        assert(c.side_h == 0.0f);                              /* 没通过自检不许写 h */
-        assert((c.side_event & (uint8_t)LF_SIDE_EVENT_FAIL) != 0U);
-        tick(&c, &in, &now, 30U);
-        assert(c.state == LF_STOPPED && c.fault == LF_OK);
+        assert(c.probe_phase == LF_PROBE_SIDE_SCAN);   /* 不再停机 */
+        assert(c.side_locked == 1U);
+        assert(fabsf(c.side_h - 100.0f) < 0.01f);      /* 实测值照样写进去 */
+        assert(c.side_lock_warn == 13U);               /* 超差只留诊断标记 */
+        lf_stop(&c, now);
     }
     /* ⑪ 配置校验：M2 新增参数越界必须被拒 */
     {
@@ -781,34 +785,21 @@ static void probesidetiltoff(void) {
  */
 static void probesideyawfix(void) {
     const float d2r = 3.14159265f / 180.0f;
-    /* ① 10° 必须触发 */
-    {
+    /* 二次微调已整段关闭（LF_SIDE_YAW_ENABLE=0，2026-11-23 22:40）：10° 与 2° 都**不许转**。
+     * 依据：性质①（扫描↔发射同轴）已让残余偏航在光斑处抵消；实测每次它都把 w 弄差
+     * （152.9→140.3、64.2→74.3），22:33 更用 16 mm 的假边算出 −18.4° 把车转飞、整面丢失。
+     * 保留本用例是守住"扫描→发射之间一个角都不许动"这条硬规则。 */
+    for (unsigned k = 0U; k < 2U; ++k) {
+        float tilt_deg = (k == 0U) ? 10.0f : 2.0f;
         LfController c; LfInput in; uint32_t now;
-        SynthSide w = {0.0f, 75.0f, 180.0f, tanf(10.0f * d2r), 7.5f, 2.0f, 0.10f, 0.0f};
+        SynthSide w = {0.0f, 75.0f, 180.0f, tanf(tilt_deg * d2r), 7.5f, 2.0f, 0.10f, 0.0f};
         side_start(&c, &in, &now, true, false, 2400U);
         side_run(&c, &in, &now, &w, false, 0.0f);
         assert(c.probe_phase == LF_PROBE_LASER);
-        assert(c.side_yaw_fix == 2U);                                   /* 触发且只做一次 */
-        assert(fabsf(c.side_yaw_deg) >= 8.0f && fabsf(c.side_yaw_deg) <= 12.0f);
-        assert(fabsf(c.turn_cmd_deg) >= 8.0f);                          /* 真的转了 */
-        assert(fabsf(c.turn_ach_deg - c.turn_cmd_deg) <= 4.0f);
-        /* 注意：SynthSide 的倾斜是"h 随世界 x 线性变化"，与车头朝向无关，
-         * 所以合成世界里"转正"并不能把面变平（真实世界里会）。转完 h 在面内仍有 ±14 mm 的坡，
-         * 宽度因此系统性偏大约 11 mm —— 这是夹具的局限，不是控制缺陷
-         * （实车 probe_fix4 转正后的复测扫 w=145.7，真值 150）。中点不受影响，所以中点仍用 8 mm 卡。 */
-        side_expect(&c, 0.0f, 75.0f, 8.0f, 15.0f);
-    }
-    /* ② 2° 不许触发 */
-    {
-        LfController c; LfInput in; uint32_t now;
-        SynthSide w = {0.0f, 75.0f, 180.0f, tanf(2.0f * d2r), 7.5f, 2.0f, 0.10f, 0.0f};
-        side_start(&c, &in, &now, true, false, 2400U);
-        side_run(&c, &in, &now, &w, false, 0.0f);
-        assert(c.probe_phase == LF_PROBE_LASER);
-        assert(c.side_yaw_fix == 0U);                                   /* 好工况零打扰 */
-        assert(c.turn_start_ms == 0U);                                  /* 没调用 probe_turn_to */
-        assert(fabsf(c.side_yaw_deg) <= 4.0f);
-        side_expect(&c, 0.0f, 75.0f, 5.0f, 8.0f);
+        assert(c.side_yaw_fix == 0U);                     /* 一次都不转 */
+        assert(c.turn_start_ms == 0U);                    /* 没调用 probe_turn_to */
+        if (k == 0U) side_expect(&c, 0.0f, 75.0f, 8.0f, 20.0f);
+        else         side_expect(&c, 0.0f, 75.0f, 5.0f, 8.0f);
     }
 }
 
@@ -920,7 +911,7 @@ static void probepar(void) {
  * M3 LEG：先 side 扫到宽面中点，再 leg 绕到下一面，用独立 truth 位姿断言终点。
  * 用 1.00 / 1.02 两种轮径比例误差，确认「控制器自测 OK」之外真值也落在下一面中心附近。
  */
-static void probeleg(void) {
+static void probeleg_run(bool feed_face) {
     for (unsigned variant = 0; variant < 2U; ++variant) {
         const float scale = variant == 0U ? 1.00f : 1.02f;
         LfController c;
@@ -966,6 +957,10 @@ static void probeleg(void) {
                 frac[i] = counts - (float)whole;
                 in.encoder_delta[i] = whole;
             }
+            /* 侧距：feed_face=false → 无回波，DRIVE2 走 L2 兜底（旧路径原样不动）；
+             * feed_face=true → 恒定给出 h_leg+margin，DRIVE2 第二帧就命中 → 事件停车。 */
+            in.obstacle_valid = feed_face ? 1U : 0U;
+            in.obstacle_mm = feed_face ? (uint16_t)(c.side_h + LF_LEG_MARGIN_MM) : 0U;
             now += 5U;
             lf_step(&c, &in, now, 0.005f);
         }
@@ -975,13 +970,64 @@ static void probeleg(void) {
         assert(c.leg_stage == (uint8_t)LF_LEG_DONE);
         assert((c.leg_event & (uint8_t)LF_LEG_EVENT_DRIVE2) != 0U);
         assert(fabsf(c.leg_turn_ach_deg - 90.0f) < 8.0f);
-        assert(fabsf(c.leg_cmd_mm - c.leg_l2_mm) < 0.01f);
-        /* 真值终点：x = 75 + h + margin = 275；云台轴在下一面中心 y=25，轮轴在 y=25−pan_x=−5 */
-        assert(fabsf(tx - 275.0f) < 15.0f);
-        assert(fabsf(ty + 5.0f) < 15.0f);
         assert(fabsf(tyaw - 1.5707963f) < 0.10f);
+        if (feed_face) {
+            /* 事件停车：转完刚进 DRIVE2 就认到面 → 车几乎没走就停，剩下的交给 SIDE_SCAN。
+             * 21:36 现场的「转完又多开 162 mm」就是这里被死算 L2 拖走的。 */
+            assert(c.leg_face_seen == 1U);
+            assert(c.leg_stop_reason == 1U);
+            /* 认到面后还要补 d_B/2 + 波束足印（窄面 ≈27 mm）才停，不再停在面近边上 */
+            assert(c.leg_ach_mm > 15.0f && c.leg_ach_mm < 80.0f);
+            assert(fabsf(c.leg_cmd_mm - c.leg_ach_mm) < 15.0f);
+            assert(ty < -100.0f);   /* 明显还没到下一面中心 y=−5 */
+        } else {
+            /* 没认到面 → 退回旧路径：走到 L2 死算值，真值终点 x=75+h+margin=275、y=−5 */
+            assert(c.leg_face_seen == 0U);
+            assert(c.leg_stop_reason == 2U);
+            assert(fabsf(c.leg_cmd_mm - c.leg_l2_mm) < 0.01f);
+            /* L1 现在瞄准首面站距 h_ref（不再 +margin）：x = 75 + h_ref */
+            assert(fabsf(tx - (75.0f + c.h_ref_mm)) < 15.0f);
+            assert(fabsf(ty + 5.0f) < 15.0f);
+        }
     }
 }
+
+/**
+ * M4e：SIDE_LOCK 静止无回波时用 LEG 行进中量到的面均值兜底。
+ * 现场 22:08：DRIVE2 行进中侧距 251~263（face_h=242），一停住回波被 66 cm 外的墙抢走并稳定 661，
+ * 全部被 aim_max 400 拒收 → 5 帧凑不齐 → 干等 9 s 超时，第二面白丢。
+ */
+static void probesidefallback(void) {
+    LfController c;
+    LfInput in;
+    uint32_t now = 0;
+    lf_init(&c);
+    in = input(3000, 500, 500, 3000);
+    in.obstacle_valid = 0U;      /* 静止一帧回波都收不到 */
+    in.obstacle_mm = 0U;
+    c.state = LF_PROBING;
+    c.probe_phase = LF_PROBE_SIDE_LOCK;
+    c.side_lock_stage = 0U;
+    c.phase_since = now;
+    c.side_ping_since = now;
+    c.probe_face = 1U;           /* 面 1~3：期望侧距 = h_leg + margin */
+    c.leg_h_expected = 180.0f;
+    c.leg_face2_n = 8U;
+    c.leg_face2_h = 200U;
+    for (unsigned i = 0; i < 700U && c.probe_phase == LF_PROBE_SIDE_LOCK; ++i) {
+        now += 5U;
+        lf_step(&c, &in, now, 0.005f);
+    }
+    assert(c.probe_phase == LF_PROBE_SIDE_SCAN);   /* 兜底后进扫描，不是超时停机 */
+    assert(c.side_lock_warn == 10U);   /* 成功路径会被 probe_side_begin() 清掉 side_warn，看锁存值 */
+    assert(fabsf(c.side_h - 200.0f) < 0.01f);
+    assert(fabsf(c.side_pred_mm - 180.0f) < 0.01f);   /* pred = h_ref（不再 +margin） */
+}
+
+/** M3 LEG：没认到面 → 死算 L2 兜底（真值终点断言）。 */
+static void probeleg(void) { probeleg_run(false); }
+/** M4e LEG：DRIVE2 认到面 → 事件停车（转完立刻停，居中交给 SIDE_SCAN）。 */
+static void probelegevent(void) { probeleg_run(true); }
 
 /** M3：车体对正 SQUARE + 偏心挪车 ALIGN。 */
 static void probeturn(void) { probe_pending("probeturn"); }
@@ -1194,6 +1240,8 @@ int main(int argc,char **argv) {
     else if(!strcmp(name,"probemovenoturn"))probemovenoturn();
     else if(!strcmp(name,"probepar"))probepar();
     else if(!strcmp(name,"probeleg"))probeleg();
+    else if(!strcmp(name,"probelegevent"))probelegevent();
+    else if(!strcmp(name,"probesidefallback"))probesidefallback();
     else if(!strcmp(name,"probeturn"))probeturn();
     else if(!strcmp(name,"probetour"))probetour();
     else if(!strcmp(name,"motorcal"))motorcal();

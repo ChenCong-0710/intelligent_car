@@ -79,6 +79,7 @@ static float probe_scan_us_at(const LfController *c, float index);
 /* M2 侧视横扫的辅助函数定义在模块 8b（文件靠后），这里先给 lf_start_side_probe 用到的两个做前置声明 */
 static void probe_motion_reset(LfController *c);
 static void probe_side_lock_begin(LfController *c, uint32_t now);
+static bool probe_side_width_ok(float w);
 
 /** @brief 切换四面打靶子阶段，同时记录该阶段起始时间戳、起始里程与起始航向角 */
 static void change_probe_phase(LfController *c, LfProbePhase p, uint32_t now) {
@@ -403,6 +404,7 @@ bool lf_start_side_probe(LfController *c, uint32_t now, bool push) {
      * 只做 h∈[80,350] 的物理范围检查（人工摆位的平行度由人保证）。 */
     memset(&c->face, 0, sizeof(c->face));
     c->probe_face = 0U;
+    c->h_ref_mm = 0.0f;
     c->best_servo_us = c->cfg.probe.side_us;
     c->best_obstacle_mm = UINT16_MAX;
     c->side_bench = 1U;
@@ -1443,9 +1445,14 @@ static bool probe_side_center(LfController *c) {
  *        现在把判据放在**扫描结束**处（扫描行程 ±90 mm 起），才是它该在的位置。
  */
 static bool probe_side_yaw_should_fix(LfController *c) {
+    if (!LF_SIDE_YAW_ENABLE) return false;                   /* 总开关（见 LF_SIDE_YAW_ENABLE） */
     if (c->side_yaw_fix != 0U) return false;                 /* 每面只做一次 */
     if (c->side_fit_n < LF_SIDE_YAW_MIN_SAMPLES) return false;
     if (c->side_fit_max_s - c->side_fit_min_s < LF_SIDE_YAW_MIN_SPAN_MM) return false;
+    /* 面本身都没量对就不许用它的斜率去转车：2026-11-23 22:33 第 4 面只擦到窄面的一条边，
+     * w=16.4（两条边相距 16.5 mm），拟合却给出 atan(k)=−18.4°，车被转 18.4° 后重扫一条边
+     * 都没有 —— 整面丢失。斜率只在"确实横穿了一整个面"时才有物理意义。 */
+    if (!probe_side_width_ok(c->face.w)) return false;
     float n = (float)c->side_fit_n;
     float den = n * c->side_fit_sum_ss - c->side_fit_sum_s * c->side_fit_sum_s;
     if (den < 1.0e3f) return false;                           /* 退化：样本都挤在一点 */
@@ -1558,9 +1565,27 @@ static LfSideResult probe_side_scan_tick(LfController *c, const LfInput *in, uin
     return LF_SIDE_SCAN_RUN;
 }
 
+/**
+ * @brief 启动一次 SIDE_LOCK 沿面搜索：下一拍进 stage 7 前进 LF_SIDE_SEEK_MM 再重采
+ * @note  只在 probe_face>0（刚从 LEG 过来）才有意义；面 0 没有前序里程可依，照旧直接失败。
+ */
+static void probe_side_seek_begin(LfController *c) {
+    c->side_seek_n = (uint8_t)(c->side_seek_n + 1U);
+    c->side_seek_start_mm = c->odo.distance_mm;
+    c->side_warn = 11U;
+    probe_motion_reset(c);
+    c->side_lock_stage = 7U;
+    c->side_h1 = 0.0f;
+    c->side_ring_n = 0U;
+}
+
 /** @brief 进入 SIDE_LOCK：清空锁定/扫描状态，让 60 ms 采样节拍与 SIDE_MOVE 子状态从头开始 */
 static void probe_side_lock_begin(LfController *c, uint32_t now) {
     c->side_h = 0.0f;
+    c->side_pred_mm = 0.0f;
+    c->side_seek_n = 0U;
+    c->side_seek_start_mm = 0.0f;
+    c->side_lock_sample_since = now;
     c->side_target = 0.0f;
     c->side_move_stage = (uint8_t)LF_SIDE_MOVE_DRIVE;
     c->side_verify_done = 0U;
@@ -1728,7 +1753,12 @@ static LfLegResult probe_leg_tick(LfController *c, const LfInput *in, uint32_t n
         float w_nom = (c->leg_kind == 0U) ? LF_BOX_SHORT_MM : LF_BOX_LONG_MM;
         float d_b = (c->leg_kind == 0U) ? LF_BOX_LONG_MM : LF_BOX_SHORT_MM;
         /* L1 从轮轴起算：SIDE_MOVE 把轮轴停在面中心后方 pan_x，云台轴才在面中心 */
-        c->leg_l1_mm = 0.5f * w_nom + pr->pan_x_mm + h_leg + LF_LEG_MARGIN_MM;
+        /* 站距基准用**首面**实测的 h_ref，不用本面的 h、也不再 +margin：
+         * 每面都"比上一面再远 20 mm"，再加上转向滑移，会一级级往外走 ——
+         * 2026-11-23 22:38 实测 160 → 206 → 298，第 3 面窄面已经在 30 cm 外，
+         * 扫出来的 w = −20.3（两条边反序），整面丢失。 */
+        if (c->h_ref_mm < 1.0f) c->h_ref_mm = h_leg;
+        c->leg_l1_mm = 0.5f * w_nom + pr->pan_x_mm + c->h_ref_mm;
         /* L2 要让**云台轴**落在下一面中心，所以减掉 pan_x；否则窄面会从面外 30 mm 起扫 */
         c->leg_l2_mm = h_leg + 0.5f * d_b - pr->pan_x_mm;
         if (c->leg_l2_mm < 20.0f) c->leg_l2_mm = 20.0f;
@@ -1751,7 +1781,11 @@ static LfLegResult probe_leg_tick(LfController *c, const LfInput *in, uint32_t n
         c->leg_prox_now = 0U;
         c->leg_prox_now_ok = 0U;
         c->leg_backup_start_mm = 0.0f;
-        c->leg_h_expected = h_leg;
+        c->leg_h_expected = c->h_ref_mm;   /* 下一面的期望站距 = 首面基准（与 L1 一致） */
+        c->leg_face_s_mm = 0.0f;
+        c->leg_face_seen = 0U;
+        c->leg_face_cnt = 0U;
+        c->leg_stop_reason = 0U;
         c->leg_cmd_mm = 0.0f;
         c->leg_ach_mm = 0.0f;
         c->leg_hdg_deg = 0.0f;
@@ -1775,6 +1809,20 @@ static LfLegResult probe_leg_tick(LfController *c, const LfInput *in, uint32_t n
                 fabsf((float)h - c->leg_h_expected) <= LF_LEG_PROX_FACE_BAND_MM) {
                 c->leg_face2_sum += h;
                 c->leg_face2_n = (uint16_t)(c->leg_face2_n + 1U);
+            }
+            /* 「找突变」认面（只认 DRIVE2 段：DRIVE1 沿上一面走，看到的不是下一面）：
+             * 连续 LF_LEG_FACE_CONFIRM 帧落在 h_leg+margin±band → 下一面已经进侧视，锁存落点。 */
+            if (c->leg_stage == (uint8_t)LF_LEG_DRIVE2 && c->leg_face_seen == 0U) {
+                float h_pred = c->leg_h_expected + LF_LEG_MARGIN_MM;
+                if (fabsf((float)h - h_pred) <= LF_LEG_FACE_BAND_MM) {
+                    if (c->leg_face_cnt < 255U) ++c->leg_face_cnt;
+                    if (c->leg_face_cnt >= LF_LEG_FACE_CONFIRM) {
+                        c->leg_face_seen = 1U;
+                        c->leg_face_s_mm = c->odo.distance_mm - c->leg_turn_mm;
+                    }
+                } else {
+                    c->leg_face_cnt = 0U;
+                }
             }
             if ((c->leg_prox_n & 1U) == 0U) c->leg_event |= (uint8_t)LF_LEG_EVENT_PROX;
         }
@@ -1824,8 +1872,24 @@ static LfLegResult probe_leg_tick(LfController *c, const LfInput *in, uint32_t n
     }
     case LF_LEG_DRIVE2: {
         float ach = c->odo.distance_mm - c->leg_turn_mm;
-        if (ach >= c->leg_l2_mm) {
-            c->leg_cmd_mm = c->leg_l2_mm;
+        /* 停车目标（事件优先，死算只是上限）：
+         *   ① 认到面（h 进 h_leg+margin±band）→ 停在「面近边 + d_B/2 + 波束足印」，
+         *      让云台轴落在面中心附近；只停在近边上时波束只压住面的一半，窄面回波很弱。
+         *   ② 一直没认到面 → 窄面再往前找 LF_LEG_NARROW_SEARCH_MM（宽面可见窗口本来就宽，不加）。
+         * 之后 SIDE_LOCK 自己还有 3 次沿面搜索（LF_SIDE_SEEK_*）兜底。 */
+        float d_b = (c->leg_kind == 0U) ? LF_BOX_LONG_MM : LF_BOX_SHORT_MM;
+        float stop_target = c->leg_l2_mm;
+        bool stop_event = false;
+        if (c->leg_face_seen != 0U) {
+            stop_event = true;
+            float adv = c->leg_face_s_mm + 0.5f * d_b + probe_side_footprint(c);
+            stop_target = (adv < c->leg_l2_mm) ? adv : c->leg_l2_mm;
+        } else if (c->leg_kind == 0U) {
+            stop_target = c->leg_l2_mm + LF_LEG_NARROW_SEARCH_MM;
+        }
+        if (ach >= stop_target) {
+            c->leg_stop_reason = stop_event ? 1U : 2U;
+            c->leg_cmd_mm = stop_target;
             c->leg_ach_mm = ach;
             c->leg_hdg_deg = (c->odo.heading_rad - c->leg_hdg2) * 57.2957795f;
             /* DRIVE2 结束时给窄面侧距统计：face_n>0 说明行进中确实看到过面（h≈pred），
@@ -1852,8 +1916,10 @@ static LfLegResult probe_leg_tick(LfController *c, const LfInput *in, uint32_t n
         }
         if ((uint32_t)(now - c->leg_drive_since) >= LF_LEG_DRIVE_TIMEOUT_MS)
             return probe_leg_fail(c, 4U);
+        /* DRIVE2 兼「认面搜索」：降速到 LF_LEG_SEARCH_SPEED_MM_S，50 ms 一帧约 3 mm，
+         * 认面判据和刹车滑行都更可控（原来 100 mm/s 时一帧 5 mm、刹停还要再滑几毫米）。 */
         float corr = limit((c->odo.heading_rad - c->leg_hdg2) * 120.0f, -30.0f, 30.0f);
-        speed_control(c, LF_LEG_SPEED_MM_S + corr, LF_LEG_SPEED_MM_S - corr, dt, true);
+        speed_control(c, LF_LEG_SEARCH_SPEED_MM_S + corr, LF_LEG_SEARCH_SPEED_MM_S - corr, dt, true);
         break;
     }
     case LF_LEG_BACKUP: {
@@ -2027,7 +2093,9 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
         }
         if (probe_turn_to(c, now, c->phase_start_rad, cmd_deg * 0.01745329252f,
                           LF_TURN_PAR_SPEED_MM_S, LF_TURN_TOL_DEG, dt)) {
-            if (!c->turn_ok) {
+            /* 精度不拦：|ach−cmd| ≤ LF_TURN_GROSS_DEG 就继续（角度残差交给扫描后的二次微调）。
+             * 只有转不动/转错方向（>20°）才当机构失败停机，免得为 9° 丢掉整面。 */
+            if (fabsf(c->turn_ach_deg - c->turn_cmd_deg) > LF_TURN_GROSS_DEG) {
                 c->side_event |= (uint8_t)LF_SIDE_EVENT_FAIL;
                 lf_stop(c, now);
                 break;
@@ -2065,8 +2133,30 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
             c->side_ping_since = now;
             c->side_lock_stage = 1;
             break;
-        case 1: /* h1 */
-            if (!probe_side_lock_sample(c, in, now)) break;
+        case 1: { /* h1（搜索重采后可能多次进入） */
+            if (!probe_side_lock_sample(c, in, now)) {
+                uint32_t waited = now - c->side_lock_sample_since;
+                uint32_t wait_need = (c->side_seek_n == 0U) ? LF_SIDE_LOCK_FALLBACK_MS
+                                                            : LF_SIDE_SEEK_WAIT_MS;
+                if (waited < wait_need) break;
+                /* ① 停住后测不到面（回波被更远的墙抢走：现场行进中 251~263、停住稳定 661）时，
+                 *    用 LEG 行进中已经量到的面均值兜底 —— 行进中确实见过面（face_n≥5）。 */
+                if (c->side_seek_n == 0U && c->leg_face2_n >= 5U) {
+                    float hf = (float)c->leg_face2_h;
+                    if (hf >= LF_SIDE_H_MIN_MM && hf <= LF_SIDE_H_MAX_MM) {
+                        c->side_h1 = hf;
+                        c->side_warn = 10U;
+                        c->side_h3 = c->side_h1;
+                        c->side_lock_stage = 6;
+                        break;
+                    }
+                }
+                /* ② 还一帧都没采到、也搜够次数：沿面再进 30 mm 重采（见 LF_SIDE_SEEK_*） */
+                if (c->probe_face > 0U && c->side_seek_n < LF_SIDE_SEEK_TRIES) {
+                    probe_side_seek_begin(c);
+                }
+                break;
+            }
             c->side_h1 = probe_side_median(c, c->side_ring_n);
             if (c->side_h1 < LF_SIDE_H_MIN_MM || c->side_h1 > LF_SIDE_H_MAX_MM) { fail = true; break; }
             /* 扫描前自动测斜（h1→平移→h2→退回→转正→h3）已于 2026-11-23 **整段删除**：
@@ -2079,6 +2169,22 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
             c->side_h3 = c->side_h1;
             c->side_lock_stage = 6;
             break;
+        }
+        case 7: { /* 沿面搜索：前进 LF_SIDE_SEEK_MM（舵机仍压在 side_us），到位后重采 5 帧 */
+            float moved = c->odo.distance_mm - c->side_seek_start_mm;
+            if (moved >= LF_SIDE_SEEK_MM) {
+                probe_motion_reset(c);
+                c->out.enable = c->out.brake = true;
+                c->out.duty[0] = c->out.duty[1] = 0.0f;
+                c->side_ring_n = 0U;
+                c->side_ping_since = now;
+                c->side_lock_sample_since = now;
+                c->side_lock_stage = 1U;
+                break;
+            }
+            probe_drive_signed(c, LF_SIDE_SEEK_SPEED_MM_S, dt);
+            break;
+        }
         default: { /* 6：ρ+pan_x 自检并通过才写 side_h */
             /* h3 丢面（>H_MAX 或 <H_MIN）而 h2 有效时用 h2 兜底：转正那一下常伴随一次丢回波 */
             if ((c->side_h3 < LF_SIDE_H_MIN_MM || c->side_h3 > LF_SIDE_H_MAX_MM) &&
@@ -2086,7 +2192,16 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
                 c->side_h3 = c->side_h2;
                 c->side_warn = 7U;
             }
+            /* 期望侧距：面 0 没有 LEG，只能用 AIM 测到的 rho（车停在哪就量到哪）；
+             * 面 1~3 刚跑完 LEG，LEG 自己就是用 h_leg 算的 L1，转完到这一面的期望侧距
+             * 就是 h_leg + margin —— 与 main.c 打印的 h_pred 是同一个数。
+             * 以前这里一律用 face.rho+pan_x（**第一面的** AIM 数，全程不更新）：AIM 停车位置
+             * 差 20 mm，这一面的生死就变了。2026-11-23 21:36 实测 h=231、h_pred=187（差 44，
+             * 本来该过），却拿 155.2 去比 → 75.8 > TOL 70，差 5.8 mm 停机，第二面白白没打。 */
             float pred = (c->face.valid && c->face.rho > 1.0f) ? c->face.rho + pr->pan_x_mm : 0.0f;
+            if (c->probe_face > 0U && c->leg_h_expected > 1.0f)
+                pred = c->leg_h_expected;
+            c->side_pred_mm = pred;   /* 日志必须打这里：main.c 原来另算一遍旧公式，与实际判据不一致 */
             /* h1/h2/h3 里挑最接近 pred 的那个：退回/转正过程中丢一次面很常见，
              * 不能因为 h3=306 就把 h1=h2=240 这个真实读数丢掉。 */
             float h = c->side_h3;
@@ -2104,8 +2219,13 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
                 }
                 h = best;
             }
-            bool ok = h >= LF_SIDE_H_MIN_MM && h <= LF_SIDE_H_MAX_MM &&
-                      (pred <= 0.0f || fabsf(h - pred) <= LF_SIDE_LOCK_TOL_MM);
+            /* 只保留「回波本身可用」的绝对判据。|h − pred| 这个相对门禁**去掉**：
+             * 它比的是"LEG 死算落点"和"实测站距"，而 LEG 的落点误差（转向滑移）实测
+             * −106…+69 mm，与"认错面"在数值上无法区分；扫描的种子窗口用的是实测 h（自洽），
+             * LEG 偏大只会让激光远一点，不会扫错面。留着它只会误杀整面（21:36 差 5.8、
+             * 21:56 差 1.0 mm 都是它）。超差只记 warn=13，供日志判断。 */
+            bool ok = h >= LF_SIDE_H_MIN_MM && h <= LF_SIDE_H_MAX_MM;
+            if (ok && pred > 0.0f && fabsf(h - pred) > LF_SIDE_LOCK_TOL_MM) c->side_warn = 13U;
             /* 先把本阶段的告警存下来：成功路径紧接着的 probe_side_begin() 会清 side_warn，
              * 以前 warn=6/5/7 就是在这一拍被擦成 0，日志里永远看不到"平移卡住"。 */
             c->side_lock_warn = c->side_warn;
@@ -2115,6 +2235,9 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
                 c->side_locked = 1U;
                 probe_side_begin(c, now);
                 change_probe_phase(c, LF_PROBE_SIDE_SCAN, now);
+            } else if (c->probe_face > 0U && c->side_seek_n < LF_SIDE_SEEK_TRIES) {
+                /* 回波本身不可用（<80 或 >450）：沿面再挪一段重采（见 LF_SIDE_SEEK_*） */
+                probe_side_seek_begin(c);
             } else {
                 fail = true;
             }
@@ -2327,12 +2450,15 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
             if (pr->scan_mode != 0U && c->side_locked) {
                 if (!more) {
                     change_probe_phase(c, LF_PROBE_COMPLETE_BEEPS, now);
-                } else if (!(c->face.w > 20.0f)) {
-                    /* 宽度小到 L1/L2 没法算才拒绝；越界/大 k 只记 side_warn，照样绕（M3 调试期） */
-                    c->side_locked = 0U;
-                    c->side_event |= (uint8_t)LF_SIDE_EVENT_FAIL;
-                    lf_stop(c, now);
                 } else {
+                    /* 实测宽度不可信（重扫/微调后拟合崩）**不拦绕行**：LEG 只用 kind 的标称宽窄
+                     * （LF_BOX_LONG/SHORT），probe_leg_current_kind 只看 box_first_kind+面序，
+                     * 与实测 w 无关。2026-11-23 22:23 第 2 面重扫得 w=19.9 就把整轮停掉了。 */
+                    if (!(c->face.w > 20.0f)) {
+                        c->face.w = (c->side_w_prev > 20.0f) ? c->side_w_prev
+                                  : ((c->leg_kind == 0U) ? LF_BOX_SHORT_MM : LF_BOX_LONG_MM);
+                        c->side_warn = 12U;
+                    }
                     /* 面号在这里前进：PROBE_EVENT 的 face、face.id、下一面的 faces 判断都靠它。
                      * 不能等 LEG 结束再 ++，否则 LEG 期间日志里的面号还是上一面。 */
                     ++c->probe_face;

@@ -1,0 +1,54 @@
+{
+  "case": "status",
+  "ok": true,
+  "checks": [
+    {
+      "name": "状态为 STOPPED/OBSTACLE_STOP",
+      "ok": true,
+      "detail": "STOPPED"
+    },
+    {
+      "name": "无故障 FAULT=OK",
+      "ok": true,
+      "detail": "OK"
+    },
+    {
+      "name": "超声读数有效（obs_ok==1）",
+      "ok": true,
+      "detail": "obs_mm=366"
+    },
+    {
+      "name": "超声距离在声呐量程 [20, 3000] mm",
+      "ok": true,
+      "detail": "366.0 in [20, 3000]"
+    },
+    {
+      "name": "舵机中位为 1500 us",
+      "ok": true,
+      "detail": "1500"
+    }
+  ],
+  "metrics": {
+    "state": "STOPPED",
+    "fault": "OK",
+    "obs_mm": 366,
+    "obs_ok": 1,
+    "servo_center": 1500,
+    "cfg_scan": "1",
+    "cfg_left": "1",
+    "cfg_us": "2400",
+    "cfg_spd": "50",
+    "cfg_reach": "260",
+    "cfg_band": "15.0",
+    "cfg_jump": "40.0",
+    "cfg_verify": "1",
+    "cfg_gamma": "7.5",
+    "cfg_pan_x": "30",
+    "cfg_fit_rms": "15.0"
+  },
+  "notes": [],
+  "elapsed_ms": null,
+  "port": "COM3",
+  "saved_at": "2026-11-23T13:32:12",
+  "log_file": "status_20261123_133212.log"
+}

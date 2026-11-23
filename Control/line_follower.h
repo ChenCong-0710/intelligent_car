@@ -133,10 +133,34 @@
  * 触发量是 SIDE_SCAN 自己的长基线回归（面内全部样本）：实测 σ=0.55~0.70°（181~486 样本）。 */
 #define LF_SIDE_YAW_MIN_SAMPLES 30U      /**< 长基线回归最少面内样本数 */
 #define LF_SIDE_YAW_MIN_SPAN_MM 50.0f    /**< 面内样本的 s 跨度下限 (mm)：跨度不够时斜率不可信 */
+/** @brief 「扫描后二次微调」总开关：0 = 永不转（2026-11-23 22:40 关掉）
+ *  @note  性质①（扫描↔发射同轴）本来就保证残余偏航在光斑处抵消，不需要为它转车；
+ *        而实测每次它都把 w 弄差（152.9→140.3、64.2→74.3），22:33 那次更用一条 16 mm 的
+ *        假边算出 −18.4°，把车转飞、整面丢失。关掉后每面只剩「锁距→扫一次→开到中点→复测」。 */
+#define LF_SIDE_YAW_ENABLE 0
 #define LF_SIDE_YAW_DEADBAND_DEG 4.0f    /**< 死区 (°)：约 6σ，好工况（残余 2~3°）一次都不转 */
 #define LF_SIDE_YAW_MAX_DEG 20.0f        /**< 上限 (°)：超过它说明扫描本身有问题，不转（任务书箱子最多斜 ±20°） */
 
 #define LF_SIDE_LOCK_WAIT_MS 400U
+/**
+ * @brief 静止测不到面时的兜底等待 (ms)：等这么久仍凑不齐 5 帧、而 LEG 行进中确实见过面
+ *        （leg_face2_n≥5）→ 用行进中测到的面均值当 h1（warn=10）。
+ * @note  2026-11-23 22:08 实测：DRIVE2 行进中侧距 251~263、face_h=242，一停住回波被 66 cm 外的
+ *        墙抢走并稳定在 661（>aim_max 400 → 全部丢弃），SIDE_LOCK stage 1 凑不齐 5 帧，
+ *        干等 9 s 超时停机，第二面白丢。 */
+#define LF_SIDE_LOCK_FALLBACK_MS 1500U
+
+/**
+ * @brief SIDE_LOCK「沿面搜索」：门限不过时**不要立刻停机**，先沿面前进一段再重采，最多 N 次
+ * @note  窄面（50 mm）在 h≈200 处的有效可见窗口只有 ±27 mm（面半宽 25 + 有效足印 ~2），
+ *        而转向滑移实测 0~70 mm —— 一次机会太薄：2026-11-23 两次窄面都是"停偏了就死"。
+ *        每次前进 30 mm、40 mm/s（0.75 s），重采最多等 600 ms，3 次共 ≈4 s，
+ *        加上首轮 1.5 s 仍远小于 LF_SIDE_LOCK_TIMEOUT_MS(9000)。
+ */
+#define LF_SIDE_SEEK_MM 30.0f          /**< 每次搜索前进距离 (mm) */
+#define LF_SIDE_SEEK_SPEED_MM_S 40.0f  /**< 搜索前进速度 (mm/s) */
+#define LF_SIDE_SEEK_TRIES 3U          /**< 每面最多搜索次数（共 ≤90 mm） */
+#define LF_SIDE_SEEK_WAIT_MS 600U      /**< 搜索后重采的等待上限 (ms) */
 
 /** @brief 侧视锁定：连测帧数（每 60 ms 一帧，取中位数） */
 #define LF_SIDE_LOCK_FRAMES 5U
@@ -207,6 +231,10 @@
 
 /** @brief 原地转的到位容差 (deg)：超过它判 turn_ok=0（M3 失败即停，不回 AIM） */
 #define LF_TURN_TOL_DEG 8.0f
+/** @brief 机构级转角门禁 (deg)：只有 |ach−cmd| 超过它（转不动/转错方向）才停机。
+ *  @note  8° 的 LF_TURN_TOL_DEG 原来会为了 9° 的角度误差丢掉一整面，而 SIDE_SCAN 的二次微调
+ *        本来就能纠 ±20°（LF_SIDE_YAW_MAX_DEG）—— 精度门禁交给下游，这里只拦机构失效。 */
+#define LF_TURN_GROSS_DEG 20.0f
 
 /** @brief AIM 的 |φ| 超过它认为结果不可信，拒绝 TURN_PAR（避免为了对齐法线把车转过 125°） */
 #define LF_TURN_PAR_MAX_PHI_DEG 35.0f
@@ -237,6 +265,22 @@
  */
 #define LF_LEG_PROX_PERIOD_MS 50U
 #define LF_LEG_PROX_FACE_BAND_MM 75.0f
+
+/**
+ * @brief DRIVE2「找突变」事件停车：取代 162 mm 纯里程死算（2026-11-23 22:00）
+ * @note  旧 DRIVE2 全靠 `L2 = h + d_B/2 − pan_x`，但转向那 1.96 s 整车被地面拖动几十毫米，
+ *        而原地转时 `ds = .5*(ΔL+ΔR)` 恒为 0 —— 编码器根本看不见。实测落点（h_pred 对实测）：
+ *        203→202、172→183、203→97、193→257、187→225、187→231，散布 −106…+174 mm。
+ *        现在：侧距连续 LF_LEG_FACE_CONFIRM 帧落在 `h_leg + margin ± band` 就认为
+ *        「下一面已经进侧视」，**立刻停车**交给 SIDE_SCAN（它自带 ±260 mm 往复扫找两条边、
+ *        SIDE_MOVE 再居中）；`L2` 只保留为「一直没认到面」时的上限与超时兜底。
+ *        好处：转完面就在旁边时一帧就停（不再白开 162 mm）；还差一段时用「看到面」这个
+ *        事件代替里程，落点误差从十几~上百毫米降到一次 50 ms 采样的行程（≤5 mm）。
+ */
+#define LF_LEG_FACE_BAND_MM 70.0f   /**< 认面窗口半宽 (mm)：h_leg+margin±band；背景 382/447/661 仍被排除 */
+#define LF_LEG_SEARCH_SPEED_MM_S 60.0f /**< DRIVE2（含认面搜索）速度：50 ms 一帧 ≈3 mm，比 100 mm/s 好判 */
+#define LF_LEG_NARROW_SEARCH_MM 100.0f /**< 窄面没认到面时在 L2 之外再往前找的距离 (mm) */
+#define LF_LEG_FACE_CONFIRM 2U      /**< 连续命中帧数（50 ms/帧 → 100 ms 确认，滤掉单帧双稳态跳变） */
 
 /**
  * @brief DRIVE2 收尾补救：面已滑出侧视时倒回的距离/速度
@@ -777,6 +821,10 @@ typedef struct {
     float side_h0;             /**< 面内直线模型截距 d = h0 + k·s (mm) */
     float side_k;              /**< 面内直线模型斜率 d = h0 + k·s (无量纲，吸收车不平行) */
     float side_h;              /**< SIDE_LOCK 实测的侧视站立距离 (mm) */
+    float side_pred_mm;        /**< SIDE_LOCK 自检用的期望侧距 (mm)：面 0 = rho+pan_x，面 1~3 = h_leg+margin */
+    float side_seek_start_mm;  /**< 本次沿面搜索的起点里程 (mm) */
+    uint32_t side_lock_sample_since; /**< 本轮 5 帧采样的起始时间戳 (ms)，搜索后重采会刷新 */
+    uint8_t side_seek_n;       /**< 本面已执行的沿面搜索次数（0~LF_SIDE_SEEK_TRIES） */
     float side_target;         /**< SIDE_MOVE 的目标扫描坐标 (mm，绝对量，正=车头方向) */
     float side_s_m_ref;        /**< 复测前的中点（扫描坐标，mm），用于一致性比较 */
     float side_verify_offset;  /**< 复测扫描原点在原扫描坐标系里的位置 (mm) */
@@ -843,8 +891,13 @@ typedef struct {
     uint16_t leg_face2_h;      /**< 上述帧的均值 (mm)，0=DRIVE2 没测到面 */
     uint16_t leg_prox_now;     /**< 最近一帧侧距（不筛范围），收尾位置自检用 */
     uint8_t leg_prox_now_ok;   /**< 1 = 最近一帧侧距有效 */
-    float leg_h_expected;      /**< 本段 LEG 预期的侧距 h_leg (mm)，DRIVE2 认面窗口中心 */
+    float leg_h_expected;      /**< 本段 LEG 预期的侧距 (mm)：= h_ref_mm，DRIVE2 认面窗口中心 */
+    float h_ref_mm;            /**< 首面实测站距 (mm)：LEG 一直瞄准它，不随每面的测量值累积 */
     float leg_backup_start_mm; /**< 收尾倒回段的起点里程 (mm) */
+    float leg_face_s_mm;       /**< 认到面时的 DRIVE2 行程 (mm，相对进 TURN 前的里程)，事件停车的落点 */
+    uint8_t leg_face_seen;     /**< 1 = DRIVE2 期间已认到面（事件停车就绪，见 LF_LEG_FACE_BAND_MM） */
+    uint8_t leg_face_cnt;      /**< 认面连续命中帧数（50 ms/帧） */
+    uint8_t leg_stop_reason;   /**< 1 = 认面事件停车 / 2 = 走到 L2 上限停车（诊断） */
 
     /* --- 左右轮电机死区与全量程转速自动标定 (LF_MCAL：地面带载为主、空载作参考) --- */
     LfMcalMode mcal_mode;                   /**< 当前正在扫描的模式：LF_MCAL_AIR 或 LF_MCAL_GROUND */

@@ -1,0 +1,82 @@
+{
+  "case": "turn",
+  "ok": true,
+  "checks": [
+    {
+      "name": "turn +10°：MOVE_DONE.mode=TURN",
+      "ok": true,
+      "detail": "TURN"
+    },
+    {
+      "name": "turn +10°：目标角与命令一致",
+      "ok": true,
+      "detail": "target=10.0 cmd=10.0"
+    },
+    {
+      "name": "turn +10°：到位误差 <= 3.0°",
+      "ok": true,
+      "detail": "actual=10.32 err=+0.32"
+    },
+    {
+      "name": "turn +10°：未超时",
+      "ok": true,
+      "detail": "timeout=0"
+    },
+    {
+      "name": "turn -10°：MOVE_DONE.mode=TURN",
+      "ok": true,
+      "detail": "TURN"
+    },
+    {
+      "name": "turn -10°：目标角与命令一致",
+      "ok": true,
+      "detail": "target=-10.0 cmd=-10.0"
+    },
+    {
+      "name": "turn -10°：到位误差 <= 3.0°",
+      "ok": true,
+      "detail": "actual=-10.57 err=-0.57"
+    },
+    {
+      "name": "turn -10°：未超时",
+      "ok": true,
+      "detail": "timeout=0"
+    },
+    {
+      "name": "净转角符合预期（+0.0° ±6°）",
+      "ok": true,
+      "detail": "hdg 0.00 -> -2.05，净 -2.05°"
+    }
+  ],
+  "metrics": {
+    "angles": [
+      10.0,
+      -10.0
+    ],
+    "speed": 50.0,
+    "hdg_before": 0.0,
+    "turn_+10": {
+      "cmd_deg": 10.0,
+      "target": 10.0,
+      "actual_deg": 10.32,
+      "ms": 246,
+      "timeout": 0,
+      "err_deg": 0.3200000000000003
+    },
+    "turn_-10": {
+      "cmd_deg": -10.0,
+      "target": -10.0,
+      "actual_deg": -10.57,
+      "ms": 176,
+      "timeout": 0,
+      "err_deg": -0.5700000000000003
+    },
+    "hdg_after": -2.05,
+    "hdg_net_deg": -2.05
+  },
+  "notes": [],
+  "elapsed_ms": null,
+  "port": "COM3",
+  "saved_at": "2026-11-23T13:32:25",
+  "log_file": "turn_20261123_133225.log"
+}

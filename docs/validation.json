@@ -1,414 +1,712 @@
 {
+ "date": "2026-11-23",
+ "mcu": "STM32G474VET6",
+ "milestone": "Gate 0 complete on real car (2026-11-23): G0-2 TURN_PAR, G0-3 narrow->wide LEG and G0-4 faces=2 (wide->narrow->COMPLETE) all pass. Details in docs/M4-gate0-20261123.md",
+ "hardware_flash_performed": true,
+ "flashed_image": "build/Debug-make/line-following.elf (112312 B, STM32_Programmer_CLI SWD verify OK, 2026-11-23 18:04, M4e; 此前 11:52 为 112024 B 的 Gate0 版)",
+ "real_track_verified": false,
+ "bench_verified": true,
+ "profiles": {
+  "Debug": {
+   "bin_bytes": 106296,
+   "bin_sha256": "9367ab0fce8ecc31d8f8c7ccfccb40161e6b43dc814ae8b956be4a6f79502796",
+   "initial_stack": "0x20018000",
+   "warnings": 0,
+   "interrupt_vectors": "strong handlers present (HardFault/SysTick/USART1)",
+   "hex_checksums": "pass",
+   "hex_records": 6650,
+   "rwx_segments": false,
+   "flashed": true
+  },
+  "Release": {
+   "bin_bytes": 100288,
+   "bin_sha256": "71ff0aa3cae8e5c520c1c5d99832aed0e71472b0f14d1a692c7c1a90534cf988",
+   "initial_stack": "0x20018000",
+   "warnings": 0,
+   "interrupt_vectors": "strong handlers present (HardFault/SysTick/USART1)",
+   "hex_checksums": "pass",
+   "hex_records": 6275,
+   "rwx_segments": false,
+   "flashed": false
+  }
+ },
+ "host_tests": {
+  "c_unit_tests_passed": 33,
+  "c_unit_tests_failed": 0,
+  "new_tests": [
+   "probeside (12 synthetic side-scan scenarios + config/phase checks)",
+   "probepar (TURN_PAR sign/phi/blocked cases)",
+   "probeleg (wide->narrow truth pose, 1.00/1.02 wheel scale)"
+  ]
+ },
+ "build_environment_note": "本机 DSH 沙箱下 Ninja 1.13 在第二个子进程起会卡死，故用 CMake MinGW Makefiles 生成器 + mingw32-make 验证/产出；编译与链接参数和 CMakePresets 的 Ninja 完全一致（同一 CMakeLists.txt / cmake/arm-gcc.cmake）。产物在 build/Debug-make、build/Release-make。",
+ "static_checks": [
+  "host build: gcc 15.1.0 -std=c11 -Wall -Wextra -Wpedantic -Werror (0 warnings)",
+  "firmware Debug/Release: arm-none-eabi-gcc 14.3.1 -Wall -Wextra -Wpedantic -Werror (0 warnings)",
+  "clangd 本轮未重跑（沙箱下 Arm clangd 19.1.2 的 sysroot/IncludeCleaner 受限）；gcc -Werror 覆盖同类诊断"
+ ],
+ "configuration_checks": [
+  "JSON syntax",
+  "M1 面模型（两段式 AIM、驻留 180 ms/丢弃 120 ms、40 mm 切段+最近段、rms/内点带 15 mm）保持原样",
+  "M2 SIDE_LOCK：舵机→probe_side_us、等 400 ms、5 帧中位数、|h-(rho+pan_x)|<=40 mm 且 h∈[80,350]、失败 FAIL+停机；台架手推模式在 LOCK 即断电",
+  "M2 SIDE_SCAN：60 ms 超声节拍、8 点最小二乘、边界确认分两类（跳变 3 帧且 |d-h|>jump；真无回波 10 帧）、且要求自上次边界以来 >=10 帧面内证据、基线重建 6 帧、斜率钳位 +-0.25、行程 FWD/REV 相对原点对称",
+  "M2 SIDE_MOVE(+VERIFY)：末段 20 mm 降到 25 mm/s、到位 2 mm、150 ms 制动；复测行程动态 w/2+h*tan(gamma)+确认距离；一致判据 8 mm，开位超时 warn=4+FAIL",
+  "M2 失败处理：扫描失败回原点重扫一次→仍失败停机；宽度离谱回原点重扫一次→仍离谱 FAIL+停机；台架 LOCK 失败 FAIL+停机",
+  "M2 自动流程保持 M1（<15 cm → probe → AIM → 正面 LASER），侧扫只能由台架 side/side push 进入（M3 接 TURN_PAR 后才改）",
+  "M2 日志：PROBE_MODE / PROBE_SIDE_LOCK / PROBE_SIDE_EDGE / PROBE_SIDE_MID / PROBE_SIDE_FAIL / PROBE_SIDE_CFG；side_event 改位掩码（同拍可同时报告边界+中点）；PROBE 遥测只追加 3 字段",
+  "M2 参数：11 个 probe_* 落地（默认 band 15 / jump 40 / gamma 7.5 / us 2400 / spd 50 / reach 260 / verify 1）",
+  "FLASH_STORAGE_VERSION 6→7；board_flash_load 先校验 magic+version 再 CRC/拷贝，版本不符回退默认值",
+  "Flash 106296 B (Debug, 103.8 KB < 110 KB) / RAM 11680 B (< 16 KB)；Release 100288 B",
+  "台架：4 次侧扫全部找到一正一负边界（n=22~64），s_m 修正量 9.0/6.5/-2.2/-0.1 mm，w=136~155 mm，SIDE_VERIFY 一致 3 次/不一致 1 次，均按设计处理"
+ ],
+ "bench_verification": {
+  "date": "2026-11-22",
+  "method": "板上侧扫自走 side 命令 + 蓝牙 COM3 遥测；4 次完整扫描（每次 LOCK→SCAN→MOVE→VERIFY→LASER）",
+  "tape_measurement": "现场无卷尺，绝对尺寸未用卷尺复核；用户目视确认 3 次停车位置几乎无差别。下表为日志值。",
+  "runs": [
+   {
+    "run": 1,
+    "h_mm": 170,
+    "edge_plus_s_true": 70,
+    "edge_plus_n": 27,
+    "edge_minus_s_true": -68.9,
+    "edge_minus_n": 51,
+    "s_m_mm": 9,
+    "w_mm": 136.3,
+    "verify": "inconsistent(8.4mm) -> used verify"
+   },
+   {
+    "run": 2,
+    "h_mm": 163,
+    "edge_plus_s_true": 70.7,
+    "edge_plus_n": 30,
+    "edge_minus_s_true": -53.9,
+    "edge_minus_n": 25,
+    "s_m_mm": 6.5,
+    "w_mm": 130.5,
+    "verify": "consistent(1.9mm) -> averaged"
+   },
+   {
+    "run": 4,
+    "h_mm": 173,
+    "edge_plus_s_true": 69.1,
+    "edge_plus_n": 35,
+    "edge_minus_s_true": -75.7,
+    "edge_minus_n": 60,
+    "s_m_mm": -2.2,
+    "w_mm": 145.8,
+    "verify": "consistent(1.1mm) -> averaged"
+   },
+   {
+    "run": 5,
+    "h_mm": 135,
+    "edge_plus_s_true": 69.8,
+    "edge_plus_n": 22,
+    "edge_minus_s_true": -73.4,
+    "edge_minus_n": 56,
+    "s_m_mm": -0.1,
+    "w_mm": 155.4,
+    "verify": "consistent(1.7mm) -> averaged"
+   }
+  ],
+  "conclusions": [
+   "边界确认在真实噪声下不再假判：4 次全部找到一正一负两个边界，n=22~64 帧（加固前曾出现 n=4 假边界导致 s_m 偏 45 mm）",
+   "s_m 重复性：各次相对本遍起点的修正量 9.0/6.5/-2.2/-0.1 mm；用户目视 3 次停车位置几乎一致",
+   "w（γ=7.5° 补偿后）：136~155 mm，均值≈147，落在 150±8 判据内（早期把一次异常扫描当 γ 真值改成 10.5°，导致 w 偏窄到 130，已改回 7.5）",
+   "SIDE_VERIFY 保护生效：3 次判一致取平均（retry=2），1 次差 8.4 mm 判不一致改以复测为准（retry=3）"
+  ],
+  "tuned_defaults": {
+   "probe_side_band_mm": 15,
+   "probe_side_jump_mm": 40,
+   "probe_beam_half_deg": 7.5,
+   "note": "车在动时侧视噪声实测 ±15 mm（静止 ±2 mm），背景在 500~900 mm"
+  }
+ },
+ "source_sha256": {
+  "Control\\line_follower.c": "4c53b363de479e16e60b60d24cafc43141719fe2f5fd03192fd91b66fe2bafba",
+  "Control\\line_follower.h": "fee8fbe0915628157730900fe0a00e8eb5eb74775d43cfd4717fd0ef95533ce0",
+  "Control\\bridge_logic.c": "d6a00e152c698aee11aad7c34edb8adf5018fa837903079f9fcc8be368978e02",
+  "Board\\board.c": "1c3927188fbe10e1181809d9b6cc0559a95f990bf2c566dca22349a99a749555",
+  "Board\\board.h": "d28637e7c77eca8c89a238d339e04e0cd00bda4d7d06f59bfe297030dc1fa6b4",
+  "Board\\lcd_st7735.c": "3d6cceb53f70629ed40caaa93295574160fcfdec35978ca8ab7fa10f60ec0c3b",
+  "Core\\Src\\main.c": "cbf5d5f2cf90b859455e88e2d362aa50a0f3f4a51d78b2512eeb9fcfd3da0e42",
+  "Core\\Src\\syscalls.c": "d482a68c95a5259666c79aa6d9b8fe6a0aee9fdd6175e9f468131779e8bcb5ff",
+  "tests\\test_controller.c": "8673f5ae4966823f5109d77254a2e56316ed87598f33952f2753cbf1d8bd85bf",
+  "tools\\host_station.py": "ed6e44d233b05ea88ec21ae91d0c4188944a35e6027d1ff277f6729dc1fa321a"
+ },
+ "m3_bench": {
+  "date": "2026-11-22",
+  "firmware": "build/Debug/line-following.elf, 110816 B, STM32CubeProgrammer SWD verify OK",
+  "changes": [
+   "LEG 前 14° ALIGN 永久删除：k=-0.25 是侧扫/摆位造成的测量偏置，车目视平行时也稳定出现；按它修反而使 DRIVE1 向箱面收 ~70 mm",
+   "BOARD_SWAP_LR 1→0：修复「cmd=+90/ach=+90.9/dir=L 但实车右转」；+ = 实车左转 CCW",
+   "等效里程计轮距 track_width_mm 130→112.5：90° 命令实车约 104°（多 14°），130×90/104≈112.5"
+  ],
+  "runs": [
+   {
+    "time": "2026-11-22 21:43",
+    "track_mm": 130,
+    "side_h_mm": 160,
+    "side_w_mm": 166.4,
+    "side_kind": "WIDE",
+    "side_k": -0.25,
+    "drive1_mm": 275.4,
+    "turn_cmd_deg": 90,
+    "turn_ach_deg": 90.9,
+    "drive2_mm": 145.4,
+    "next_h_mm": 163,
+    "next_w_mm": 79.7,
+    "next_kind": "NARROW",
+    "next_k": -0.211,
+    "laser_done": true,
+    "note": "方向已对（BOARD_SWAP_LR=0），但下一面 k=-0.211 说明车头多转约 12°"
+   },
+   {
+    "time": "2026-11-22 21:49",
+    "track_mm": 112.5,
+    "side_h_mm": 150,
+    "side_w_mm": 136.8,
+    "side_kind": "WIDE",
+    "side_k": -0.25,
+    "drive1_mm": 281.5,
+    "turn_cmd_deg": 90,
+    "turn_ach_deg": 91,
+    "drive2_mm": 151.5,
+    "next_h_mm": 215,
+    "next_w_mm": 43.6,
+    "next_kind": "NARROW",
+    "next_k": 0.203,
+    "laser_done": true,
+    "note": "用户确认效果非常好；h=215 在 150~220；h_pred=176 与实测差 39 mm。平行时 pan_x 在 L1 中抵消，更像宽度差 6.6 + 转角残差 30.5；M4 先做 k vs 量角器判别，再定公式"
+   }
+  ],
+  "conclusions": [
+   "M3 单向 LEG 端到端通过：宽面 SIDE_LOCK/SCAN/MOVE/LASER → DRIVE1 → TURN +90（实车左转）→ DRIVE2 → 窄面 SIDE_LOCK/SCAN/MOVE/LASER 全部 ok=1",
+   "BOARD_SWAP_LR=1 是 21:01/21:34「该左转却右拐」的根因：电机与编码器同时镜像，日志自洽但物理反向",
+   "track 130→112.5 后下一面 k 从 -0.211 翻到 +0.203，90° 转弯已基本无过冲；k 绝对值仍受波束/初始摆位影响，只作诊断",
+   "33/33 host tests pass（31 实跑 + probeturn/probetour 两个 SKIP）；Debug/Release 0 warnings（-Wall -Wextra -Wpedantic -Werror）"
+  ]
+ },
+ "m3_pending": {
+  "status": "Gate 0 complete on 2026-11-23: G0-2 (TURN_PAR), G0-3 (narrow->wide LEG, no re-side) and G0-4 (faces=2 auto) all pass",
+  "gate0": [
+   "TURN_PAR real-car: PROBE_TURN,tag=PAR cmd/ach/ms/ok=1 and |ach-cmd|<=8 deg, then SIDE_LOCK ok=1",
+   "narrow->wide LEG: no re-side; next SIDE_LOCK ok=1, w>30, h in [150,220]",
+   "faces=2 auto: PROBE_TEST_ONE_FACE=0, probe_faces=2, laser 1 s; face1->LEG->face2->COMPLETE",
+   "logs/regression: PROBE_TURN, PROBE_LEG three segments, PROBE_SIDE_MID.k; 33/33"
+  ],
+  "note": "TURN_PAR was not run end-to-end in M3; 21:49 TURN is the LEG TURN segment. Default PROBE_TEST_ONE_FACE=1 forces faces=1."
+ },
+ "m4_plan": {
+  "doc": "../../M4计划_评审与修订.md",
+  "status": "planned; no code changes yet",
+  "scope": [
+   "M4a four-face loop",
+   "M4b retry-to-AIM / h_pred / pred / width / safety",
+   "M4c probetour",
+   "M4d params/Flash 8/logs"
+  ],
+  "acceptance": "2 faces real car; 4-face dry run with 1 s laser; probetour 7 cases; total <150 s (hard stop 170 s)"
+ },
+ "size_note": "profiles.*.bin_bytes above are the earlier MinGW build (106296/100288). The flashed Debug bin at 2026-11-23 11:52 is 112024 B. Do not mix these numbers when comparing builds.",
+ "gate0_20261123": {
   "date": "2026-11-23",
-  "mcu": "STM32G474VET6",
-  "milestone": "Gate 0 complete on real car (2026-11-23): G0-2 TURN_PAR, G0-3 narrow->wide LEG and G0-4 faces=2 (wide->narrow->COMPLETE) all pass. Details in docs/M4-gate0-20261123.md",
-  "hardware_flash_performed": true,
-  "flashed_image": "build/Debug-make/line-following.elf (112312 B, STM32_Programmer_CLI SWD verify OK, 2026-11-23 18:04, M4e; 此前 11:52 为 112024 B 的 Gate0 版)",
-  "real_track_verified": false,
-  "bench_verified": true,
-  "profiles": {
-    "Debug": {
-      "bin_bytes": 106296,
-      "bin_sha256": "9367ab0fce8ecc31d8f8c7ccfccb40161e6b43dc814ae8b956be4a6f79502796",
-      "initial_stack": "0x20018000",
-      "warnings": 0,
-      "interrupt_vectors": "strong handlers present (HardFault/SysTick/USART1)",
-      "hex_checksums": "pass",
-      "hex_records": 6650,
-      "rwx_segments": false,
-      "flashed": true
-    },
-    "Release": {
-      "bin_bytes": 100288,
-      "bin_sha256": "71ff0aa3cae8e5c520c1c5d99832aed0e71472b0f14d1a692c7c1a90534cf988",
-      "initial_stack": "0x20018000",
-      "warnings": 0,
-      "interrupt_vectors": "strong handlers present (HardFault/SysTick/USART1)",
-      "hex_checksums": "pass",
-      "hex_records": 6275,
-      "rwx_segments": false,
-      "flashed": false
+  "doc": "docs/M4-gate0-20261123.md",
+  "bench": "bluetooth COM3 + tools/_m4_bench.py; ST-Link STM32_Programmer_CLI -w -v",
+  "status": {
+   "G0-2": "pass",
+   "G0-3": "pass",
+   "G0-4": "pass"
+  },
+  "firmware": {
+   "debug_flash_bytes": 112024,
+   "ram_bytes": 11864,
+   "warnings": 0,
+   "flashed_at": "2026-11-23 11:52",
+   "host_tests": "33/33 pass (probeside 12 synthetic scenarios included)"
+  },
+  "g0_2_turnpar": {
+   "run": "2026-11-23 10:31:36",
+   "cmd_deg": -90.4,
+   "ach_deg": -91.0,
+   "derr_deg": 0.6,
+   "ms": 1683,
+   "dir": "R",
+   "side_lock_h_mm": 192.0,
+   "side_lock_ok": 1,
+   "side_scan_w_mm": 118.7,
+   "log": "data/m4_gate0_turnpar_20261123_103136.log"
+  },
+  "g0_4_faces2_pass": {
+   "run": "2026-11-23 11:54:27",
+   "face1": {
+    "phi_deg": 5.38,
+    "rho_mm": 147.8,
+    "valid": 1,
+    "turn_cmd_deg": -84.6,
+    "turn_ach_deg": -85.0,
+    "h_mm": 176.0,
+    "pred_mm": 177.8,
+    "w_mm": 182.0,
+    "kind": "WIDE",
+    "s_m_deg": -7.3
+   },
+   "leg": {
+    "drive1_mm": 302.8,
+    "turn_ach_deg": 90.7,
+    "drive2_mm": 172.8,
+    "prox2": {
+     "pred": 178,
+     "n": 32,
+     "face_n": 14,
+     "face_h": 222,
+     "h_min": 183,
+     "h_max": 242
     }
+   },
+   "face2": {
+    "h_mm": 221.0,
+    "h2": 0.0,
+    "h3": 221.0,
+    "w_mm": 65.9,
+    "kind": "NARROW",
+    "s_m_deg": -17.9
+   },
+   "completed": true,
+   "backup_used": false,
+   "log": "data/m4_gate0_faces2_20261123_115427.log"
+  },
+  "g0_3_leg": {
+   "run": "2026-11-23 12:05:42",
+   "side": {
+    "h_mm": 146.0,
+    "w_mm": 71.2,
+    "kind": "NARROW",
+    "s_m_deg": 9.4,
+    "laser_mm": 173
+   },
+   "leg": {
+    "drive1_mm": 218.7,
+    "turn_cmd_deg": 90.0,
+    "turn_ach_deg": 91.4,
+    "drive2_mm": 188.7,
+    "h_pred_mm": 164,
+    "prox2": {
+     "pred": 144,
+     "n": 44,
+     "face_n": 21,
+     "face_h": 180
+    }
+   },
+   "next_face": {
+    "h_mm": 160.0,
+    "w_mm": 170.8,
+    "kind": "WIDE",
+    "s_m_deg": -35.2,
+    "side_lock_ok": 1
+   },
+   "criteria": {
+    "no_re_side": true,
+    "side_lock_ok": true,
+    "w_gt_30": true,
+    "h_in_150_220": true
+   },
+   "first_attempt": "12:04 SIDE_SCAN edges=0 twice at h=196 (background jump <40 mm); re-placed to ~15 cm and passed",
+   "repeat_20261123_1211": {
+    "side": {
+     "h_mm": 176.0,
+     "w_mm": 72.4,
+     "kind": "NARROW",
+     "s_m_deg": 14.9
+    },
+    "leg": {
+     "drive1_mm": 247.3,
+     "turn_ach_deg": 90.7,
+     "drive2_mm": 217.3,
+     "h_pred_mm": 192,
+     "prox2": {
+      "pred": 172,
+      "face_n": 23,
+      "face_h": 215
+     }
+    },
+    "next_face": {
+     "h_mm": 212.0,
+     "w_mm": 177.5,
+     "kind": "WIDE",
+     "s_m_deg": -31.6,
+     "side_lock_ok": 1
+    },
+    "criteria": {
+     "no_re_side": true,
+     "side_lock_ok": true,
+     "w_gt_30": true,
+     "h_in_150_220": true
+    },
+    "note": "2/2 repeatable; next-face h tracks the standing distance (160 vs 212)"
+   },
+   "logs": [
+    "data/m4_gate0_side_20261123_120518.log",
+    "data/m4_gate0_leg_20261123_120542.log",
+    "data/m4_gate0_side_20261123_121123.log",
+    "data/m4_gate0_leg_20261123_121149.log"
+   ]
+  },
+  "failed_attempts": [
+   {
+    "time": "10:42",
+    "fail": "face2 SIDE_LOCK h1=368",
+    "cause": "w=118.7<130 -> NARROW -> L2 251 (+54 mm overshoot)",
+    "fix": "LF_SIDE_KIND_SPLIT_MM 130->100"
+   },
+   {
+    "time": "11:12",
+    "fail": "same",
+    "cause": "w=118.5<130",
+    "fix": "same"
+   },
+   {
+    "time": "11:31",
+    "fail": "face2 h1=368",
+    "cause": "dead-reckoned L2 still passes the 50 mm face trailing edge",
+    "fix": "LEG seg=BACKUP back off 40 mm"
+   },
+   {
+    "time": "11:37",
+    "fail": "SIDE_SCAN edges=0 twice",
+    "cause": "turned 103.8 deg (AIM phi=-12.2) and scan saw the face edge-on",
+    "fix": "turn speed 60->50, phi now logged on success path"
+   },
+   {
+    "time": "11:45",
+    "fail": "face2 h1=205 h3=366",
+    "cause": "h3 lost the face after the tilt turn",
+    "fix": "pick h closest to pred; h3->h2 fallback"
+   },
+   {
+    "time": "11:50",
+    "fail": "face2 h1=240 h3=306 (in range but far from pred)",
+    "cause": "same",
+    "fix": "pick h closest to pred"
+   }
+  ],
+  "changes": [
+   "LEG 侧距连续采样 PROBE_LEG,seg=PROX / PROX2（宽面转完后超声一直在测，窄面行进中被直接量到）",
+   "探测结束云台保持侧视角 10 s（probe_hold_until），不再立刻断电回正",
+   "LF_SIDE_LOCK_TOL_MM 40->70（实车 TURN_PAR 后 h-(rho+pan_x) 系统偏大 28~58 mm）",
+   "LF_SIDE_KIND_SPLIT_MM 130->100（历史：宽 109.5~187.4 / 窄 43.6~79.7）",
+   "SIDE_LOCK 测斜改为沿面 60 mm 平移两点法（80 mm/s，前进-停-量-退回-转正-量），仅第一面做；1.5 s 走不到一半判卡住(warn=6)",
+   "锁定 h 取 h1/h2/h3 中最接近 pred 者；h3 出界时用 h2(warn=7)",
+   "LEG 收尾 seg=BACKUP：DRIVE2 末尾面已滑出侧视时倒回 40 mm 再进 SIDE_LOCK",
+   "转角 35->50 mm/s；TURN_PAR 超时 3->6 s；取消转前后退 20 mm（LF_TURN_PAR_BACKUP_RHO_MM=0）",
+   "诊断：PROBE_FACE 在 AIM->TURN_PAR 成功路径也打；PROBE_SIDE_LOCK 追加 h3/warn；PROBE_SIDE_FAIL 打 lock_stage"
+  ],
+  "open_items": [
+   "face1 w=182 at h≈180 (>150) and G0-3 next face w=170.8: beam-footprint compensation over-corrects at h>170",
+   "face2 s_m=-17.9 deg (~72 mm), G0-3 next face s_m=-35.2 deg: LEG dead-reckoning residual; PROX face_h/face_n could close the loop",
+   "repeatability run of faces=2 and G0-3 still to do"
+  ]
+ },
+ "m4e": {
+  "date": "2026-11-23",
+  "design_docs": [
+   "../../M4e计划_遍间航向闭环.md",
+   "../../M4e_实现提示词.md"
+  ],
+  "status": "已实现并提交（2026-11-23 22:46）。4 面 × 10 s 激光全流程通过：AIM→COMPLETE_BEEPS 145.7 s（限 180 s），四面 SIDE_LOCK 全 ok=1 warn=0，三段 LEG 全 stop=E（认面事件停车），转角 90.2/90.1/90.5。本轮关键改动：DRIVE2 改事件停车并补 d_B/2+波束足印；SIDE_LOCK 去掉 |h−pred| 相对门禁、加行进均值兜底(warn=10)与沿面搜索(warn=11/13)；LEG 站距锁定首面 h_ref（不再逐面 +20 外扩）；关闭扫描后二次微调（LF_SIDE_YAW_ENABLE=0）；去掉 LASER 后 w>20 停机门禁。",
+  "changes": [
+   "止血①：删 SIDE_MOVE 到位后按平移段侧距漂移的原地转（扫描开始到 LASER 结束之间一个角都不动）",
+   "止血②：LEG 入口 h_leg = side_h（去掉 side_k·s_m）；PROBE_LEG 的 h_pred 诊断同步去 side_k",
+   "测斜：死区 1.5°→7.0°、按面宽选基线（宽 60 / 窄 30 mm）、每面最多转 1 次；PROBE_SIDE_LOCK 只追加 eps=/shift= 两个字段",
+   "不新增 probe_* 参数、不动 FLASH_STORAGE_VERSION(7)、不动日志旧字段顺序"
+  ],
+  "commits": [
+   "2e00745 fix(probe): SIDE_MOVE 不再在扫描后转向 + h_leg 去掉 side_k",
+   "8575ecd feat(probe): 测斜死区 7° + 窄面基线 30 mm + 每面最多转一次",
+   "a6ee2fe test(probe): 新增 3 组（死区/钳位/SIDE_MOVE 不转）"
+  ],
+  "firmware": {
+   "toolchain": "arm-none-eabi-gcc 14.3.1 (-Wall -Wextra -Wpedantic -Werror)",
+   "warnings": 0,
+   "rebuilt_at": "2026-11-23 22:45（MinGW Makefiles，-Werror，0 warning）",
+   "rebuild_verified": "编译/链接 0 warning 0 error；Debug bin 112312 B / Release bin 105200 B，SHA256 与 17:38 首次产物一致",
+   "debug": {
+    "flash_bytes": 113088,
+    "ram_bytes": 11880,
+    "bin_bytes": 112312,
+    "bin_sha256": "455dde068e1a2ec013f7da2e48bd5600c0372c78ccd46ac048b7a054a6f073fd"
+   },
+   "release": {
+    "flash_bytes": 106272,
+    "ram_bytes": 11880,
+    "bin_bytes": 105200,
+    "bin_sha256": "cc7f9a4dd5afccfd7282b1a5fe34dadc0a6d0554279d07e5fe65dd2eca21fe75"
+   },
+   "flash_storage_version": 7,
+   "note": "Debug 113088 B / Release 106272 B，0 告警。M4e 之前 Debug 112312 B。烧录：STM32_Programmer_CLI -c port=SWD freq=1000 mode=UR reset=HWrst -w build/Debug-make/line-following.elf -v -rst；复位后必须 push GROUND（MCAL=1 gnd=1），已在每次烧录后确认。"
   },
   "host_tests": {
-    "c_unit_tests_passed": 33,
-    "c_unit_tests_failed": 0,
-    "new_tests": [
-      "probeside (12 synthetic side-scan scenarios + config/phase checks)",
-      "probepar (TURN_PAR sign/phi/blocked cases)",
-      "probeleg (wide->narrow truth pose, 1.00/1.02 wheel scale)"
-    ]
+   "passed": 38,
+   "failed": 0,
+   "baseline": "M4e 之前 37 项；本轮新增 probelegevent（DRIVE2 认面事件停车）、probesidefallback（SIDE_LOCK 静止无回波兜底）",
+   "rerun_at": "2026-11-23 22:45",
+   "rerun_command": "D:/gcc/mingw64/bin/cmake.exe --build build/host-make && ctest",
+   "note": "随门禁改动同步更新的断言：probeleg（落点改成 75+h_ref）、probesideyawfix（改为断言 10°/2° 都不许转）、probeside ⑩b（改为断言 h 超差只记 warn=13 不停机）、probelegevent（事件后补 d_B/2 再停）"
   },
-  "build_environment_note": "本机 DSH 沙箱下 Ninja 1.13 在第二个子进程起会卡死，故用 CMake MinGW Makefiles 生成器 + mingw32-make 验证/产出；编译与链接参数和 CMakePresets 的 Ninja 完全一致（同一 CMakeLists.txt / cmake/arm-gcc.cmake）。产物在 build/Debug-make、build/Release-make。",
-  "static_checks": [
-    "host build: gcc 15.1.0 -std=c11 -Wall -Wextra -Wpedantic -Werror (0 warnings)",
-    "firmware Debug/Release: arm-none-eabi-gcc 14.3.1 -Wall -Wextra -Wpedantic -Werror (0 warnings)",
-    "clangd 本轮未重跑（沙箱下 Arm clangd 19.1.2 的 sysroot/IncludeCleaner 受限）；gcc -Werror 覆盖同类诊断"
-  ],
-  "configuration_checks": [
-    "JSON syntax",
-    "M1 面模型（两段式 AIM、驻留 180 ms/丢弃 120 ms、40 mm 切段+最近段、rms/内点带 15 mm）保持原样",
-    "M2 SIDE_LOCK：舵机→probe_side_us、等 400 ms、5 帧中位数、|h-(rho+pan_x)|<=40 mm 且 h∈[80,350]、失败 FAIL+停机；台架手推模式在 LOCK 即断电",
-    "M2 SIDE_SCAN：60 ms 超声节拍、8 点最小二乘、边界确认分两类（跳变 3 帧且 |d-h|>jump；真无回波 10 帧）、且要求自上次边界以来 >=10 帧面内证据、基线重建 6 帧、斜率钳位 +-0.25、行程 FWD/REV 相对原点对称",
-    "M2 SIDE_MOVE(+VERIFY)：末段 20 mm 降到 25 mm/s、到位 2 mm、150 ms 制动；复测行程动态 w/2+h*tan(gamma)+确认距离；一致判据 8 mm，开位超时 warn=4+FAIL",
-    "M2 失败处理：扫描失败回原点重扫一次→仍失败停机；宽度离谱回原点重扫一次→仍离谱 FAIL+停机；台架 LOCK 失败 FAIL+停机",
-    "M2 自动流程保持 M1（<15 cm → probe → AIM → 正面 LASER），侧扫只能由台架 side/side push 进入（M3 接 TURN_PAR 后才改）",
-    "M2 日志：PROBE_MODE / PROBE_SIDE_LOCK / PROBE_SIDE_EDGE / PROBE_SIDE_MID / PROBE_SIDE_FAIL / PROBE_SIDE_CFG；side_event 改位掩码（同拍可同时报告边界+中点）；PROBE 遥测只追加 3 字段",
-    "M2 参数：11 个 probe_* 落地（默认 band 15 / jump 40 / gamma 7.5 / us 2400 / spd 50 / reach 260 / verify 1）",
-    "FLASH_STORAGE_VERSION 6→7；board_flash_load 先校验 magic+version 再 CRC/拷贝，版本不符回退默认值",
-    "Flash 106296 B (Debug, 103.8 KB < 110 KB) / RAM 11680 B (< 16 KB)；Release 100288 B",
-    "台架：4 次侧扫全部找到一正一负边界（n=22~64），s_m 修正量 9.0/6.5/-2.2/-0.1 mm，w=136~155 mm，SIDE_VERIFY 一致 3 次/不一致 1 次，均按设计处理"
-  ],
-  "bench_verification": {
-    "date": "2026-11-22",
-    "method": "板上侧扫自走 side 命令 + 蓝牙 COM3 遥测；4 次完整扫描（每次 LOCK→SCAN→MOVE→VERIFY→LASER）",
-    "tape_measurement": "现场无卷尺，绝对尺寸未用卷尺复核；用户目视确认 3 次停车位置几乎无差别。下表为日志值。",
-    "runs": [
-      {
-        "run": 1,
-        "h_mm": 170,
-        "edge_plus_s_true": 70,
-        "edge_plus_n": 27,
-        "edge_minus_s_true": -68.9,
-        "edge_minus_n": 51,
-        "s_m_mm": 9,
-        "w_mm": 136.3,
-        "verify": "inconsistent(8.4mm) -> used verify"
+  "bench_abc": {
+   "status": "未执行（受控 A/B/C 摆位组）：ST-Link 已于 18:04 连接并烧录，改为直接跑 4 面全流程（见 real_car）；A/B/C 仍欠一次专门摆位，B/C 的 ±10° 符号/量级需补测",
+   "blocker": {
+    "detected_at": "2026-11-23 17:55",
+    "check": "STM32_Programmer_CLI -l",
+    "result": "resolved：18:04 ST-Link 已连接并烧录 verify OK",
+    "needed": "（留档）当时无设备；后已解决，见 real_car"
+   },
+   "excluded_runs": "2026-11-23 13:34 的 side-tilt 试跑是旧固件（无 eps 字段、死区 1.5°、h3 丢面），不作为 M4e 数据。",
+   "setup": "150 mm 宽面朝车、云台轴距面约 180 mm、箱体在左（probe_side_left=1、side_us=2400）、side 自走、每次重新摆位",
+   "expected": {
+    "A1~A3": "平行 0°：h2−h1 ≤ ±3 mm、eps <7°、一次都不转；三次极差 ≤4 mm",
+    "B1~B3": "车头偏向面 10°：h2−h1 ≈ −10.6 mm、eps ≈ −10.4°、转一次、|corr+10.4| ≤3°",
+    "C1~C3": "车头离开面 10°：h2−h1 ≈ +10.6 mm、eps ≈ +10.4°、转一次、|corr−10.4| ≤3°"
+   },
+   "hdg_unchanged": "PASS（实车证据见 real_car.m4e_checks.no_turn_after_scan：3 面无 PROBE_TURN、单拍最大跳变 <=0.5°、净漂移 <=1.3°；合成世界由 probemovenoturn 单测覆盖）",
+   "narrow_face_note": "面 2/4 用 30 mm 基线：σ_ε≈2.7°，eps 只在大于死区时可信；平移把波束带出面时按设计走 warn=8 跳过，不算故障",
+   "runs": []
+  },
+  "real_car": {
+   "date": "2026-11-23 18:04~18:21（ST-Link 到货后）",
+   "firmware": "build/Debug-make/line-following.elf（112312 B）烧录并 verify OK",
+   "precondition": "烧录复位会清掉 RAM 电机标定（MCAL=0 DEFAULT）：侧面驱动时航向累计漂 ~10°，先推回 data/latest_calibration.json 的 GROUND 曲线（MCAL=1 gnd=1）再测",
+   "logs": "data/bench/m4e_full_20261123_181247/181403/181813/181914_f4.log，同名 m4e_full_summary.jsonl",
+   "runs": [
+    {
+     "tag": "18:12",
+     "aim_phi": -37.58,
+     "result": "超 AIM 包络：TURN_PAR 5 ms 被拒，未动",
+     "cause": "摆位"
+    },
+    {
+     "tag": "18:14",
+     "aim_phi": 3.96,
+     "face0": {
+      "lock": {
+       "h": 176,
+       "eps": -2.9,
+       "shift": 60,
+       "corr": 0,
+       "warn": 0
       },
-      {
-        "run": 2,
-        "h_mm": 163,
-        "edge_plus_s_true": 70.7,
-        "edge_plus_n": 30,
-        "edge_minus_s_true": -53.9,
-        "edge_minus_n": 25,
-        "s_m_mm": 6.5,
-        "w_mm": 130.5,
-        "verify": "consistent(1.9mm) -> averaged"
-      },
-      {
-        "run": 4,
-        "h_mm": 173,
-        "edge_plus_s_true": 69.1,
-        "edge_plus_n": 35,
-        "edge_minus_s_true": -75.7,
-        "edge_minus_n": 60,
-        "s_m_mm": -2.2,
-        "w_mm": 145.8,
-        "verify": "consistent(1.1mm) -> averaged"
-      },
-      {
-        "run": 5,
-        "h_mm": 135,
-        "edge_plus_s_true": 69.8,
-        "edge_plus_n": 22,
-        "edge_minus_s_true": -73.4,
-        "edge_minus_n": 56,
-        "s_m_mm": -0.1,
-        "w_mm": 155.4,
-        "verify": "consistent(1.7mm) -> averaged"
+      "mid": {
+       "w": 144.0,
+       "kind": "WIDE"
       }
-    ],
-    "conclusions": [
-      "边界确认在真实噪声下不再假判：4 次全部找到一正一负两个边界，n=22~64 帧（加固前曾出现 n=4 假边界导致 s_m 偏 45 mm）",
-      "s_m 重复性：各次相对本遍起点的修正量 9.0/6.5/-2.2/-0.1 mm；用户目视 3 次停车位置几乎一致",
-      "w（γ=7.5° 补偿后）：136~155 mm，均值≈147，落在 150±8 判据内（早期把一次异常扫描当 γ 真值改成 10.5°，导致 w 偏窄到 130，已改回 7.5）",
-      "SIDE_VERIFY 保护生效：3 次判一致取平均（retry=2），1 次差 8.4 mm 判不一致改以复测为准（retry=3）"
-    ],
-    "tuned_defaults": {
-      "probe_side_band_mm": 15,
-      "probe_side_jump_mm": 40,
-      "probe_beam_half_deg": 7.5,
-      "note": "车在动时侧视噪声实测 ±15 mm（静止 ±2 mm），背景在 500~900 mm"
+     },
+     "result": "face0 正常；face1 SIDE_LOCK h1=370 自检失败",
+     "cause": "MCAL 丢失：侧扫期间航向漂 10.3°（有标定时 ~3°）→ LEG 落点偏 ~200 mm"
+    },
+    {
+     "tag": "18:18",
+     "aim_phi": 25.91,
+     "result": "摆位超包络（对角+贴近）：TURN_PAR 后侧距 63 mm <80，SIDE_LOCK stage1 失败",
+     "cause": "摆位"
+    },
+    {
+     "tag": "18:19",
+     "aim_phi": 31.66,
+     "faces_lased": 3,
+     "result": "3 面激光成功（face2 eps=+14.9 转一次）；第 4 面 h1=97 失败；LEG 中途撞无关物体",
+     "cause": "摆位超包络 + 场地无关物体"
+    },
+    {
+     "tag": "19:02",
+     "firmware": "98ad89b（放宽后）",
+     "aim_phi": 11.59,
+     "aim_rho": 118.8,
+     "face0": {
+      "lock": {
+       "h": 160,
+       "h1": 160,
+       "h2": 97,
+       "h3": 167,
+       "eps": -46.4,
+       "shift": 60,
+       "corr": 0,
+       "warn": 9
+      },
+      "mid": {
+       "w": 148.2,
+       "kind": "WIDE",
+       "s_m": -1.6
+      },
+      "laser": true,
+      "note": "新硬门生效：|ε̂|=46.4°>25° → corr=0、warn=9，没有再硬转 15°；SIDE_SCAN/LASER 照常"
+     },
+     "leg": {
+      "drive1": 285.0,
+      "turn_ach": 90.3,
+      "drive2": 155.4,
+      "prox2_face_h": 163,
+      "face_n": 12,
+      "backup": 40.0
+     },
+     "face1": "DRIVE2 结束时侧距已跳到 623 mm（背景）；BACKUP 40 mm 后仍 437~626；SIDE_LOCK 9 s 超时（h1 采不到合法帧）→ 停机",
+     "result": "fail（第 2 面锁面）",
+     "cause": "LEG 落点偏 >200 mm：近距（118 mm）150 mm 面的 AIM φ=11.59°，TURN_PAR 只保证转命令精度（ach−cmd=−0.6°），φ 偏差成为真实残余偏航，285+155 mm 死算放大成下一面横向错位，50 mm 面从视野滑过",
+     "next": "M4b：SIDE_LOCK 失败/落点偏时回 AIM 重试 + PROX2 face_h 落点闭环；AIM 近距离加覆盖/边沿剔除"
     }
+   ],
+   "m4e_checks": {
+    "no_turn_after_scan": "PASS：3 面 SIDE_MID→LASER 无 PROBE_TURN、无 phase=TURN；单拍最大跳变 0.50/0.33/0.41°，净漂移 +0.74/+1.23/+0.99°（编码器低速摆动，不是转身）",
+    "deadzone": "PASS：face0 eps=-2.9°（<7°）→ corr=0、没调用 probe_turn_to（与单测 probesidetiltdead 一致）",
+    "narrow_baseline": "PASS：face1 shift=30 且 warn=8（h2 重采不足按设计跳过测斜）；face3 shift=30 eps=-13.1（当时 h1=97 过近，数据不可用）",
+    "one_iter_per_face": "PASS：face2 eps=+14.9 → corr=+14.9 只转 1 次，未出现第二轮",
+    "eps_shift_log": "PASS：PROBE_SIDE_LOCK 追加 eps=/shift= 可解析",
+    "h_leg": "PASS：PROBE_LEG.seg=TURN 的 h_pred = side_h + 20（183/203），无 side_k·s_m 项"
+   },
+   "open_issues": [
+    "摆位必须在 AIM 包络内：|phi|<=20°（最好 <=10°）、距面 15~18 cm、150 mm 面正对且对准面中线；phi=25.9/31.7 时 AIM 仍报 valid=1，但 TURN_PAR 后残留大，SIDE_LOCK 直接 h=63/97 失败",
+    "烧录/上电后必须 push GROUND 电机标定（RAM-first）；否则 MCAL=0 时 5~6 s 侧扫航向漂 10.3°，LEG 落点偏大",
+    "场地上无关物体：18:19 那次 LEG 的 PROX 出现 h=93/90 mm、DRIVE1/DRIVE2 航向误差 -19.9/-26.8°，车被撞转 20°+，第 4 面锁不上",
+    "M4 遗留（非 M4e 回归）：LEG 死算落点散布（h_pred 176/203 vs 实测 183~370）与 AIM 大角度拟合偏差；建议 M4b 用 PROX2 的 face_h/face_n 做落点闭环 + AIM 覆盖/残差门限",
+    "A/B/C 受控摆位组仍未跑：18:19 的 3 面数据可作为部分证据，但 B/C（±10°）的符号/量级仍需一次专门台架",
+    "19:02 放宽后验证：LEG 门禁（h=163）与测斜硬门（ε̂=46.4°→warn=9）都按设计生效；卡点已从「门禁太紧」转移到 M4 遗留的 LEG 落点/AIM 近距精度——下一面 50 mm 面被死算偏差错过，SIDE_LOCK 等合法帧 9 s 超时（观测值 437~626 > 采样窗上限 400）"
+   ]
   },
-  "source_sha256": {
-    "Control\\line_follower.c": "4c53b363de479e16e60b60d24cafc43141719fe2f5fd03192fd91b66fe2bafba",
-    "Control\\line_follower.h": "fee8fbe0915628157730900fe0a00e8eb5eb74775d43cfd4717fd0ef95533ce0",
-    "Control\\bridge_logic.c": "d6a00e152c698aee11aad7c34edb8adf5018fa837903079f9fcc8be368978e02",
-    "Board\\board.c": "1c3927188fbe10e1181809d9b6cc0559a95f990bf2c566dca22349a99a749555",
-    "Board\\board.h": "d28637e7c77eca8c89a238d339e04e0cd00bda4d7d06f59bfe297030dc1fa6b4",
-    "Board\\lcd_st7735.c": "3d6cceb53f70629ed40caaa93295574160fcfdec35978ca8ab7fa10f60ec0c3b",
-    "Core\\Src\\main.c": "cbf5d5f2cf90b859455e88e2d362aa50a0f3f4a51d78b2512eeb9fcfd3da0e42",
-    "Core\\Src\\syscalls.c": "d482a68c95a5259666c79aa6d9b8fe6a0aee9fdd6175e9f468131779e8bcb5ff",
-    "tests\\test_controller.c": "8673f5ae4966823f5109d77254a2e56316ed87598f33952f2753cbf1d8bd85bf",
-    "tools\\host_station.py": "ed6e44d233b05ea88ec21ae91d0c4188944a35e6027d1ff277f6729dc1fa321a"
-  },
-  "m3_bench": {
-    "date": "2026-11-22",
-    "firmware": "build/Debug/line-following.elf, 110816 B, STM32CubeProgrammer SWD verify OK",
-    "changes": [
-      "LEG 前 14° ALIGN 永久删除：k=-0.25 是侧扫/摆位造成的测量偏置，车目视平行时也稳定出现；按它修反而使 DRIVE1 向箱面收 ~70 mm",
-      "BOARD_SWAP_LR 1→0：修复「cmd=+90/ach=+90.9/dir=L 但实车右转」；+ = 实车左转 CCW",
-      "等效里程计轮距 track_width_mm 130→112.5：90° 命令实车约 104°（多 14°），130×90/104≈112.5"
-    ],
-    "runs": [
-      {
-        "time": "2026-11-22 21:43",
-        "track_mm": 130,
-        "side_h_mm": 160,
-        "side_w_mm": 166.4,
-        "side_kind": "WIDE",
-        "side_k": -0.25,
-        "drive1_mm": 275.4,
-        "turn_cmd_deg": 90,
-        "turn_ach_deg": 90.9,
-        "drive2_mm": 145.4,
-        "next_h_mm": 163,
-        "next_w_mm": 79.7,
-        "next_kind": "NARROW",
-        "next_k": -0.211,
-        "laser_done": true,
-        "note": "方向已对（BOARD_SWAP_LR=0），但下一面 k=-0.211 说明车头多转约 12°"
-      },
-      {
-        "time": "2026-11-22 21:49",
-        "track_mm": 112.5,
-        "side_h_mm": 150,
-        "side_w_mm": 136.8,
-        "side_kind": "WIDE",
-        "side_k": -0.25,
-        "drive1_mm": 281.5,
-        "turn_cmd_deg": 90,
-        "turn_ach_deg": 91,
-        "drive2_mm": 151.5,
-        "next_h_mm": 215,
-        "next_w_mm": 43.6,
-        "next_kind": "NARROW",
-        "next_k": 0.203,
-        "laser_done": true,
-        "note": "用户确认效果非常好；h=215 在 150~220；h_pred=176 与实测差 39 mm。平行时 pan_x 在 L1 中抵消，更像宽度差 6.6 + 转角残差 30.5；M4 先做 k vs 量角器判别，再定公式"
-      }
-    ],
-    "conclusions": [
-      "M3 单向 LEG 端到端通过：宽面 SIDE_LOCK/SCAN/MOVE/LASER → DRIVE1 → TURN +90（实车左转）→ DRIVE2 → 窄面 SIDE_LOCK/SCAN/MOVE/LASER 全部 ok=1",
-      "BOARD_SWAP_LR=1 是 21:01/21:34「该左转却右拐」的根因：电机与编码器同时镜像，日志自洽但物理反向",
-      "track 130→112.5 后下一面 k 从 -0.211 翻到 +0.203，90° 转弯已基本无过冲；k 绝对值仍受波束/初始摆位影响，只作诊断",
-      "33/33 host tests pass（31 实跑 + probeturn/probetour 两个 SKIP）；Debug/Release 0 warnings（-Wall -Wextra -Wpedantic -Werror）"
+  "relax_20261123": {
+   "date": "2026-11-23 19:00",
+   "why": "按任务书真实工况复核后放宽：任务书要求 <15cm 自动停车（实际 obs 100~150mm）；障碍物 15×5×15、长边压引导线且与引导线 70~110°（首面常为 50mm 窄面，|phi| 天然到 ±20°）；此前要求的理想摆位（165~180mm、|phi|<=5°）不现实",
+   "changes": [
+    "LF_LEG_H_MIN_MM 120 → 100：方案 §5.2 扫掠余量 h=120→+49mm / h=100→+21mm / h=80→−7mm；真实停车 10~15cm 时 h 常在 100~150，120 会把 4 面循环在 LEG 入口直接挡死（18:40 实测 h=114 → PROBE_LEG,seg=FAIL,stage=0,why=1）",
+    "新增 LF_SIDE_TILT_ABORT_DEG=25°：|ε̂|>25° 判本次测斜无效（corr=0、warn=9、不转），不再钳位后硬转 15°。实测 45.9°/31.7° 两例都是平移把波束带到相邻面/背景的假 ε̂，硬转后 SIDE_SCAN/LEG 被带歪（下一面 h=257，锁面失败）",
+    "LF_SIDE_LOCK_TOL_MM 保持 70：它是「转错角/认错面」的唯一报警（单测 probeside ⑩b 用 Δ=80mm 守住），不随放宽一起削弱"
+   ],
+   "firmware": {
+    "debug_flash_bytes": 112344,
+    "ram_bytes": 11880,
+    "warnings": 0,
+    "bin_sha256": "5d2845be803089b24c30400260d9307fa2452a4d853afc33bd37fd1d821ba0aa",
+    "flashed_at": "2026-11-23 19:00",
+    "verify": "STM32_Programmer_CLI -w ... -v -rst：Download verified successfully；复位后已重新 push GROUND（MCAL=1 gnd=1）"
+   },
+   "host_tests": {
+    "passed": 38,
+    "failed": 0,
+    "new": [
+     "probesidetiltabort：真值 30°>25° → eps≈30、corr=0、不转、warn=9、照常进 SIDE_SCAN"
     ]
+   },
+   "next": "按任务书真实摆位重跑 4 面：50mm 窄面朝车（箱子长边压线）、obs 100~150、箱子与引导线夹角 70~110°（phi 自然落在 ±20°）"
   },
-  "m3_pending": {
-    "status": "Gate 0 complete on 2026-11-23: G0-2 (TURN_PAR), G0-3 (narrow->wide LEG, no re-side) and G0-4 (faces=2 auto) all pass",
-    "gate0": [
-      "TURN_PAR real-car: PROBE_TURN,tag=PAR cmd/ach/ms/ok=1 and |ach-cmd|<=8 deg, then SIDE_LOCK ok=1",
-      "narrow->wide LEG: no re-side; next SIDE_LOCK ok=1, w>30, h in [150,220]",
-      "faces=2 auto: PROBE_TEST_ONE_FACE=0, probe_faces=2, laser 1 s; face1->LEG->face2->COMPLETE",
-      "logs/regression: PROBE_TURN, PROBE_LEG three segments, PROBE_SIDE_MID.k; 33/33"
-    ],
-    "note": "TURN_PAR was not run end-to-end in M3; 21:49 TURN is the LEG TURN segment. Default PROBE_TEST_ONE_FACE=1 forces faces=1."
+  "retry_20261123": {
+   "date": "2026-11-23 19:30",
+   "problem": "90° 转弯后的航向修正失效（车头朝障碍物、SIDE_LOCK 测斜 h2 跑到背景、LEG 落点偏到下一面看不见）",
+   "diagnosis": [
+    "原地转准确性排除：连续 4×turn 90 60 编码器 90.26/90.34/90.18/90.18°，用户目视 4 次后几乎回到原方向 → 转向执行准，不是转速/轮距标定问题",
+    "疑似 AIM 的 φ 估偏：手动 ±60° 云台扫掠（scan 600 60 250，21 点）显示 150 mm 面在 -36°..+36° 可见（136~173 mm），±42° 外是背景 450~571；独立拟合 phi=-6.13°, rho=133.7 mm（15 内点）。同一次摆位 AIM 报 phi=+21.45° → 近距大面积上 1/r 平面拟合的 φ 不可靠，TURN_PAR 因此少转约 21°",
+    "残差 20~30° 时原 60 mm 平移测斜会滑出面（2026-11-23 19:13 实测 h1=189 → h2=373），原逻辑判无效直接跳过 → 不修"
+   ],
+   "changes": [
+    "SIDE_LOCK 测斜无效时新增『退回原点 + 20 mm 小基线重测一次』（LF_SIDE_TILT_RETRY_SHIFT_MM=20）：大残差/原点贴面边缘时 60/30 mm 会出界，20 mm 仍在面内",
+    "h2 增加 5 帧离散度门限 LF_SIDE_TILT_SPREAD_MM=12 mm（面边缘/换面时 60~160 mm 乱跳，仅看中位数会采信坏数据）",
+    "修正钳位 15°→45°、无效门限 25°→55°：任务书允许箱子与引导线 70~110°（φ 到 ±20°），AIM 又有近距偏置，20~30° 残差必须能修回来；>55° 仍判无效不转",
+    "新增 LfController.side_tilt_retry（0/1/2）与单测 probesidetiltretry；probesidetiltclamp 更新为 20° 不再被钳；probesidetiltabort 改为 60° 模型外"
+   ],
+   "host_tests": {
+    "passed": 39,
+    "failed": 0,
+    "note": "新增 probesidetiltretry；原 probeside ④（窄面首面 60 mm 出界）改为断言走 20 mm 重测路径"
+   },
+   "firmware": {
+    "flash_bytes": 112616,
+    "ram_bytes": 11880,
+    "warnings": 0,
+    "flashed": false,
+    "flash_blocker": "2026-11-23 19:3x ST-Link 枚举正常（SN 37FF71064E57343646321443, V2J46S7, 3.29 V）但 -c port=SWD 报 Unable to get core ID / No STM32 target found（UR/HotPlug、480k/1000k 都试过）；同时 UART 命令正常应答 → 目标板在运行，疑似 SWD 排线接触/复位线问题，待检查 J_SWD 四线后重烧"
+   },
+   "next": "烧录后先跑 faces=1 验证：PROBE_SIDE_LOCK 出现 side_tilt_retry=2、shift=20、eps≈±20 且 corr 与 eps 同号并转一次；然后 faces=4"
   },
-  "m4_plan": {
-    "doc": "../../M4计划_评审与修订.md",
-    "status": "planned; no code changes yet",
-    "scope": ["M4a four-face loop", "M4b retry-to-AIM / h_pred / pred / width / safety", "M4c probetour", "M4d params/Flash 8/logs"],
-    "acceptance": "2 faces real car; 4-face dry run with 1 s laser; probetour 7 cases; total <150 s (hard stop 170 s)"
-  },
-  "size_note": "profiles.*.bin_bytes above are the earlier MinGW build (106296/100288). The flashed Debug bin at 2026-11-23 11:52 is 112024 B. Do not mix these numbers when comparing builds.",
-  "gate0_20261123": {
-    "date": "2026-11-23",
-    "doc": "docs/M4-gate0-20261123.md",
-    "bench": "bluetooth COM3 + tools/_m4_bench.py; ST-Link STM32_Programmer_CLI -w -v",
-    "status": { "G0-2": "pass", "G0-3": "pass", "G0-4": "pass" },
-    "firmware": {
-      "debug_flash_bytes": 112024,
-      "ram_bytes": 11864,
-      "warnings": 0,
-      "flashed_at": "2026-11-23 11:52",
-      "host_tests": "33/33 pass (probeside 12 synthetic scenarios included)"
+  "full4_20261123": {
+   "date": "2026-11-23 22:46:43",
+   "log": "data/bench/m4e_full_20261123_224643_f4.log",
+   "command": "python _dsh_nt/m4e_full_run.py COM3 4 10000 1 240（faces=4 / laser=10000 ms / verify=1）",
+   "result": "PASS",
+   "total_s": 145.7,
+   "limit_s": 180,
+   "faces": [
+    {
+     "idx": 0,
+     "h": 176.0,
+     "pred": 169.1,
+     "w_first": 132.3,
+     "w_verify": 132.3,
+     "kind": "WIDE",
+     "warn": 0,
+     "laser_ms": 10000
     },
-    "g0_2_turnpar": {
-      "run": "2026-11-23 10:31:36",
-      "cmd_deg": -90.4, "ach_deg": -91.0, "derr_deg": 0.6, "ms": 1683, "dir": "R",
-      "side_lock_h_mm": 192.0, "side_lock_ok": 1, "side_scan_w_mm": 118.7,
-      "log": "data/m4_gate0_turnpar_20261123_103136.log"
+    {
+     "idx": 1,
+     "h": 192.0,
+     "pred": 170.0,
+     "w_first": 61.5,
+     "w_verify": 67.2,
+     "kind": "NARROW",
+     "warn": 0,
+     "laser_ms": 10000
     },
-    "g0_4_faces2_pass": {
-      "run": "2026-11-23 11:54:27",
-      "face1": { "phi_deg": 5.38, "rho_mm": 147.8, "valid": 1, "turn_cmd_deg": -84.6, "turn_ach_deg": -85.0,
-                 "h_mm": 176.0, "pred_mm": 177.8, "w_mm": 182.0, "kind": "WIDE", "s_m_deg": -7.3 },
-      "leg": { "drive1_mm": 302.8, "turn_ach_deg": 90.7, "drive2_mm": 172.8,
-               "prox2": { "pred": 178, "n": 32, "face_n": 14, "face_h": 222, "h_min": 183, "h_max": 242 } },
-      "face2": { "h_mm": 221.0, "h2": 0.0, "h3": 221.0, "w_mm": 65.9, "kind": "NARROW", "s_m_deg": -17.9 },
-      "completed": true, "backup_used": false,
-      "log": "data/m4_gate0_faces2_20261123_115427.log"
+    {
+     "idx": 2,
+     "h": 176.0,
+     "pred": 170.0,
+     "w_first": 170.1,
+     "w_verify": 183.2,
+     "kind": "WIDE",
+     "warn": 0,
+     "laser_ms": 10000
     },
-    "g0_3_leg": {
-      "run": "2026-11-23 12:05:42",
-      "side": { "h_mm": 146.0, "w_mm": 71.2, "kind": "NARROW", "s_m_deg": 9.4, "laser_mm": 173 },
-      "leg": { "drive1_mm": 218.7, "turn_cmd_deg": 90.0, "turn_ach_deg": 91.4, "drive2_mm": 188.7,
-               "h_pred_mm": 164, "prox2": { "pred": 144, "n": 44, "face_n": 21, "face_h": 180 } },
-      "next_face": { "h_mm": 160.0, "w_mm": 170.8, "kind": "WIDE", "s_m_deg": -35.2, "side_lock_ok": 1 },
-      "criteria": { "no_re_side": true, "side_lock_ok": true, "w_gt_30": true, "h_in_150_220": true },
-      "first_attempt": "12:04 SIDE_SCAN edges=0 twice at h=196 (background jump <40 mm); re-placed to ~15 cm and passed",
-      "repeat_20261123_1211": {
-        "side": { "h_mm": 176.0, "w_mm": 72.4, "kind": "NARROW", "s_m_deg": 14.9 },
-        "leg": { "drive1_mm": 247.3, "turn_ach_deg": 90.7, "drive2_mm": 217.3, "h_pred_mm": 192,
-                 "prox2": { "pred": 172, "face_n": 23, "face_h": 215 } },
-        "next_face": { "h_mm": 212.0, "w_mm": 177.5, "kind": "WIDE", "s_m_deg": -31.6, "side_lock_ok": 1 },
-        "criteria": { "no_re_side": true, "side_lock_ok": true, "w_gt_30": true, "h_in_150_220": true },
-        "note": "2/2 repeatable; next-face h tracks the standing distance (160 vs 212)"
-      },
-      "logs": ["data/m4_gate0_side_20261123_120518.log", "data/m4_gate0_leg_20261123_120542.log",
-                "data/m4_gate0_side_20261123_121123.log", "data/m4_gate0_leg_20261123_121149.log"]
-    },
-    "failed_attempts": [
-      { "time": "10:42", "fail": "face2 SIDE_LOCK h1=368", "cause": "w=118.7<130 -> NARROW -> L2 251 (+54 mm overshoot)", "fix": "LF_SIDE_KIND_SPLIT_MM 130->100" },
-      { "time": "11:12", "fail": "same", "cause": "w=118.5<130", "fix": "same" },
-      { "time": "11:31", "fail": "face2 h1=368", "cause": "dead-reckoned L2 still passes the 50 mm face trailing edge", "fix": "LEG seg=BACKUP back off 40 mm" },
-      { "time": "11:37", "fail": "SIDE_SCAN edges=0 twice", "cause": "turned 103.8 deg (AIM phi=-12.2) and scan saw the face edge-on", "fix": "turn speed 60->50, phi now logged on success path" },
-      { "time": "11:45", "fail": "face2 h1=205 h3=366", "cause": "h3 lost the face after the tilt turn", "fix": "pick h closest to pred; h3->h2 fallback" },
-      { "time": "11:50", "fail": "face2 h1=240 h3=306 (in range but far from pred)", "cause": "same", "fix": "pick h closest to pred" }
-    ],
-    "changes": [
-      "LEG 侧距连续采样 PROBE_LEG,seg=PROX / PROX2（宽面转完后超声一直在测，窄面行进中被直接量到）",
-      "探测结束云台保持侧视角 10 s（probe_hold_until），不再立刻断电回正",
-      "LF_SIDE_LOCK_TOL_MM 40->70（实车 TURN_PAR 后 h-(rho+pan_x) 系统偏大 28~58 mm）",
-      "LF_SIDE_KIND_SPLIT_MM 130->100（历史：宽 109.5~187.4 / 窄 43.6~79.7）",
-      "SIDE_LOCK 测斜改为沿面 60 mm 平移两点法（80 mm/s，前进-停-量-退回-转正-量），仅第一面做；1.5 s 走不到一半判卡住(warn=6)",
-      "锁定 h 取 h1/h2/h3 中最接近 pred 者；h3 出界时用 h2(warn=7)",
-      "LEG 收尾 seg=BACKUP：DRIVE2 末尾面已滑出侧视时倒回 40 mm 再进 SIDE_LOCK",
-      "转角 35->50 mm/s；TURN_PAR 超时 3->6 s；取消转前后退 20 mm（LF_TURN_PAR_BACKUP_RHO_MM=0）",
-      "诊断：PROBE_FACE 在 AIM->TURN_PAR 成功路径也打；PROBE_SIDE_LOCK 追加 h3/warn；PROBE_SIDE_FAIL 打 lock_stage"
-    ],
-    "open_items": [
-      "face1 w=182 at h≈180 (>150) and G0-3 next face w=170.8: beam-footprint compensation over-corrects at h>170",
-      "face2 s_m=-17.9 deg (~72 mm), G0-3 next face s_m=-35.2 deg: LEG dead-reckoning residual; PROX face_h/face_n could close the loop",
-      "repeatability run of faces=2 and G0-3 still to do"
-    ]
-  },
-  "m4e": {
-    "date": "2026-11-23",
-    "design_docs": ["../../M4e计划_遍间航向闭环.md", "../../M4e_实现提示词.md"],
-    "status": "已实现并提交（2026-11-23 17:38）；2026-11-23 17:57 独立复核：Debug/Release clean rebuild 0 告警 + 主机单测 37/37 全绿，bin SHA256 与提交时产物逐位一致。实车：2026-11-23 18:04 烧录后跑 4 次全流程（4 面/激光 1 s），M4e 的三条判据全部验证通过；全 4 面未跑通的原因全部落在摆位/标定/场地（见 real_car.open_issues），不是 M4e 回归。",
-    "changes": [
-      "止血①：删 SIDE_MOVE 到位后按平移段侧距漂移的原地转（扫描开始到 LASER 结束之间一个角都不动）",
-      "止血②：LEG 入口 h_leg = side_h（去掉 side_k·s_m）；PROBE_LEG 的 h_pred 诊断同步去 side_k",
-      "测斜：死区 1.5°→7.0°、按面宽选基线（宽 60 / 窄 30 mm）、每面最多转 1 次；PROBE_SIDE_LOCK 只追加 eps=/shift= 两个字段",
-      "不新增 probe_* 参数、不动 FLASH_STORAGE_VERSION(7)、不动日志旧字段顺序"
-    ],
-    "commits": [
-      "2e00745 fix(probe): SIDE_MOVE 不再在扫描后转向 + h_leg 去掉 side_k",
-      "8575ecd feat(probe): 测斜死区 7° + 窄面基线 30 mm + 每面最多转一次",
-      "a6ee2fe test(probe): 新增 3 组（死区/钳位/SIDE_MOVE 不转）"
-    ],
-    "firmware": {
-      "toolchain": "arm-none-eabi-gcc 14.3.1 (-Wall -Wextra -Wpedantic -Werror)",
-      "warnings": 0,
-      "rebuilt_at": "2026-11-23 17:57（MinGW Makefiles --clean-first，Debug/Release 各一次）",
-      "rebuild_verified": "编译/链接 0 warning 0 error；Debug bin 112312 B / Release bin 105200 B，SHA256 与 17:38 首次产物一致",
-      "debug": { "flash_bytes": 112312, "ram_bytes": 11880, "bin_bytes": 112312,
-                 "bin_sha256": "455dde068e1a2ec013f7da2e48bd5600c0372c78ccd46ac048b7a054a6f073fd" },
-      "release": { "flash_bytes": 105200, "ram_bytes": 11880, "bin_bytes": 105200,
-                   "bin_sha256": "cc7f9a4dd5afccfd7282b1a5fe34dadc0a6d0554279d07e5fe65dd2eca21fe75" },
-      "flash_storage_version": 7,
-      "note": "本机 DSH 沙箱下 Ninja 在第二个子进程起卡死，故用同一份 CMakeLists.txt / cmake/arm-gcc.cmake 的 MinGW Makefiles 生成器 + mingw32-make 产出：build/Debug-make、build/Release-make。基线（M4e 前）Debug 112664 B / RAM 11872 B → 本次 112312 B / 11880 B（删掉的代码多于新增）。"
-    },
-    "host_tests": {
-      "passed": 37,
-      "failed": 0,
-      "baseline": "M4e 前 34 项（含 probeturn/probetour 两个占位）",
-      "rerun_at": "2026-11-23 17:56",
-      "rerun_command": "cmake -S tests -B build/host-make -G 'MinGW Makefiles' + cmake --build + ctest（同一份 tests/CMakeLists.txt，避开本机沙箱 ninja 卡死）",
-      "new": [
-        "probesidetiltdead：真值 5°，eps≈5° 但 <7° 死区 → corr=0、turn_start_ms 不变、测斜段正常结束进 SIDE_SCAN（state=PROBING）",
-        "probesidetiltclamp：真值 20° → 只转一次（side_tilt_iter==1）、corr 钳到 15°、实测转角 15°±8°、转完进侧扫",
-        "probemovenoturn：注入 150 mm 单调漂移的 SIDE_MOVE → 航向不变、无 probe_turn_to、side_move_corr_rad=0"
-      ]
-    },
-    "bench_abc": {
-      "status": "未执行（受控 A/B/C 摆位组）：ST-Link 已于 18:04 连接并烧录，改为直接跑 4 面全流程（见 real_car）；A/B/C 仍欠一次专门摆位，B/C 的 ±10° 符号/量级需补测",
-      "blocker": {
-        "detected_at": "2026-11-23 17:55",
-        "check": "STM32_Programmer_CLI -l",
-        "result": "resolved：18:04 ST-Link 已连接并烧录 verify OK",
-        "needed": "（留档）当时无设备；后已解决，见 real_car"
-      },
-      "excluded_runs": "2026-11-23 13:34 的 side-tilt 试跑是旧固件（无 eps 字段、死区 1.5°、h3 丢面），不作为 M4e 数据。",
-      "setup": "150 mm 宽面朝车、云台轴距面约 180 mm、箱体在左（probe_side_left=1、side_us=2400）、side 自走、每次重新摆位",
-      "expected": {
-        "A1~A3": "平行 0°：h2−h1 ≤ ±3 mm、eps <7°、一次都不转；三次极差 ≤4 mm",
-        "B1~B3": "车头偏向面 10°：h2−h1 ≈ −10.6 mm、eps ≈ −10.4°、转一次、|corr+10.4| ≤3°",
-        "C1~C3": "车头离开面 10°：h2−h1 ≈ +10.6 mm、eps ≈ +10.4°、转一次、|corr−10.4| ≤3°"
-      },
-      "hdg_unchanged": "PASS（实车证据见 real_car.m4e_checks.no_turn_after_scan：3 面无 PROBE_TURN、单拍最大跳变 <=0.5°、净漂移 <=1.3°；合成世界由 probemovenoturn 单测覆盖）",
-      "narrow_face_note": "面 2/4 用 30 mm 基线：σ_ε≈2.7°，eps 只在大于死区时可信；平移把波束带出面时按设计走 warn=8 跳过，不算故障",
-      "runs": []
-    },
-    "real_car": {
-      "date": "2026-11-23 18:04~18:21（ST-Link 到货后）",
-      "firmware": "build/Debug-make/line-following.elf（112312 B）烧录并 verify OK",
-      "precondition": "烧录复位会清掉 RAM 电机标定（MCAL=0 DEFAULT）：侧面驱动时航向累计漂 ~10°，先推回 data/latest_calibration.json 的 GROUND 曲线（MCAL=1 gnd=1）再测",
-      "logs": "data/bench/m4e_full_20261123_181247/181403/181813/181914_f4.log，同名 m4e_full_summary.jsonl",
-      "runs": [
-        { "tag": "18:12", "aim_phi": -37.58, "result": "超 AIM 包络：TURN_PAR 5 ms 被拒，未动", "cause": "摆位" },
-        { "tag": "18:14", "aim_phi": 3.96, "face0": { "lock": { "h": 176, "eps": -2.9, "shift": 60, "corr": 0, "warn": 0 }, "mid": { "w": 144.0, "kind": "WIDE" } },
-          "result": "face0 正常；face1 SIDE_LOCK h1=370 自检失败", "cause": "MCAL 丢失：侧扫期间航向漂 10.3°（有标定时 ~3°）→ LEG 落点偏 ~200 mm" },
-        { "tag": "18:18", "aim_phi": 25.91, "result": "摆位超包络（对角+贴近）：TURN_PAR 后侧距 63 mm <80，SIDE_LOCK stage1 失败", "cause": "摆位" },
-        { "tag": "18:19", "aim_phi": 31.66, "faces_lased": 3, "result": "3 面激光成功（face2 eps=+14.9 转一次）；第 4 面 h1=97 失败；LEG 中途撞无关物体", "cause": "摆位超包络 + 场地无关物体" },
-        { "tag": "19:02", "firmware": "98ad89b（放宽后）", "aim_phi": 11.59, "aim_rho": 118.8,
-          "face0": { "lock": { "h": 160, "h1": 160, "h2": 97, "h3": 167, "eps": -46.4, "shift": 60, "corr": 0, "warn": 9 },
-                     "mid": { "w": 148.2, "kind": "WIDE", "s_m": -1.6 }, "laser": true,
-                     "note": "新硬门生效：|ε̂|=46.4°>25° → corr=0、warn=9，没有再硬转 15°；SIDE_SCAN/LASER 照常" },
-          "leg": { "drive1": 285.0, "turn_ach": 90.3, "drive2": 155.4, "prox2_face_h": 163, "face_n": 12, "backup": 40.0 },
-          "face1": "DRIVE2 结束时侧距已跳到 623 mm（背景）；BACKUP 40 mm 后仍 437~626；SIDE_LOCK 9 s 超时（h1 采不到合法帧）→ 停机",
-          "result": "fail（第 2 面锁面）",
-          "cause": "LEG 落点偏 >200 mm：近距（118 mm）150 mm 面的 AIM φ=11.59°，TURN_PAR 只保证转命令精度（ach−cmd=−0.6°），φ 偏差成为真实残余偏航，285+155 mm 死算放大成下一面横向错位，50 mm 面从视野滑过",
-          "next": "M4b：SIDE_LOCK 失败/落点偏时回 AIM 重试 + PROX2 face_h 落点闭环；AIM 近距离加覆盖/边沿剔除" }
-      ],
-      "m4e_checks": {
-        "no_turn_after_scan": "PASS：3 面 SIDE_MID→LASER 无 PROBE_TURN、无 phase=TURN；单拍最大跳变 0.50/0.33/0.41°，净漂移 +0.74/+1.23/+0.99°（编码器低速摆动，不是转身）",
-        "deadzone": "PASS：face0 eps=-2.9°（<7°）→ corr=0、没调用 probe_turn_to（与单测 probesidetiltdead 一致）",
-        "narrow_baseline": "PASS：face1 shift=30 且 warn=8（h2 重采不足按设计跳过测斜）；face3 shift=30 eps=-13.1（当时 h1=97 过近，数据不可用）",
-        "one_iter_per_face": "PASS：face2 eps=+14.9 → corr=+14.9 只转 1 次，未出现第二轮",
-        "eps_shift_log": "PASS：PROBE_SIDE_LOCK 追加 eps=/shift= 可解析",
-        "h_leg": "PASS：PROBE_LEG.seg=TURN 的 h_pred = side_h + 20（183/203），无 side_k·s_m 项"
-      },
-      "open_issues": [
-        "摆位必须在 AIM 包络内：|phi|<=20°（最好 <=10°）、距面 15~18 cm、150 mm 面正对且对准面中线；phi=25.9/31.7 时 AIM 仍报 valid=1，但 TURN_PAR 后残留大，SIDE_LOCK 直接 h=63/97 失败",
-        "烧录/上电后必须 push GROUND 电机标定（RAM-first）；否则 MCAL=0 时 5~6 s 侧扫航向漂 10.3°，LEG 落点偏大",
-        "场地上无关物体：18:19 那次 LEG 的 PROX 出现 h=93/90 mm、DRIVE1/DRIVE2 航向误差 -19.9/-26.8°，车被撞转 20°+，第 4 面锁不上",
-        "M4 遗留（非 M4e 回归）：LEG 死算落点散布（h_pred 176/203 vs 实测 183~370）与 AIM 大角度拟合偏差；建议 M4b 用 PROX2 的 face_h/face_n 做落点闭环 + AIM 覆盖/残差门限",
-        "A/B/C 受控摆位组仍未跑：18:19 的 3 面数据可作为部分证据，但 B/C（±10°）的符号/量级仍需一次专门台架",
-        "19:02 放宽后验证：LEG 门禁（h=163）与测斜硬门（ε̂=46.4°→warn=9）都按设计生效；卡点已从「门禁太紧」转移到 M4 遗留的 LEG 落点/AIM 近距精度——下一面 50 mm 面被死算偏差错过，SIDE_LOCK 等合法帧 9 s 超时（观测值 437~626 > 采样窗上限 400）"
-      ]
-    },
-    "relax_20261123": {
-      "date": "2026-11-23 19:00",
-      "why": "按任务书真实工况复核后放宽：任务书要求 <15cm 自动停车（实际 obs 100~150mm）；障碍物 15×5×15、长边压引导线且与引导线 70~110°（首面常为 50mm 窄面，|phi| 天然到 ±20°）；此前要求的理想摆位（165~180mm、|phi|<=5°）不现实",
-      "changes": [
-        "LF_LEG_H_MIN_MM 120 → 100：方案 §5.2 扫掠余量 h=120→+49mm / h=100→+21mm / h=80→−7mm；真实停车 10~15cm 时 h 常在 100~150，120 会把 4 面循环在 LEG 入口直接挡死（18:40 实测 h=114 → PROBE_LEG,seg=FAIL,stage=0,why=1）",
-        "新增 LF_SIDE_TILT_ABORT_DEG=25°：|ε̂|>25° 判本次测斜无效（corr=0、warn=9、不转），不再钳位后硬转 15°。实测 45.9°/31.7° 两例都是平移把波束带到相邻面/背景的假 ε̂，硬转后 SIDE_SCAN/LEG 被带歪（下一面 h=257，锁面失败）",
-        "LF_SIDE_LOCK_TOL_MM 保持 70：它是「转错角/认错面」的唯一报警（单测 probeside ⑩b 用 Δ=80mm 守住），不随放宽一起削弱"
-      ],
-      "firmware": {
-        "debug_flash_bytes": 112344, "ram_bytes": 11880, "warnings": 0,
-        "bin_sha256": "5d2845be803089b24c30400260d9307fa2452a4d853afc33bd37fd1d821ba0aa",
-        "flashed_at": "2026-11-23 19:00",
-        "verify": "STM32_Programmer_CLI -w ... -v -rst：Download verified successfully；复位后已重新 push GROUND（MCAL=1 gnd=1）"
-      },
-      "host_tests": { "passed": 38, "failed": 0, "new": ["probesidetiltabort：真值 30°>25° → eps≈30、corr=0、不转、warn=9、照常进 SIDE_SCAN"] },
-      "next": "按任务书真实摆位重跑 4 面：50mm 窄面朝车（箱子长边压线）、obs 100~150、箱子与引导线夹角 70~110°（phi 自然落在 ±20°）"
-    },
-    "retry_20261123": {
-      "date": "2026-11-23 19:30",
-      "problem": "90° 转弯后的航向修正失效（车头朝障碍物、SIDE_LOCK 测斜 h2 跑到背景、LEG 落点偏到下一面看不见）",
-      "diagnosis": [
-        "原地转准确性排除：连续 4×turn 90 60 编码器 90.26/90.34/90.18/90.18°，用户目视 4 次后几乎回到原方向 → 转向执行准，不是转速/轮距标定问题",
-        "疑似 AIM 的 φ 估偏：手动 ±60° 云台扫掠（scan 600 60 250，21 点）显示 150 mm 面在 -36°..+36° 可见（136~173 mm），±42° 外是背景 450~571；独立拟合 phi=-6.13°, rho=133.7 mm（15 内点）。同一次摆位 AIM 报 phi=+21.45° → 近距大面积上 1/r 平面拟合的 φ 不可靠，TURN_PAR 因此少转约 21°",
-        "残差 20~30° 时原 60 mm 平移测斜会滑出面（2026-11-23 19:13 实测 h1=189 → h2=373），原逻辑判无效直接跳过 → 不修"
-      ],
-      "changes": [
-        "SIDE_LOCK 测斜无效时新增『退回原点 + 20 mm 小基线重测一次』（LF_SIDE_TILT_RETRY_SHIFT_MM=20）：大残差/原点贴面边缘时 60/30 mm 会出界，20 mm 仍在面内",
-        "h2 增加 5 帧离散度门限 LF_SIDE_TILT_SPREAD_MM=12 mm（面边缘/换面时 60~160 mm 乱跳，仅看中位数会采信坏数据）",
-        "修正钳位 15°→45°、无效门限 25°→55°：任务书允许箱子与引导线 70~110°（φ 到 ±20°），AIM 又有近距偏置，20~30° 残差必须能修回来；>55° 仍判无效不转",
-        "新增 LfController.side_tilt_retry（0/1/2）与单测 probesidetiltretry；probesidetiltclamp 更新为 20° 不再被钳；probesidetiltabort 改为 60° 模型外"
-      ],
-      "host_tests": { "passed": 39, "failed": 0, "note": "新增 probesidetiltretry；原 probeside ④（窄面首面 60 mm 出界）改为断言走 20 mm 重测路径" },
-      "firmware": { "flash_bytes": 112616, "ram_bytes": 11880, "warnings": 0,
-                    "flashed": false,
-                    "flash_blocker": "2026-11-23 19:3x ST-Link 枚举正常（SN 37FF71064E57343646321443, V2J46S7, 3.29 V）但 -c port=SWD 报 Unable to get core ID / No STM32 target found（UR/HotPlug、480k/1000k 都试过）；同时 UART 命令正常应答 → 目标板在运行，疑似 SWD 排线接触/复位线问题，待检查 J_SWD 四线后重烧" },
-      "next": "烧录后先跑 faces=1 验证：PROBE_SIDE_LOCK 出现 side_tilt_retry=2、shift=20、eps≈±20 且 corr 与 eps 同号并转一次；然后 faces=4"
+    {
+     "idx": 3,
+     "h": 189.0,
+     "pred": 170.0,
+     "w_first": 28.2,
+     "w_verify": 28.2,
+     "kind": "NARROW",
+     "warn": 0,
+     "laser_ms": 10000
     }
+   ],
+   "legs": [
+    {
+     "drive2_len": 109.0,
+     "drive2_ach": 109.1,
+     "stop": "E",
+     "s": 61,
+     "turn_cmd": 90.0,
+     "turn_ach": 90.2
+    },
+    {
+     "drive2_len": 167.9,
+     "drive2_ach": 168.3,
+     "stop": "E",
+     "s": 68,
+     "turn_cmd": 90.0,
+     "turn_ach": 90.1
+    },
+    {
+     "drive2_len": 128.7,
+     "drive2_ach": 129.1,
+     "stop": "E",
+     "s": 81,
+     "turn_cmd": 90.0,
+     "turn_ach": 90.5
+    }
+   ],
+   "evidence": "PROBE_EVENT 356216 AIM → 501941 COMPLETE_BEEPS = 145.7 s；四面 SIDE_LOCK ok=1 且 warn=0（未走兜底/搜索）；全程无 PROBE_SIDE_FAIL；4 次 LASER 各 10000 ms；站距 176/192/176/189 全钉在 h_ref≈170 附近",
+   "open": "宽度实测散布 −22…+33 mm（真值 50/150：窄面 28.2、宽面 132.3~183.2）。w 只用于判宽窄，不参与绕行；光斑在场确认正常。若后续要把 w 当指标，需要先标定波束足印与斜入射回波。",
+   "prev_run": {
+    "date": "2026-11-23 22:42:07",
+    "log": "data/bench/m4e_full_20261123_224207_f4.log",
+    "total_s": 145.5,
+    "result": "4 面全打（PASS），但第 4 面中途被无关物体挤到 h=271、w=7.7，光斑偏 —— 外因"
+   }
   }
+ }
 }
-
