@@ -30,6 +30,7 @@
  *   30. probesidetiltdead : M4e 死区：真值 5° 能测出但不许转（<7°）
  *   31. probesidetiltclamp: M4e 钳位：真值 20° → 只转一次且 ≤15°
  *   32. probemovenoturn   : M4e SIDE_MOVE 侧距单调漂移也不再转身（扫描到发射之间航向不变）
+ *   33. probesidetiltabort: 真实工况保护：真值 30°（>25°）判测斜无效 → corr=0、不转、warn=9
  */
 
 #include "line_follower.h"
@@ -842,6 +843,26 @@ static void probesidetiltclamp(void) {
 }
 
 /**
+ * 真实工况保护：|ε̂|>25° 判为「测斜无效」——不转、corr=0、warn=9。
+ * 背景（2026-11-23 实车）：任务书是「<15cm 停车、箱子与引导线 70~110°」，SIDE_LOCK 原点可能
+ * 贴着面的边缘，60/30 mm 平移把波束带到相邻面/背景时，h2 仍在 [80,450] 里但 ε̂ 会到 30~50°。
+ * 旧逻辑把它钳到 15° 硬转，SIDE_SCAN 与 LEG 落点被带歪（下一面 h=257，锁面自检失败）。
+ */
+static void probesidetiltabort(void) {
+    const float d2r = 3.14159265f / 180.0f;
+    LfController c; LfInput in; uint32_t now;
+    SynthSide w = {0.0f, 75.0f, 180.0f, tanf(30.0f * d2r), 7.5f, 0.6f, 0.0f, 0.0f};
+    side_start(&c, &in, &now, false, false, 2400U);
+    side_run_lock(&c, &in, &now, &w);
+    assert(c.side_tilt_eps_deg >= 26.0f && c.side_tilt_eps_deg <= 34.0f); /* 真值 30° 被量出 */
+    assert(c.side_tilt_corr_rad == 0.0f);                                 /* 超模型：不修 */
+    assert(c.side_tilt_iter == 0U);                                       /* 没有转 */
+    assert(c.turn_start_ms == 0U);                                        /* 没调用 probe_turn_to */
+    assert(c.state == LF_PROBING && c.probe_phase == LF_PROBE_SIDE_SCAN); /* 扫描照常进行 */
+    assert(c.side_lock_warn == 9U);                                       /* 日志能看出是"无效"而不是"平行" */
+}
+
+/**
  * M4e 顺序：SIDE_MOVE 到位后不许再转身。合成一段「侧距单调增大」的平移
  * （真值倾斜 10°、沿面走 150 mm → h 增大 26 mm，正好越过旧的漂移门限 ds≥100 / dh≥12 / 2°≤e≤12°），
  * 断言航向不变、没有调用 probe_turn_to、side_move_corr_rad 保持 0。
@@ -1221,6 +1242,7 @@ int main(int argc,char **argv) {
     else if(!strcmp(name,"probesidetilt"))probesidetilt();
     else if(!strcmp(name,"probesidetiltdead"))probesidetiltdead();
     else if(!strcmp(name,"probesidetiltclamp"))probesidetiltclamp();
+    else if(!strcmp(name,"probesidetiltabort"))probesidetiltabort();
     else if(!strcmp(name,"probemovenoturn"))probemovenoturn();
     else if(!strcmp(name,"probepar"))probepar();
     else if(!strcmp(name,"probeleg"))probeleg();

@@ -361,6 +361,23 @@
         "M4 遗留（非 M4e 回归）：LEG 死算落点散布（h_pred 176/203 vs 实测 183~370）与 AIM 大角度拟合偏差；建议 M4b 用 PROX2 的 face_h/face_n 做落点闭环 + AIM 覆盖/残差门限",
         "A/B/C 受控摆位组仍未跑：18:19 的 3 面数据可作为部分证据，但 B/C（±10°）的符号/量级仍需一次专门台架"
       ]
+    },
+    "relax_20261123": {
+      "date": "2026-11-23 19:00",
+      "why": "按任务书真实工况复核后放宽：任务书要求 <15cm 自动停车（实际 obs 100~150mm）；障碍物 15×5×15、长边压引导线且与引导线 70~110°（首面常为 50mm 窄面，|phi| 天然到 ±20°）；此前要求的理想摆位（165~180mm、|phi|<=5°）不现实",
+      "changes": [
+        "LF_LEG_H_MIN_MM 120 → 100：方案 §5.2 扫掠余量 h=120→+49mm / h=100→+21mm / h=80→−7mm；真实停车 10~15cm 时 h 常在 100~150，120 会把 4 面循环在 LEG 入口直接挡死（18:40 实测 h=114 → PROBE_LEG,seg=FAIL,stage=0,why=1）",
+        "新增 LF_SIDE_TILT_ABORT_DEG=25°：|ε̂|>25° 判本次测斜无效（corr=0、warn=9、不转），不再钳位后硬转 15°。实测 45.9°/31.7° 两例都是平移把波束带到相邻面/背景的假 ε̂，硬转后 SIDE_SCAN/LEG 被带歪（下一面 h=257，锁面失败）",
+        "LF_SIDE_LOCK_TOL_MM 保持 70：它是「转错角/认错面」的唯一报警（单测 probeside ⑩b 用 Δ=80mm 守住），不随放宽一起削弱"
+      ],
+      "firmware": {
+        "debug_flash_bytes": 112344, "ram_bytes": 11880, "warnings": 0,
+        "bin_sha256": "5d2845be803089b24c30400260d9307fa2452a4d853afc33bd37fd1d821ba0aa",
+        "flashed_at": "2026-11-23 19:00",
+        "verify": "STM32_Programmer_CLI -w ... -v -rst：Download verified successfully；复位后已重新 push GROUND（MCAL=1 gnd=1）"
+      },
+      "host_tests": { "passed": 38, "failed": 0, "new": ["probesidetiltabort：真值 30°>25° → eps≈30、corr=0、不转、warn=9、照常进 SIDE_SCAN"] },
+      "next": "按任务书真实摆位重跑 4 面：50mm 窄面朝车（箱子长边压线）、obs 100~150、箱子与引导线夹角 70~110°（phi 自然落在 ±20°）"
     }
   }
 }

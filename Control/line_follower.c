@@ -2024,9 +2024,16 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
                 float e = atan2f(c->side_h2 - c->side_h1, c->side_tilt_shift_mm);
                 if (!pr->side_left) e = -e;
                 c->side_tilt_eps_deg = e * 57.2957795f;
-                /* 死区 7°：平行时一次都不转（A 组判据）；|ε̂|>15° 说明 AIM 的 φ 已经错了，钳位即可。 */
-                if (c->side_tilt_iter == 0U &&
-                    fabsf(c->side_tilt_eps_deg) > LF_SIDE_TILT_MIN_DEG) {
+                /* 死区 7°：平行时一次都不转（A 组判据）。
+                 * 有效性硬门（任务书真实工况）：|ε̂|>25° 不是"残余偏航"（AIM 的 φ 再错也不会留 25° 残余），
+                 * 多半是平移把波束带到了相邻面/背景（此时 h2 仍落在 [80,450] 合法窗口里，warn=8 抓不到）。
+                 * 这时**不转**、记 warn=9：硬转 15° 会把 SIDE_SCAN 与 LEG 落点带歪
+                 * （2026-11-23 实测 45.9°、31.7° 两例，随后下一面 h=257 锁面失败）。
+                 * 15~25° 仍按 ±15° 钳位转一次（每面最多一次，单测 probesidetiltclamp）。 */
+                if (fabsf(c->side_tilt_eps_deg) > LF_SIDE_TILT_ABORT_DEG) {
+                    c->side_warn = 9U;
+                } else if (c->side_tilt_iter == 0U &&
+                           fabsf(c->side_tilt_eps_deg) > LF_SIDE_TILT_MIN_DEG) {
                     corr = limit(e, -LF_SIDE_TILT_MAX_DEG * d2r, LF_SIDE_TILT_MAX_DEG * d2r);
                 }
             } else {
