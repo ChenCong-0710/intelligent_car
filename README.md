@@ -24,7 +24,7 @@
 >   本轮把"测量链"砍到最短：DRIVE2 认到面即停（再补 `d_B/2`+波束足印）、站距锁**首面** `h_ref`（不再逐面 +20 外扩）、
 >   `SIDE_LOCK` 去掉 `|h−pred|` 相对门禁（改 `warn=13`）并加"行进均值兜底(warn=10) / 沿面搜索(warn=11)"、
 >   **关闭扫描后二次微调**（`LF_SIDE_YAW_ENABLE 0`）、去掉 LASER 后 `w>20` 停机门禁。
->   四面逐项数据与两份日志见 **[docs/validation.json](docs/validation.json)** 的 `m4e.full4_20261123`。遗留：宽度实测散布 −22…+33 mm（`w` 只判宽窄，不进控制）。
+>   四面逐项数据与两份日志见 **[docs/validation.json](docs/validation.json)** 的 `m4e.full4_20261123`，实现与偏差说明见 **[docs/M4e-full4-20261123.md](docs/M4e-full4-20261123.md)**。遗留：宽度实测散布 −22…+33 mm（`w` 只判宽窄，不进控制）；认面窗口中心与 `face_n` 统计窗口差 20 mm（1 行 TODO，等下次烧录一并改）。
 > - 🚀 **下一阶段 M4**：回 AIM 重试、`probetour`、参数/Flash 8；计划见根目录 **[M4计划_评审与修订.md](../M4计划_评审与修订.md)**。
 >   接手先读 **Gate 0**：[docs/M3-task-handover.md](docs/M3-task-handover.md)、[docs/teammate-targeting-handover.md](docs/teammate-targeting-handover.md)。
 

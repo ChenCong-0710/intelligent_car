@@ -1813,6 +1813,12 @@ static LfLegResult probe_leg_tick(LfController *c, const LfInput *in, uint32_t n
             /* 「找突变」认面（只认 DRIVE2 段：DRIVE1 沿上一面走，看到的不是下一面）：
              * 连续 LF_LEG_FACE_CONFIRM 帧落在 h_leg+margin±band → 下一面已经进侧视，锁存落点。 */
             if (c->leg_stage == (uint8_t)LF_LEG_DRIVE2 && c->leg_face_seen == 0U) {
+                /* TODO(下次烧录一并改，1 行)：这里 +LF_LEG_MARGIN_MM 是 L1 还带 margin 时的残留。
+                 * 现在 L1 用 h_ref 且不再 +margin，期望站距就是 leg_h_expected，所以本窗口中心应为
+                 * leg_h_expected（h_ref±70 = [100,240]），与下面 face2 统计窗口(±75 of leg_h_expected)
+                 * 一致。当前 [120,260] 会让 251 这类读数"触发认面事件但不计入 face_n"，
+                 * 日志自相矛盾（2026-11-23 22:42 第 4 面就是 stop=E 而 face_n=0）。
+                 * 行为影响仅限于停车点 ±20 mm，未烧录前不改，以免仓库与已烧录镜像不一致。 */
                 float h_pred = c->leg_h_expected + LF_LEG_MARGIN_MM;
                 if (fabsf((float)h - h_pred) <= LF_LEG_FACE_BAND_MM) {
                     if (c->leg_face_cnt < 255U) ++c->leg_face_cnt;

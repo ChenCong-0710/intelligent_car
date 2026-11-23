@@ -707,6 +707,19 @@
     "total_s": 145.5,
     "result": "4 面全打（PASS），但第 4 面中途被无关物体挤到 h=271、w=7.7，光斑偏 —— 外因"
    }
+  },
+  "pending_next_flash": {
+   "item": "DRIVE2 认面窗口中心与 face_n 统计窗口不一致（1 行，未烧录）",
+   "detail": "probe_leg_tick 的认面事件用 leg_h_expected + LF_LEG_MARGIN_MM（h_ref±70 = [120,260]），而 LEG 侧距连续采样的 face2 统计用 leg_h_expected（±75 = [95,245]）。margin 已从 L1 删除，两处应统一为 leg_h_expected±70 = [100,240]。后果仅限停车点 ±20 mm 与日志自洽性（2026-11-23 22:42 第 4 面出现 stop=E 但 face_n=0，就是它）。",
+   "fix": "line_follower.c 里删掉 float h_pred = c->leg_h_expected + LF_LEG_MARGIN_MM; 的 + LF_LEG_MARGIN_MM",
+   "why_not_yet": "已写进代码注释 TODO；本轮不动二进制，保持仓库与已烧录镜像一致（Debug 113088 B / 2026-11-23 22:45）。"
+  },
+  "docs": {
+   "acceptance_writeup": "docs/M4e-full4-20261123.md",
+   "troubleshooting": "问题排查手册.md §18（M4e 四面全流程已通过 + 三行排故表）",
+   "code_map": "docs/codebase-guide.md 模块 8b/8c/8d（已按最终实现更新）",
+   "interface_contract": "接口契约_M1.md（新增 h_ref_mm / side_pred_mm / side_seek_* / leg_face_* / leg_stop_reason 与 warn=10~13）",
+   "design_deviations": "方案_四面靶心定位与绕行.md 末尾「实施偏差记录（2026-11-23）」"
   }
  }
 }
