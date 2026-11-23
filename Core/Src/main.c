@@ -1014,8 +1014,9 @@ int main(void) {
                 if (leg_ev & (uint8_t)LF_LEG_EVENT_TURN) {
                     /* dir = 命令符号（L=+90 逆时针）。h_pred = 转完后云台轴到下一面的期望侧距
                      * ≈ h_leg + margin：下一面 SIDE_LOCK 实测 h 与它一比就知道"转向/认面"对不对，
-                     * 不必等 SIDE_SCAN 去和窄面窗口较劲（2026-11-22 的 389 mm 就是这么漏判的）。 */
-                    float h_leg = g_lf.side_h + g_lf.side_k * g_lf.face.s_m;
+                     * 不必等 SIDE_SCAN 去和窄面窗口较劲（2026-11-22 的 389 mm 就是这么漏判的）。
+                     * M4e 起 h_leg 就是 side_h（去掉 side_k·s_m，见 probe_leg_tick）：诊断值必须与控制一致。 */
+                    float h_leg = g_lf.side_h;
                     board_log("PROBE_LEG,seg=TURN,cmd=%.1f,ach=%.1f,ms=%lu,dir=%c,h_pred=%.0f\r\n",
                               (double)g_lf.turn_cmd_deg, (double)g_lf.turn_ach_deg,
                               (unsigned long)g_lf.turn_ms,

@@ -1628,9 +1628,10 @@ static LfLegResult probe_leg_tick(LfController *c, const LfInput *in, uint32_t n
     c->out.enable = c->out.brake = true; /* 默认保持制动；speed_control 会覆盖成驱动 */
     if (!c->leg_started) {
         c->leg_kind = probe_leg_current_kind(c);
-        /* 用面中心处的 h：SIDE_LOCK 的 h 是扫描原点处的，k 大时两者差 side_k·s_m。
-         * 现场不要求 h=180；h 允许 150~220，但低于 LF_LEG_H_MIN_MM 不绕。 */
-        float h_leg = c->side_h + c->side_k * c->face.s_m;
+        /* 面中心处的 h 就用 SIDE_LOCK 测的 side_h：side_k 是 24 mm 基线的钳位斜率（现场几乎恒 −0.250），
+         * 不是倾角，拿它乘 s_m（最大 ±75 mm）会往 LEG 长度里注入最多 ±19 mm 的系统误差（M4e 止血②）。
+         * 残余偏航 ≤7° 时面中心与扫描原点的 h 差 ≤|s_m|·sin7°≈9 mm，远小于 LEG 落点散布。 */
+        float h_leg = c->side_h;
         h_leg = limit(h_leg, LF_SIDE_H_MIN_MM, LF_SIDE_H_MAX_MM);
         if (h_leg < LF_LEG_H_MIN_MM) return probe_leg_fail(c, 1U);
         float w_nom = (c->leg_kind == 0U) ? LF_BOX_SHORT_MM : LF_BOX_LONG_MM;
@@ -2165,40 +2166,7 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
         c->out.park_lamp = true;
         switch (c->side_move_stage) {
         case LF_SIDE_MOVE_DRIVE: {
-            if (c->side_move_since == 0U) {
-                /* 进入/重入平移段：清空测斜跟踪（首帧时间戳也在这里起算） */
-                c->side_move_since = now;
-                c->side_move_h0 = 0.0f;
-                c->side_move_h_last = 0.0f;
-                c->side_move_s0 = 0.0f;
-                c->side_move_ds = 0.0f;
-                c->side_move_dh = 0.0f;
-                c->side_move_dh_prev = 0.0f;
-                c->side_move_mono = 0U;
-                c->side_move_corr_rad = 0.0f;
-            }
             float err = c->side_target - probe_side_along(c);
-            /* 平移测斜采样：车沿面走时侧距若「单调、非突变」地漂移，就是车头相对箱面不平行。
-             * 突变（单帧 >40 mm）判为换面/擦边，清零计数，不参与判断。 */
-            if ((uint32_t)(now - c->side_move_since) >= 50U) {
-                c->side_move_since = now;
-                if (in->obstacle_valid && in->obstacle_mm >= (uint16_t)LF_SIDE_H_MIN_MM &&
-                    in->obstacle_mm <= (uint16_t)LF_SIDE_H_MAX_MM) {
-                    float h = (float)in->obstacle_mm;
-                    if (c->side_move_h0 <= 0.0f) {
-                        c->side_move_h0 = h;
-                        c->side_move_s0 = c->odo.distance_mm;
-                    } else {
-                        float d = h - c->side_move_h_last;
-                        if (fabsf(d) > 40.0f) c->side_move_mono = 0U;
-                        else if (d * c->side_move_dh_prev > 0.0f) ++c->side_move_mono;
-                        else c->side_move_mono = 0U;
-                        c->side_move_dh_prev = d;
-                    }
-                    c->side_move_h_last = h;
-                    c->side_move_ds = fabsf(c->odo.distance_mm - c->side_move_s0);
-                }
-            }
             if (fabsf(err) < LF_SIDE_ARRIVE_MM || elapsed >= LF_SIDE_MOVE_TIMEOUT_MS) {
                 if (fabsf(err) >= LF_SIDE_ARRIVE_MM) {
                     /* 开位超时（打滑/被挡/编码器异常）：显式告警，不许"看起来成功"；
@@ -2206,22 +2174,10 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
                     c->side_warn = 4U;
                     c->side_event |= (uint8_t)LF_SIDE_EVENT_FAIL;
                 }
-                /* 到点后判残余偏航：距离够、单调帧数够、漂移幅度够大才认；corr 正=左转/CCW */
-                if (c->side_move_h0 > 0.0f && c->side_move_ds >= LF_SIDE_MOVE_TILT_MIN_DS_MM &&
-                    c->side_move_mono >= 3U) {
-                    float dh = c->side_move_h_last - c->side_move_h0;
-                    c->side_move_dh = dh;
-                    if (fabsf(dh) >= LF_SIDE_MOVE_TILT_MIN_MM) {
-                        float e = atan2f(dh, c->side_move_ds);
-                        const float d2r = 0.01745329252f;
-                        if (fabsf(e) >= LF_SIDE_MOVE_TILT_DEADBAND_DEG * d2r &&
-                            fabsf(e) <= LF_SIDE_MOVE_TILT_MAX_DEG * d2r) {
-                            c->side_move_corr_rad = e;
-                            c->turn_stage = (uint8_t)LF_TURN_IDLE;
-                            c->side_event |= (uint8_t)LF_SIDE_EVENT_YAW;
-                        }
-                    }
-                }
+                /* M4e 止血①：这里原先按平移段的侧距单调漂移原地转一次修正，**已删除**。
+                 * 那个转身在 SIDE_SCAN 之后、LASER 之前：probe_side_verify=0 时转完直接发射，
+                 * 光斑偏 h·tanε + pan_x·sinε（ε=7°、h≈180 时约 26 mm），而 50 mm 窄面半宽只有 25 mm。
+                 * 硬规则：扫描开始到 LASER 结束之间一个角都不许动。侧距漂移只留诊断，不再进控制。 */
                 probe_motion_reset(c);
                 c->out.enable = c->out.brake = true;
                 c->side_move_stage = (uint8_t)LF_SIDE_MOVE_SETTLE;
@@ -2233,19 +2189,9 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
             break;
         }
         case LF_SIDE_MOVE_SETTLE:
-            /* 同上：转开始后不能再每拍清斜坡，否则 SIDE_MOVE 的 corr 修正同样转不动 */
-            if (c->turn_stage == (uint8_t)LF_TURN_IDLE) probe_motion_reset(c);
+            probe_motion_reset(c);
             c->out.enable = c->out.brake = true;
             if (elapsed >= LF_SIDE_SETTLE_MS) {
-                /* 平移段测出的残余偏航：先原地修平（corr 正=左转），再决定是否复测 */
-                if (c->side_move_corr_rad != 0.0f) {
-                    if (!probe_turn_to(c, now, c->odo.heading_rad, c->side_move_corr_rad,
-                                       LF_SIDE_TILT_PROBE_SPEED_MM_S, 3.0f, dt)) break;
-                    c->side_move_corr_rad = 0.0f;
-                    c->turn_stage = (uint8_t)LF_TURN_IDLE;
-                    c->phase_since = now;
-                    break;
-                }
                 if (pr->side_verify && !c->side_verify_done && probe_side_verify_begin(c, now)) {
                     c->phase_since = now; /* 复测扫描的计时/采样节拍从停稳后重新起算 */
                     c->side_move_stage = (uint8_t)LF_SIDE_MOVE_VERIFY;

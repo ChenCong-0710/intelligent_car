@@ -154,6 +154,9 @@
  * @note  2026-11-23 现场：TURN_PAR 后车头若仍差 10°，沿面走 100 mm 侧距会单调变化 ~17 mm，
  *        这种「慢慢增大/减小」的漂移就是转向角不对的直接证据；突变（>40 mm/帧）判为换面/边缘，不计入。
  */
+/* 2026-11-23 M4e：以下 4 个门限**已停用**——SIDE_MOVE 到位后不再按漂移转身。
+ * 那个转身发生在 SIDE_SCAN 之后、LASER 之前，probe_side_verify=0 时转完直接发射，光斑偏 26 mm；
+ * 定义保留只为不动日志字段与历史，控制路径不再引用（见 line_follower.c 的 LF_SIDE_MOVE_DRIVE）。 */
 #define LF_SIDE_MOVE_TILT_MIN_DS_MM 100.0f
 #define LF_SIDE_MOVE_TILT_MIN_MM 12.0f
 #define LF_SIDE_MOVE_TILT_DEADBAND_DEG 2.0f
@@ -397,7 +400,7 @@ typedef enum {
     LF_SIDE_EVENT_EDGE = 0x01,  /**< 找到一个边界 */
     LF_SIDE_EVENT_MID = 0x02,   /**< 中点/宽度确定（含复测后更新） */
     LF_SIDE_EVENT_FAIL = 0x04,  /**< 本次扫描 / SIDE_LOCK 失败 */
-    LF_SIDE_EVENT_YAW = 0x08    /**< SIDE_MOVE 平移测出残余偏航（侧距单调漂移） */
+    LF_SIDE_EVENT_YAW = 0x08    /**< 停用（M4e）：SIDE_MOVE 不再按平移漂移转身，本事件不再置位 */
 } LfSideEvent;
 
 /**
@@ -690,15 +693,17 @@ typedef struct {
                                    与 side_warn 分开存：进 SIDE_SCAN 时 probe_side_begin() 会清 side_warn，
                                    以前 warn=6 就是在成功路径上被那次清零擦掉的（日志永远 warn=0）。 */
     uint8_t side_move_stage;   /**< SIDE_MOVE 子状态 LF_SIDE_MOVE_DRIVE / SETTLE / VERIFY / DONE */
-    uint8_t side_move_mono;    /**< 平移段侧距「同向增量」连续帧数（>3 且无突变才算单调漂移） */
-    uint32_t side_move_since;  /**< 平移段侧距采样节拍时间戳 (ms，50 ms) */
-    float side_move_h0;        /**< 平移段起始侧距 (mm)，0=还没取到 */
-    float side_move_h_last;    /**< 平移段最近有效侧距 (mm) */
-    float side_move_s0;        /**< 平移段起始里程 (mm) */
-    float side_move_ds;        /**< 平移段已走距离 (mm) */
-    float side_move_dh;        /**< 平移段侧距总漂移 (mm，末−首) */
-    float side_move_dh_prev;   /**< 上一次采样增量 (mm)，判单调用 */
-    float side_move_corr_rad;  /**< 平移测出的残余偏航 (rad)：非 0 时 SETTLE 后原地修平 */
+    /* 以下 side_move_* 测斜字段自 M4e 起**不再赋值**（SIDE_MOVE 到位后不许再转身）；
+     * 定义保留只为不动 main.c 的 PROBE_SIDE_YAW 日志格式，读出来恒 0。 */
+    uint8_t side_move_mono;    /**< （停用）平移段侧距「同向增量」连续帧数 */
+    uint32_t side_move_since;  /**< （停用）平移段侧距采样节拍时间戳 (ms，50 ms) */
+    float side_move_h0;        /**< （停用）平移段起始侧距 (mm)，0=还没取到 */
+    float side_move_h_last;    /**< （停用）平移段最近有效侧距 (mm) */
+    float side_move_s0;        /**< （停用）平移段起始里程 (mm) */
+    float side_move_ds;        /**< （停用）平移段已走距离 (mm) */
+    float side_move_dh;        /**< （停用）平移段侧距总漂移 (mm，末−首) */
+    float side_move_dh_prev;   /**< （停用）上一次采样增量 (mm)，判单调用 */
+    float side_move_corr_rad;  /**< （停用）平移测出的残余偏航 (rad)；M4e 起恒 0，不再触发转身 */
     uint8_t side_verify_mode;  /**< 1 = 当前这一遍扫描是发射前复测（reach 收窄、原点已重锁存） */
     uint8_t side_verify_done;  /**< 1 = 本面已经做过一次复测（避免重复进 VERIFY） */
     uint8_t side_rescan;       /**< 1 = SIDE_MOVE 到位后回到 SIDE_SCAN 重扫一次 */
