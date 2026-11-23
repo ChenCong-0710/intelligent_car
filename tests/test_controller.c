@@ -821,7 +821,7 @@ static void probesidetiltdead(void) {
     assert(c.side_tilt_corr_rad == 0.0f);                                  /* 死区：corr=0 */
     assert(c.side_tilt_iter == 0U);                                        /* 没有转 */
     assert(c.turn_start_ms == 0U);                                         /* 没有调用 probe_turn_to */
-    assert(c.probe_phase != LF_PROBE_SIDE_LOCK);                           /* 测斜段正常结束 */
+    assert(c.state == LF_PROBING && c.probe_phase == LF_PROBE_SIDE_SCAN);  /* 测斜段正常结束、已进侧扫 */
 }
 
 /**
@@ -838,7 +838,7 @@ static void probesidetiltclamp(void) {
     assert(c.side_tilt_iter == 1U);                                  /* 每面最多 1 次 */
     assert(fabsf(c.turn_cmd_deg - 15.0f) <= 0.5f);                   /* corr 被钳到 +15° */
     assert(fabsf(c.turn_ach_deg - 15.0f) <= 8.0f);                   /* 实际也转到 15° 附近 */
-    assert(c.probe_phase != LF_PROBE_SIDE_LOCK);
+    assert(c.state == LF_PROBING && c.probe_phase == LF_PROBE_SIDE_SCAN); /* 转完并进侧扫，不是停机混过 */
 }
 
 /**

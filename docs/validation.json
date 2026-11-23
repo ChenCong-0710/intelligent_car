@@ -310,8 +310,8 @@
       "rerun_at": "2026-11-23 17:56",
       "rerun_command": "cmake -S tests -B build/host-make -G 'MinGW Makefiles' + cmake --build + ctest（同一份 tests/CMakeLists.txt，避开本机沙箱 ninja 卡死）",
       "new": [
-        "probesidetiltdead：真值 5°，eps≈5° 但 <7° 死区 → corr=0、turn_start_ms 不变",
-        "probesidetiltclamp：真值 20° → 只转一次（side_tilt_iter==1）、corr 钳到 15°、实测转角 15°±8°",
+        "probesidetiltdead：真值 5°，eps≈5° 但 <7° 死区 → corr=0、turn_start_ms 不变、测斜段正常结束进 SIDE_SCAN（state=PROBING）",
+        "probesidetiltclamp：真值 20° → 只转一次（side_tilt_iter==1）、corr 钳到 15°、实测转角 15°±8°、转完进侧扫",
         "probemovenoturn：注入 150 mm 单调漂移的 SIDE_MOVE → 航向不变、无 probe_turn_to、side_move_corr_rad=0"
       ]
     },
