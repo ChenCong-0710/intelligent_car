@@ -27,6 +27,9 @@
  *   26. probeside    : M2 侧视横扫（SIDE_LOCK / SIDE_SCAN / SIDE_MOVE + 复测）在合成侧扫世界里的中点/宽度精度
  *   27~28. probeturn / probetour : M3/M4 骨架（现为 SKIP）
  *   29. probesidetilt: SIDE_LOCK 60 mm 平移两点测斜（10° 斜置必须量出 10.6 mm / corr≈10°，卡住走 warn=6）
+ *   30. probesidetiltdead : M4e 死区：真值 5° 能测出但不许转（<7°）
+ *   31. probesidetiltclamp: M4e 钳位：真值 20° → 只转一次且 ≤15°
+ *   32. probemovenoturn   : M4e SIDE_MOVE 侧距单调漂移也不再转身（扫描到发射之间航向不变）
  */
 
 #include "line_follower.h"
@@ -713,7 +716,7 @@ static void probeside(void) {
  * 合成世界里 h(s)=h0+tilt·s，车沿自身轴前进 60 mm：
  *   ① 左面斜 10°（tilt=tan10°）：h2−h1≈10.6 mm，corr≈+10.4°（车头偏离开箱面，要左转/CCW 挽回）；
  *   ② 右面同样斜 10°：几何镜像，corr≈−10.4°（同样的 h2>h1 要右转/CW）；
- *   ③ 平行：h2−h1 只剩噪声，corr 落在 1.5° 死区里 → 不许转；
+ *   ③ 平行：h2−h1 只剩噪声，corr 落在 7° 死区里 → 不许转；
  *   ④ 编码器不走（轮子打滑/被挡）：1.5 s 兜底 → warn=6、h2 沿用 h1、corr=0，整轮不因测斜卡死。
  * 旧代码在 ① 就会失败：stage 3 没清 side_ring_n，h2 直接复用 h1 的 5 帧样本，h2−h1 恒等于 0。
  */
@@ -743,14 +746,14 @@ static void probesidetilt(void) {
         assert(c.side_tilt_corr_rad <= -8.0f * d2r);     /* 负=右转/CW */
         assert(c.side_tilt_corr_rad >= -13.0f * d2r);
     }
-    /* ③ 平行 + 噪声：h2 与 h1 各自独立采样，差 1~2 mm 是允许的，但不许越过 1.5° 死区 */
+    /* ③ 平行 + 噪声：h2 与 h1 各自独立采样，差 1~2 mm 是允许的，但不许越过 7° 死区（M4e） */
     {
         LfController c; LfInput in; uint32_t now;
         SynthSide w = {0.0f, 75.0f, 180.0f, 0.0f, 7.5f, 0.6f, 0.0f, 0.0f};
         side_start(&c, &in, &now, false, false, 2400U);
         side_run(&c, &in, &now, &w, false, 0.0f);
         assert(fabsf(c.side_h2 - c.side_h1) <= 2.0f);
-        assert(fabsf(c.side_tilt_corr_rad) < 1.5f * d2r);
+        assert(c.side_tilt_corr_rad == 0.0f);
     }
     /* ④ 卡住：target 有速度但编码器 0 → 1.5 s 兜底，warn=6 要活到日志（以前会被 probe_side_begin 清 0） */
     {
@@ -775,6 +778,111 @@ static void probesidetilt(void) {
         assert(c.side_h2 == c.side_h1);          /* 兜底：明确沿用 h1 */
         assert(c.side_shift_peak_mm < 1.0f);     /* ds 能判出"根本没动" */
     }
+}
+/**
+ * @brief 只跑到 SIDE_LOCK 结束（进 SIDE_SCAN）或停机：给只验锁定/测斜行为的用例用（不跑整条侧扫）
+ * @note  编码器按控制器自己的 target_mm_s 生成，测斜的 60 mm 平移/退回与原地转都能真的走。
+ */
+static void side_run_lock(LfController *c, LfInput *in, uint32_t *now, const SynthSide *w) {
+    const float mm_per_count = 3.14159265f * c->cfg.wheel_diameter_mm / c->cfg.encoder_counts_per_rev;
+    float frac[2] = {0.0f, 0.0f};
+    unsigned ping = 0U, guard = 0U;
+    while (c->state == LF_PROBING && c->probe_phase == LF_PROBE_SIDE_LOCK && ++guard < 4000U) {
+        if (++ping >= 12U) { /* 60 ms 超声节拍 */
+            ping = 0U;
+            uint16_t d = synth_side_echo(w, c->odo.x_mm);
+            in->obstacle_mm = d;
+            in->obstacle_valid = d != 0U;
+        }
+        for (unsigned i = 0; i < 2U; ++i) {
+            float counts = c->target_mm_s[i] * 0.005f / mm_per_count + frac[i];
+            int16_t whole = (int16_t)(counts >= 0.0f ? floorf(counts) : ceilf(counts));
+            frac[i] = counts - (float)whole;
+            in->encoder_delta[i] = whole;
+        }
+        *now += 5U;
+        lf_step(c, in, *now, 0.005f);
+    }
+    assert(guard < 4000U);
+}
+
+/**
+ * M4e 死区：真值 5° 必须被量出来（60 mm 基线 5.3 mm），但 <7° 死区 → 一次都不许转。
+ * 死区 1.5° 的旧版会在这里无谓地转一次（1.5° 只有 1σ，σ_ε≈1.3°）。
+ */
+static void probesidetiltdead(void) {
+    const float d2r = 3.14159265f / 180.0f;
+    LfController c; LfInput in; uint32_t now;
+    SynthSide w = {0.0f, 75.0f, 180.0f, tanf(5.0f * d2r), 7.5f, 1.0f, 0.0f, 0.0f};
+    side_start(&c, &in, &now, false, false, 2400U);
+    side_run_lock(&c, &in, &now, &w);
+    assert(c.side_shift_peak_mm >= 55.0f);                                 /* 60 mm 平移真的走完 */
+    assert(c.side_tilt_eps_deg >= 3.0f && c.side_tilt_eps_deg <= 7.0f);    /* 真值 5°，±1 mm≈±1° */
+    assert(c.side_tilt_corr_rad == 0.0f);                                  /* 死区：corr=0 */
+    assert(c.side_tilt_iter == 0U);                                        /* 没有转 */
+    assert(c.turn_start_ms == 0U);                                         /* 没有调用 probe_turn_to */
+    assert(c.probe_phase != LF_PROBE_SIDE_LOCK);                           /* 测斜段正常结束 */
+}
+
+/**
+ * M4e 钳位：真值 20° → 只转一次、corr 被钳到 ±15°、side_tilt_iter 只能到 1。
+ * 旧版没有 iter 守卫但有 15° 钳位；本轮要同时守住「每面最多一次」。
+ */
+static void probesidetiltclamp(void) {
+    const float d2r = 3.14159265f / 180.0f;
+    LfController c; LfInput in; uint32_t now;
+    SynthSide w = {0.0f, 75.0f, 180.0f, tanf(20.0f * d2r), 7.5f, 0.6f, 0.0f, 0.0f};
+    side_start(&c, &in, &now, false, false, 2400U);
+    side_run_lock(&c, &in, &now, &w);
+    assert(c.side_tilt_eps_deg >= 17.0f && c.side_tilt_eps_deg <= 23.0f);
+    assert(c.side_tilt_iter == 1U);                                  /* 每面最多 1 次 */
+    assert(fabsf(c.turn_cmd_deg - 15.0f) <= 0.5f);                   /* corr 被钳到 +15° */
+    assert(fabsf(c.turn_ach_deg - 15.0f) <= 8.0f);                   /* 实际也转到 15° 附近 */
+    assert(c.probe_phase != LF_PROBE_SIDE_LOCK);
+}
+
+/**
+ * M4e 顺序：SIDE_MOVE 到位后不许再转身。合成一段「侧距单调增大」的平移
+ * （真值倾斜 10°、沿面走 150 mm → h 增大 26 mm，正好越过旧的漂移门限 ds≥100 / dh≥12 / 2°≤e≤12°），
+ * 断言航向不变、没有调用 probe_turn_to、side_move_corr_rad 保持 0。
+ * 旧代码会在这段末尾 corr≈+9.8° 原地转一次 —— 那一步在 SIDE_SCAN 之后、LASER 之前，会把光斑打偏。
+ */
+static void probemovenoturn(void) {
+    const float d2r = 3.14159265f / 180.0f;
+    LfController c; LfInput in; uint32_t now;
+    /* 面中心 +75、半宽 75：车从 x=0 走到 x=150 全程都在面内；倾斜 10° → 侧距单调增大 26 mm */
+    SynthSide w = {75.0f, 75.0f, 180.0f, tanf(10.0f * d2r), 7.5f, 0.3f, 0.0f, 0.0f};
+    side_start(&c, &in, &now, false, false, 2400U); /* 只为锁存 side_origin_* 并进入 PROBING */
+    assert(c.probe_phase == LF_PROBE_SIDE_LOCK);
+    c.cfg.probe.side_speed_mm_s = 100.0f; /* 50 ms 采样间距 5 mm：漂移 0.88 mm/帧，稳过 ±0.3 mm 噪声 */
+    c.side_target = 150.0f;
+    c.probe_phase = LF_PROBE_SIDE_MOVE;   /* 直接注入 SIDE_MOVE（与 probepar 注入 TURN_PAR 同法） */
+    const float hdg0 = c.odo.heading_rad;
+    const float mmpc = 3.14159265f * c.cfg.wheel_diameter_mm / c.cfg.encoder_counts_per_rev;
+    float frac[2] = {0.0f, 0.0f};
+    unsigned ping = 0U, guard = 0U;
+    while (c.state == LF_PROBING && c.probe_phase == LF_PROBE_SIDE_MOVE && ++guard < 8000U) {
+        if (++ping >= 12U) {
+            ping = 0U;
+            uint16_t d = synth_side_echo(&w, c.odo.x_mm);
+            in.obstacle_mm = d;
+            in.obstacle_valid = d != 0U;
+        }
+        for (unsigned i = 0; i < 2U; ++i) {
+            float counts = c.target_mm_s[i] * 0.005f / mmpc + frac[i];
+            int16_t whole = (int16_t)(counts >= 0.0f ? floorf(counts) : ceilf(counts));
+            frac[i] = counts - (float)whole;
+            in.encoder_delta[i] = whole;
+        }
+        now += 5U;
+        lf_step(&c, &in, now, 0.005f);
+    }
+    assert(guard < 8000U);
+    assert(c.side_move_stage == (uint8_t)LF_SIDE_MOVE_DONE); /* 开到 150 mm 并停稳 */
+    assert(fabsf(c.odo.x_mm - 150.0f) < 4.0f);
+    assert(c.side_move_corr_rad == 0.0f);                    /* 漂移不再产生修正角 */
+    assert(c.turn_start_ms == 0U);                           /* 没有 probe_turn_to */
+    assert(fabsf(c.odo.heading_rad - hdg0) < 0.5f * d2r);    /* 航向没变 */
 }
 /**
  * M3 TURN_PAR：直接注入 TURN_PAR 相位，用控制器自己的 target_mm_s 生成编码器脉冲。
@@ -1111,6 +1219,9 @@ int main(int argc,char **argv) {
     else if(!strcmp(name,"probefit"))probefit();
     else if(!strcmp(name,"probeside"))probeside();
     else if(!strcmp(name,"probesidetilt"))probesidetilt();
+    else if(!strcmp(name,"probesidetiltdead"))probesidetiltdead();
+    else if(!strcmp(name,"probesidetiltclamp"))probesidetiltclamp();
+    else if(!strcmp(name,"probemovenoturn"))probemovenoturn();
     else if(!strcmp(name,"probepar"))probepar();
     else if(!strcmp(name,"probeleg"))probeleg();
     else if(!strcmp(name,"probeturn"))probeturn();
