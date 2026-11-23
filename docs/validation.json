@@ -240,7 +240,16 @@
       "next_face": { "h_mm": 160.0, "w_mm": 170.8, "kind": "WIDE", "s_m_deg": -35.2, "side_lock_ok": 1 },
       "criteria": { "no_re_side": true, "side_lock_ok": true, "w_gt_30": true, "h_in_150_220": true },
       "first_attempt": "12:04 SIDE_SCAN edges=0 twice at h=196 (background jump <40 mm); re-placed to ~15 cm and passed",
-      "logs": ["data/m4_gate0_side_20261123_120518.log", "data/m4_gate0_leg_20261123_120542.log"]
+      "repeat_20261123_1211": {
+        "side": { "h_mm": 176.0, "w_mm": 72.4, "kind": "NARROW", "s_m_deg": 14.9 },
+        "leg": { "drive1_mm": 247.3, "turn_ach_deg": 90.7, "drive2_mm": 217.3, "h_pred_mm": 192,
+                 "prox2": { "pred": 172, "face_n": 23, "face_h": 215 } },
+        "next_face": { "h_mm": 212.0, "w_mm": 177.5, "kind": "WIDE", "s_m_deg": -31.6, "side_lock_ok": 1 },
+        "criteria": { "no_re_side": true, "side_lock_ok": true, "w_gt_30": true, "h_in_150_220": true },
+        "note": "2/2 repeatable; next-face h tracks the standing distance (160 vs 212)"
+      },
+      "logs": ["data/m4_gate0_side_20261123_120518.log", "data/m4_gate0_leg_20261123_120542.log",
+                "data/m4_gate0_side_20261123_121123.log", "data/m4_gate0_leg_20261123_121149.log"]
     },
     "failed_attempts": [
       { "time": "10:42", "fail": "face2 SIDE_LOCK h1=368", "cause": "w=118.7<130 -> NARROW -> L2 251 (+54 mm overshoot)", "fix": "LF_SIDE_KIND_SPLIT_MM 130->100" },
