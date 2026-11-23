@@ -1,7 +1,7 @@
 {
   "date": "2026-11-23",
   "mcu": "STM32G474VET6",
-  "milestone": "Gate 0 partial on real car (2026-11-23): G0-2 TURN_PAR and G0-4 faces=2 (wide->narrow, COMPLETE) pass; G0-3 narrow->wide pending. Details in docs/M4-gate0-20261123.md",
+  "milestone": "Gate 0 complete on real car (2026-11-23): G0-2 TURN_PAR, G0-3 narrow->wide LEG and G0-4 faces=2 (wide->narrow->COMPLETE) all pass. Details in docs/M4-gate0-20261123.md",
   "hardware_flash_performed": true,
   "flashed_image": "build/Debug/line-following.elf (112024 B, STM32CubeProgrammer SWD verify OK, 2026-11-23 11:52)",
   "real_track_verified": false,
@@ -188,7 +188,7 @@
     ]
   },
   "m3_pending": {
-    "status": "Gate 0 G0-2 (TURN_PAR real car) and G0-4 (faces=2 auto) pass on 2026-11-23; G0-3 narrow->wide still pending",
+    "status": "Gate 0 complete on 2026-11-23: G0-2 (TURN_PAR), G0-3 (narrow->wide LEG, no re-side) and G0-4 (faces=2 auto) all pass",
     "gate0": [
       "TURN_PAR real-car: PROBE_TURN,tag=PAR cmd/ach/ms/ok=1 and |ach-cmd|<=8 deg, then SIDE_LOCK ok=1",
       "narrow->wide LEG: no re-side; next SIDE_LOCK ok=1, w>30, h in [150,220]",
@@ -208,7 +208,7 @@
     "date": "2026-11-23",
     "doc": "docs/M4-gate0-20261123.md",
     "bench": "bluetooth COM3 + tools/_m4_bench.py; ST-Link STM32_Programmer_CLI -w -v",
-    "status": { "G0-2": "pass", "G0-4": "pass", "G0-3": "pending" },
+    "status": { "G0-2": "pass", "G0-3": "pass", "G0-4": "pass" },
     "firmware": {
       "debug_flash_bytes": 112024,
       "ram_bytes": 11864,
@@ -232,6 +232,16 @@
       "completed": true, "backup_used": false,
       "log": "data/m4_gate0_faces2_20261123_115427.log"
     },
+    "g0_3_leg": {
+      "run": "2026-11-23 12:05:42",
+      "side": { "h_mm": 146.0, "w_mm": 71.2, "kind": "NARROW", "s_m_deg": 9.4, "laser_mm": 173 },
+      "leg": { "drive1_mm": 218.7, "turn_cmd_deg": 90.0, "turn_ach_deg": 91.4, "drive2_mm": 188.7,
+               "h_pred_mm": 164, "prox2": { "pred": 144, "n": 44, "face_n": 21, "face_h": 180 } },
+      "next_face": { "h_mm": 160.0, "w_mm": 170.8, "kind": "WIDE", "s_m_deg": -35.2, "side_lock_ok": 1 },
+      "criteria": { "no_re_side": true, "side_lock_ok": true, "w_gt_30": true, "h_in_150_220": true },
+      "first_attempt": "12:04 SIDE_SCAN edges=0 twice at h=196 (background jump <40 mm); re-placed to ~15 cm and passed",
+      "logs": ["data/m4_gate0_side_20261123_120518.log", "data/m4_gate0_leg_20261123_120542.log"]
+    },
     "failed_attempts": [
       { "time": "10:42", "fail": "face2 SIDE_LOCK h1=368", "cause": "w=118.7<130 -> NARROW -> L2 251 (+54 mm overshoot)", "fix": "LF_SIDE_KIND_SPLIT_MM 130->100" },
       { "time": "11:12", "fail": "same", "cause": "w=118.5<130", "fix": "same" },
@@ -252,9 +262,9 @@
       "诊断：PROBE_FACE 在 AIM->TURN_PAR 成功路径也打；PROBE_SIDE_LOCK 追加 h3/warn；PROBE_SIDE_FAIL 打 lock_stage"
     ],
     "open_items": [
-      "face1 w=182 at h≈180 (>150): beam-footprint compensation over-corrects",
-      "face2 s_m=-17.9 deg (~72 mm off centre): LEG dead-reckoning residual; PROX face_h/face_n could close the loop",
-      "G0-3 narrow->wide not run yet"
+      "face1 w=182 at h≈180 (>150) and G0-3 next face w=170.8: beam-footprint compensation over-corrects at h>170",
+      "face2 s_m=-17.9 deg (~72 mm), G0-3 next face s_m=-35.2 deg: LEG dead-reckoning residual; PROX face_h/face_n could close the loop",
+      "repeatability run of faces=2 and G0-3 still to do"
     ]
   }
 }

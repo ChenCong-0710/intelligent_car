@@ -17,7 +17,7 @@
 >   详细落地记录见《手册》§3.9、《方案》§13.4、《问题排查手册》§17.14。
 > - ✅ **M3 转平行 + 绕行（2026-11-22 已烧录）**：`TURN_PAR` 接在 AIM 后；`LEG` 用 DRIVE1→TURN→DRIVE2 绕到下一面，**宽面→窄面单向台架通过**（下一面 `SIDE_LOCK h=215 ok=1`、`w=43.6 NARROW`、`TURN 90/91` 实车左转）。**M3 还没收口**：TURN_PAR 实车、窄→宽、faces=2 自动是 Gate 0。
 >   关键修正：`BOARD_SWAP_LR=0`（否则日志左转、实车右转）、`track_width_mm=112.5`（90° 标度）、**LEG 不做 14° ALIGN**。
-> - ✅ **M4 Gate 0 实车（2026-11-23，已烧录）**：**G0-2 TURN_PAR 通过**（`cmd=-90.4 / ach=-91.0`，误差 0.6°，`SIDE_LOCK h=192 ok=1`）；**G0-4 faces=2 自动通过**（面1 `w=182.0 WIDE` → LEG `DRIVE1 302.8 / TURN 90.7 / DRIVE2 172.8` → 面2 `w=65.9 NARROW` → COMPLETE，无 FAIL）；G0-3 窄→宽待跑。
+> - ✅ **M4 Gate 0 实车（2026-11-23，已烧录）**：**G0-2 TURN_PAR 通过**（`cmd=-90.4 / ach=-91.0`，误差 0.6°，`SIDE_LOCK h=192 ok=1`）；**G0-4 faces=2 自动通过**（面1 `w=182.0 WIDE` → LEG `DRIVE1 302.8 / TURN 90.7 / DRIVE2 172.8` → 面2 `w=65.9 NARROW` → COMPLETE，无 FAIL）；**G0-3 窄→宽通过**（不重新 `side`，窄面 `w=71.2 NARROW` → 下一面 `w=170.8 WIDE h=160 ok=1`）。Gate 0 三项齐。
 >   这一轮新增：LEG 侧距连续采样 `PROBE_LEG,seg=PROX/PROX2`、`SIDE_LOCK` 沿面 60 mm 平移测斜、`seg=BACKUP` 收尾倒回 40 mm、宽窄判据 130→100、锁定容差 40→70 mm。记录见 **[docs/M4-gate0-20261123.md](docs/M4-gate0-20261123.md)**。
 > - 🚀 **下一阶段 M4**：四面循环、回 AIM 重试、`h_pred`/`pred` 跨面、面宽分类、`probetour`、参数/Flash 8；计划见根目录 **[M4计划_评审与修订.md](../M4计划_评审与修订.md)**。
 >   接手先读 **Gate 0**：[docs/M3-task-handover.md](docs/M3-task-handover.md)、[docs/teammate-targeting-handover.md](docs/teammate-targeting-handover.md)。
