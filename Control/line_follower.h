@@ -126,14 +126,17 @@
 #define LF_SIDE_LOCK_FRAMES 5U
 
 /** @brief 侧视锁定：|h - (rho + pan_x)| 自检容差 (mm)。rho 比卷尺大 15~20 mm，故放到 40 mm */
-#define LF_SIDE_LOCK_TOL_MM 40.0f
+/* 2026-11-23 实车：TURN_PAR 后 h 比 ρ+pan_x 系统偏大 28~58 mm（11:09 实测 218 vs 160.1）。
+ * 转向是绕轮轴中点做的，但实车会往离开箱面的方向平移 30~60 mm（轮子打滑/万向轮拖拽），
+ * 40 mm 的刚性自检把正确的锁面判成失败。放到 70 mm：仍能挡住 11:09 那次 h=93 的挡块（Δ85）。 */
+#define LF_SIDE_LOCK_TOL_MM 70.0f
 
 /** @brief 侧视站立距离 h 的物理有效区间 (mm)（<80 近盲区/自回波，>350 回波太弱） */
 #define LF_SIDE_H_MIN_MM 80.0f
 #define LF_SIDE_H_MAX_MM 350.0f
 
 /** @brief 侧视锁定超时 (ms)：400 ms 舵机 + 5 帧 × 60 ms = 700 ms，留 2.5 s 余量 */
-#define LF_SIDE_LOCK_TIMEOUT_MS 6000U  /* 含预扫测斜：400 等待 + 3×5 帧 + 两次小转，2.5 s 不够 */
+#define LF_SIDE_LOCK_TIMEOUT_MS 9000U  /* 含预扫测斜：400 等待 + 30 mm 平移（45 mm/s≈0.7 s）+ 停稳 + 3×5 帧 + 一次修正转 */
 
 /** @brief 侧扫/开位末段降速：|err| 小于它时降到低速，避免过冲 */
 #define LF_SIDE_SLOW_DIST_MM 20.0f
@@ -142,6 +145,16 @@
 /** @brief 侧扫到位判据 (mm) 与到位后的主动制动稳定时间 (ms) */
 #define LF_SIDE_ARRIVE_MM 2.0f
 #define LF_SIDE_SETTLE_MS 150U
+
+/**
+ * @brief SIDE_MOVE 平移测斜门限：沿面走 ≥40 mm 时，侧距单调（非突变）漂移 ≥12 mm 才认作残余偏航
+ * @note  2026-11-23 现场：TURN_PAR 后车头若仍差 10°，沿面走 100 mm 侧距会单调变化 ~17 mm，
+ *        这种「慢慢增大/减小」的漂移就是转向角不对的直接证据；突变（>40 mm/帧）判为换面/边缘，不计入。
+ */
+#define LF_SIDE_MOVE_TILT_MIN_DS_MM 100.0f
+#define LF_SIDE_MOVE_TILT_MIN_MM 12.0f
+#define LF_SIDE_MOVE_TILT_DEADBAND_DEG 2.0f
+#define LF_SIDE_MOVE_TILT_MAX_DEG 12.0f
 
 /** @brief SIDE_MOVE 单次驱动超时 (ms)：最长的“扫失败后退回原点”约 280 mm，50 mm/s 需要 5.6 s */
 #define LF_SIDE_MOVE_TIMEOUT_MS 10000U
@@ -169,7 +182,7 @@
  * ------------------------------------------------------------------------- */
 
 /** @brief TURN_PAR 超时 (ms)：90° @90 mm/s 实测 1.1~1.4 s，3 s 足够；超时=失败+停机 */
-#define LF_TURN_PAR_TIMEOUT_MS 3000U
+#define LF_TURN_PAR_TIMEOUT_MS 6000U  /* 转角降到 35 mm/s 后 90~105° 要 2.5~4 s，3 s 会误判超时 */
 
 /** @brief 原地转到位后的主动制动稳定时间 (ms)：停稳后再锁存 turn_ach_deg，避免把滑行角当成到位角 */
 #define LF_TURN_SETTLE_MS 150U
@@ -196,6 +209,22 @@
 #define LF_LEG_DRIVE_TIMEOUT_MS 8000U
 
 /**
+ * @brief LEG 期间侧距连续采样：节拍 (ms) 与 DRIVE2 认面窗口半宽 (mm)
+ * @note  宽面转完后舵机一直压在 side_us，超声本来就在测；这里只是把读数按 50 ms 留轨迹。
+ *        DRIVE2 里落在 h_expected±75 mm 的帧即「窄面从旁边过」的直接证据。
+ */
+#define LF_LEG_PROX_PERIOD_MS 50U
+#define LF_LEG_PROX_FACE_BAND_MM 75.0f
+
+/**
+ * @brief DRIVE2 收尾补救：面已滑出侧视时倒回的距离/速度
+ * @note  2026-11-23 三次 faces=2 都在同一处失败：DRIVE2 停机时侧距=368（背景），
+ *        但行进中 face_n≥5 明显看到过面——死算的 L2 越过窄面后沿约 30~50 mm。
+ */
+#define LF_LEG_BACKUP_MM 40.0f
+#define LF_LEG_BACKUP_SPEED_MM_S 50.0f
+
+/**
  * @brief LEG 前航向修正（ALIGN）已于 2026-11-22 21:36 **永久删除**
  * @note  台架结论：side_k=-0.25（≈14°）是侧扫弧段/电机死区造成的**测量偏置**，不是静态歪斜；
  *        车实际与面平行时也会稳定测出 -0.25。按它修 14° 反而把车头顶向箱面
@@ -205,8 +234,8 @@
  */
 
 /** @brief M3 转角降速 (mm/s)：LEG 转角 60、TURN_PAR 60；低 ρ 时减小前角擦箱与过冲 */
-#define LF_LEG_TURN_SPEED_MM_S 60.0f
-#define LF_TURN_PAR_SPEED_MM_S 60.0f
+#define LF_LEG_TURN_SPEED_MM_S 50.0f
+#define LF_TURN_PAR_SPEED_MM_S 50.0f
 
 /**
  * @brief 面宽分类门限 (mm)：w < 它判窄面(50)，否则宽面(150)
@@ -214,7 +243,11 @@
  *        宽面真值 150 在 h≈153 时测得 146~172。按实测偏置取 130；
  *        直接用真值 100 会把窄面 109.5 误判成宽面，第二次 LEG 用错 d_B 后失败。
  */
-#define LF_SIDE_KIND_SPLIT_MM 130.0f
+/* 2026-11-23：130 太宽——150 宽面在 h≈200 处只测到 118.5（11:12 实车），被判成窄面，
+ * LEG 于是按 w_nom=50/d_b=150 算 L2=h+75-30=251，比正确值（h+25-30=197）多走 54 mm，
+ * 云台越过 50 mm 窄面，面 2 的 SIDE_LOCK 读到 368（背景）直接失败。
+ * 11-22 全部侧扫记录：宽面 109.5~187.4，窄面 43.6~79.7，分界取 100 两边都留有余量。 */
+#define LF_SIDE_KIND_SPLIT_MM 100.0f
 
 /**
  * @brief SIDE_LOCK 预扫测斜：锁存 h1 后原地转 +5°，测 h2，用两条射线求面法线，转正后再测 h3
@@ -222,16 +255,22 @@
  *        转正后侧扫/SIDE_MOVE 才沿面切线走，不会「侧面划出去」。side push（电机断电）跳过。
  */
 #define LF_SIDE_TILT_PROBE_DEG 5.0f
-#define LF_SIDE_TILT_PROBE_SPEED_MM_S 45.0f
+#define LF_SIDE_TILT_PROBE_SPEED_MM_S 80.0f
 /* 2026-11-22 台架：5° 旋转两点法在静态 h 噪声下会假阳性（h1=153/h2=150 的 3 mm
- * 被解成 14.7°，把本来平行的车转歪）。先关闭，下一版改成沿面 30 mm 平移两点法
- * （30 mm 对 15° 倾斜有 7.8 mm 信号，远大于噪声），不要再用 5° 旋转。 */
-#define LF_SIDE_TILT_PROBE_ENABLE 0
+ * 被解成 14.7°，把本来平行的车转歪），已废弃。
+ * 2026-11-23 改为**沿面平移 30 mm 两点法**：30 mm×tan(15°)=8.0 mm 信号，是 h 噪声（±3 mm）的 2.7 倍；
+ * 解出的残余偏航 corr=atan2(h2−h1, 30)，只有当 1.5°≤|corr|≤15° 才原地转 corr 修正，否则 corr=0 继续。
+ * 背景：TURN_PAR 目标角=90°−φ_AIM，φ 抖 ±8° 会留 4~8° 残余偏航，直接让侧扫 w 在 118~159 之间跳。 */
+#define LF_SIDE_TILT_PROBE_ENABLE 1
+/** @brief 测斜平移距离 (mm)：沿面直行，比较前后两点 h */
+#define LF_SIDE_TILT_SHIFT_MM 60.0f
 #define LF_SIDE_TILT_MIN_DEG 1.5f
 #define LF_SIDE_TILT_MAX_DEG 15.0f
 
 /** @brief TURN_PAR 低 ρ 倒车：AIM ρ 小于它先倒 20 mm，给原地转的前角留间隙（现场可能停在 13~14 cm） */
-#define LF_TURN_PAR_BACKUP_RHO_MM 150.0f
+/* 2026-11-23 用户现场判定「先退 20 mm」没多大用处：置 0 关闭（rho<0 永不成立 → turn_backup 恒为 1）。
+ * 保留代码与 mm 参数，需要时把阈值改回 150/200 即可恢复。 */
+#define LF_TURN_PAR_BACKUP_RHO_MM 0.0f
 #define LF_TURN_PAR_BACKUP_MM 20.0f
 
 /**
@@ -321,7 +360,8 @@ typedef enum {
     LF_LEG_DRIVE1 = 0,  /**< 0: 沿面切线越过拐角，L1 = w_nom/2 + pan_x + h + margin */
     LF_LEG_TURN = 1,    /**< 1: 原地转 ±90°（左视左转，右视右转；BOARD_SWAP_LR=0 时 + = 实车左转） */
     LF_LEG_DRIVE2 = 2,  /**< 2: 沿新切线开到下一面中心，L2 = h + d_B/2 - pan_x */
-    LF_LEG_DONE = 3     /**< 3: 完成 */
+    LF_LEG_DONE = 3,    /**< 3: 完成 */
+    LF_LEG_BACKUP = 4   /**< 4: DRIVE2 末尾面已滑出侧视（h>H_MAX/丢回波）时先倒回 LF_LEG_BACKUP_MM */
 } LfLegStage;
 
 /**
@@ -334,7 +374,10 @@ typedef enum {
     LF_LEG_EVENT_DRIVE1 = 0x01,  /**< DRIVE1 结束 */
     LF_LEG_EVENT_TURN = 0x02,    /**< 转角结束 */
     LF_LEG_EVENT_DRIVE2 = 0x04,  /**< DRIVE2 结束（LEG 完成） */
-    LF_LEG_EVENT_FAIL = 0x08     /**< LEG 失败（超时/转角超差/h 门禁） */
+    LF_LEG_EVENT_FAIL = 0x08,    /**< LEG 失败（超时/转角超差/h 门禁） */
+    LF_LEG_EVENT_PROX = 0x10,    /**< 侧距连续采样一帧（50 ms 取、100 ms 打一行） */
+    LF_LEG_EVENT_PROX2 = 0x20,   /**< DRIVE2 结束：窄面侧距统计（face_n/face_h） */
+    LF_LEG_EVENT_BACKUP = 0x40   /**< 收尾倒回结束（面滑出侧视后的补救段） */
 } LfLegEvent;
 
 /**
@@ -346,7 +389,8 @@ typedef enum {
     LF_SIDE_EVENT_NONE = 0x00,  /**< 无事件 */
     LF_SIDE_EVENT_EDGE = 0x01,  /**< 找到一个边界 */
     LF_SIDE_EVENT_MID = 0x02,   /**< 中点/宽度确定（含复测后更新） */
-    LF_SIDE_EVENT_FAIL = 0x04   /**< 本次扫描 / SIDE_LOCK 失败 */
+    LF_SIDE_EVENT_FAIL = 0x04,  /**< 本次扫描 / SIDE_LOCK 失败 */
+    LF_SIDE_EVENT_YAW = 0x08    /**< SIDE_MOVE 平移测出残余偏航（侧距单调漂移） */
 } LfSideEvent;
 
 /**
@@ -635,6 +679,15 @@ typedef struct {
     uint8_t side_retry;        /**< 侧扫失败后已经“退回原点重扫”的次数 0~1 */
     uint8_t side_warn;         /**< 侧扫告警：0=初测正常 / 1=宽度超范围 / 2=复测一致取平均 / 3=复测不一致 / 4=开位超时（仅供日志） */
     uint8_t side_move_stage;   /**< SIDE_MOVE 子状态 LF_SIDE_MOVE_DRIVE / SETTLE / VERIFY / DONE */
+    uint8_t side_move_mono;    /**< 平移段侧距「同向增量」连续帧数（>3 且无突变才算单调漂移） */
+    uint32_t side_move_since;  /**< 平移段侧距采样节拍时间戳 (ms，50 ms) */
+    float side_move_h0;        /**< 平移段起始侧距 (mm)，0=还没取到 */
+    float side_move_h_last;    /**< 平移段最近有效侧距 (mm) */
+    float side_move_s0;        /**< 平移段起始里程 (mm) */
+    float side_move_ds;        /**< 平移段已走距离 (mm) */
+    float side_move_dh;        /**< 平移段侧距总漂移 (mm，末−首) */
+    float side_move_dh_prev;   /**< 上一次采样增量 (mm)，判单调用 */
+    float side_move_corr_rad;  /**< 平移测出的残余偏航 (rad)：非 0 时 SETTLE 后原地修平 */
     uint8_t side_verify_mode;  /**< 1 = 当前这一遍扫描是发射前复测（reach 收窄、原点已重锁存） */
     uint8_t side_verify_done;  /**< 1 = 本面已经做过一次复测（避免重复进 VERIFY） */
     uint8_t side_rescan;       /**< 1 = SIDE_MOVE 到位后回到 SIDE_SCAN 重扫一次 */
@@ -671,7 +724,9 @@ typedef struct {
     float side_h2;             /**< 预扫转 +5° 后 h (mm) */
     float side_h3;             /**< 转正后 h (mm) */
     float side_delta_rad;      /**< 预扫实际转过的 +δ (rad) */
-    float side_tilt_corr_rad;  /**< 由 h1/h2/δ 求出的车头修正角 (rad) */
+    float side_tilt_corr_rad;  /**< 由 h1/h2/30 mm 求出的车头残余偏航修正角 (rad) */
+    float side_shift_start_mm; /**< 测斜平移起点 (mm)：SIDE_LOCK 沿面 30 mm 两点法的基准 */
+    uint32_t side_shift_done_ms; /**< 平移结束（制动停稳）时间戳 (ms)，停稳后再测 h2 */
     uint8_t leg_stage;         /**< LEG 子状态 DRIVE1 / TURN / DRIVE2 / DONE */
     uint8_t leg_started;       /**< 1 = LEG 入口的原点/航向/L1/L2 已经锁存 */
     uint8_t leg_event;         /**< LEG 遥测事件 LF_LEG_EVENT_*，main.c 打印后清零 */
@@ -700,6 +755,20 @@ typedef struct {
     uint32_t leg_turn_ms;      /**< LEG 转角耗时 (ms) */
     uint32_t leg_since;        /**< LEG 入口时间戳 (ms，总超时用) */
     uint32_t leg_drive_since;  /**< 当前直行段起始时间戳 (ms，单段超时用) */
+
+    /* --- M4：LEG 期间侧距连续采样（宽面转完舵机不回正，超声一直看左侧） --- */
+    uint32_t leg_prox_since;   /**< 上一次侧距采样时间戳 (ms)，50 ms 节拍 */
+    uint32_t leg_face2_sum;    /**< DRIVE2 认面帧的距离和 (mm，求均值用) */
+    uint16_t leg_prox_n;       /**< LEG 期间落在 [H_MIN,H_MAX] 的有效侧距帧数 */
+    uint16_t leg_prox_last;    /**< 最近一帧有效侧距 (mm)，0=还没测到 */
+    uint16_t leg_prox_min;     /**< LEG 期间最小有效侧距 (mm)，0=还没测到 */
+    uint16_t leg_prox_max;     /**< LEG 期间最大有效侧距 (mm)，0=还没测到 */
+    uint16_t leg_face2_n;      /**< DRIVE2 期间落在 h_expected±band 的帧数 */
+    uint16_t leg_face2_h;      /**< 上述帧的均值 (mm)，0=DRIVE2 没测到面 */
+    uint16_t leg_prox_now;     /**< 最近一帧侧距（不筛范围），收尾位置自检用 */
+    uint8_t leg_prox_now_ok;   /**< 1 = 最近一帧侧距有效 */
+    float leg_h_expected;      /**< 本段 LEG 预期的侧距 h_leg (mm)，DRIVE2 认面窗口中心 */
+    float leg_backup_start_mm; /**< 收尾倒回段的起点里程 (mm) */
 
     /* --- 左右轮电机死区与全量程转速自动标定 (LF_MCAL：地面带载为主、空载作参考) --- */
     LfMcalMode mcal_mode;                   /**< 当前正在扫描的模式：LF_MCAL_AIR 或 LF_MCAL_GROUND */

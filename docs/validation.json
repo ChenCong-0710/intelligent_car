@@ -1,9 +1,9 @@
 {
-  "date": "2026-11-22",
+  "date": "2026-11-23",
   "mcu": "STM32G474VET6",
-  "milestone": "M3 LEG/TURN_PAR bench-verified: wide face -> left 90 deg -> narrow face (ALIGN deleted, BOARD_SWAP_LR=0, effective track 112.5)",
+  "milestone": "Gate 0 partial on real car (2026-11-23): G0-2 TURN_PAR and G0-4 faces=2 (wide->narrow, COMPLETE) pass; G0-3 narrow->wide pending. Details in docs/M4-gate0-20261123.md",
   "hardware_flash_performed": true,
-  "flashed_image": "build/Debug/line-following.elf (110816 B, STM32CubeProgrammer SWD verify OK, 2026-11-22 21:46)",
+  "flashed_image": "build/Debug/line-following.elf (112024 B, STM32CubeProgrammer SWD verify OK, 2026-11-23 11:52)",
   "real_track_verified": false,
   "bench_verified": true,
   "profiles": {
@@ -177,14 +177,85 @@
         "next_kind": "NARROW",
         "next_k": 0.203,
         "laser_done": true,
-        "note": "用户确认效果非常好；h=215 在 150~220；h_pred=176 与实测差 39 mm（未计转后云台轴偏置）"
+        "note": "用户确认效果非常好；h=215 在 150~220；h_pred=176 与实测差 39 mm。平行时 pan_x 在 L1 中抵消，更像宽度差 6.6 + 转角残差 30.5；M4 先做 k vs 量角器判别，再定公式"
       }
     ],
     "conclusions": [
       "M3 单向 LEG 端到端通过：宽面 SIDE_LOCK/SCAN/MOVE/LASER → DRIVE1 → TURN +90（实车左转）→ DRIVE2 → 窄面 SIDE_LOCK/SCAN/MOVE/LASER 全部 ok=1",
       "BOARD_SWAP_LR=1 是 21:01/21:34「该左转却右拐」的根因：电机与编码器同时镜像，日志自洽但物理反向",
       "track 130→112.5 后下一面 k 从 -0.211 翻到 +0.203，90° 转弯已基本无过冲；k 绝对值仍受波束/初始摆位影响，只作诊断",
-      "33/33 host tests pass；Debug/Release 0 warnings（-Wall -Wextra -Wpedantic -Werror）"
+      "33/33 host tests pass（31 实跑 + probeturn/probetour 两个 SKIP）；Debug/Release 0 warnings（-Wall -Wextra -Wpedantic -Werror）"
+    ]
+  },
+  "m3_pending": {
+    "status": "Gate 0 G0-2 (TURN_PAR real car) and G0-4 (faces=2 auto) pass on 2026-11-23; G0-3 narrow->wide still pending",
+    "gate0": [
+      "TURN_PAR real-car: PROBE_TURN,tag=PAR cmd/ach/ms/ok=1 and |ach-cmd|<=8 deg, then SIDE_LOCK ok=1",
+      "narrow->wide LEG: no re-side; next SIDE_LOCK ok=1, w>30, h in [150,220]",
+      "faces=2 auto: PROBE_TEST_ONE_FACE=0, probe_faces=2, laser 1 s; face1->LEG->face2->COMPLETE",
+      "logs/regression: PROBE_TURN, PROBE_LEG three segments, PROBE_SIDE_MID.k; 33/33"
+    ],
+    "note": "TURN_PAR was not run end-to-end in M3; 21:49 TURN is the LEG TURN segment. Default PROBE_TEST_ONE_FACE=1 forces faces=1."
+  },
+  "m4_plan": {
+    "doc": "../../M4计划_评审与修订.md",
+    "status": "planned; no code changes yet",
+    "scope": ["M4a four-face loop", "M4b retry-to-AIM / h_pred / pred / width / safety", "M4c probetour", "M4d params/Flash 8/logs"],
+    "acceptance": "2 faces real car; 4-face dry run with 1 s laser; probetour 7 cases; total <150 s (hard stop 170 s)"
+  },
+  "size_note": "profiles.*.bin_bytes above are the earlier MinGW build (106296/100288). The flashed Debug bin at 2026-11-23 11:52 is 112024 B. Do not mix these numbers when comparing builds.",
+  "gate0_20261123": {
+    "date": "2026-11-23",
+    "doc": "docs/M4-gate0-20261123.md",
+    "bench": "bluetooth COM3 + tools/_m4_bench.py; ST-Link STM32_Programmer_CLI -w -v",
+    "status": { "G0-2": "pass", "G0-4": "pass", "G0-3": "pending" },
+    "firmware": {
+      "debug_flash_bytes": 112024,
+      "ram_bytes": 11864,
+      "warnings": 0,
+      "flashed_at": "2026-11-23 11:52",
+      "host_tests": "33/33 pass (probeside 12 synthetic scenarios included)"
+    },
+    "g0_2_turnpar": {
+      "run": "2026-11-23 10:31:36",
+      "cmd_deg": -90.4, "ach_deg": -91.0, "derr_deg": 0.6, "ms": 1683, "dir": "R",
+      "side_lock_h_mm": 192.0, "side_lock_ok": 1, "side_scan_w_mm": 118.7,
+      "log": "data/m4_gate0_turnpar_20261123_103136.log"
+    },
+    "g0_4_faces2_pass": {
+      "run": "2026-11-23 11:54:27",
+      "face1": { "phi_deg": 5.38, "rho_mm": 147.8, "valid": 1, "turn_cmd_deg": -84.6, "turn_ach_deg": -85.0,
+                 "h_mm": 176.0, "pred_mm": 177.8, "w_mm": 182.0, "kind": "WIDE", "s_m_deg": -7.3 },
+      "leg": { "drive1_mm": 302.8, "turn_ach_deg": 90.7, "drive2_mm": 172.8,
+               "prox2": { "pred": 178, "n": 32, "face_n": 14, "face_h": 222, "h_min": 183, "h_max": 242 } },
+      "face2": { "h_mm": 221.0, "h2": 0.0, "h3": 221.0, "w_mm": 65.9, "kind": "NARROW", "s_m_deg": -17.9 },
+      "completed": true, "backup_used": false,
+      "log": "data/m4_gate0_faces2_20261123_115427.log"
+    },
+    "failed_attempts": [
+      { "time": "10:42", "fail": "face2 SIDE_LOCK h1=368", "cause": "w=118.7<130 -> NARROW -> L2 251 (+54 mm overshoot)", "fix": "LF_SIDE_KIND_SPLIT_MM 130->100" },
+      { "time": "11:12", "fail": "same", "cause": "w=118.5<130", "fix": "same" },
+      { "time": "11:31", "fail": "face2 h1=368", "cause": "dead-reckoned L2 still passes the 50 mm face trailing edge", "fix": "LEG seg=BACKUP back off 40 mm" },
+      { "time": "11:37", "fail": "SIDE_SCAN edges=0 twice", "cause": "turned 103.8 deg (AIM phi=-12.2) and scan saw the face edge-on", "fix": "turn speed 60->50, phi now logged on success path" },
+      { "time": "11:45", "fail": "face2 h1=205 h3=366", "cause": "h3 lost the face after the tilt turn", "fix": "pick h closest to pred; h3->h2 fallback" },
+      { "time": "11:50", "fail": "face2 h1=240 h3=306 (in range but far from pred)", "cause": "same", "fix": "pick h closest to pred" }
+    ],
+    "changes": [
+      "LEG 侧距连续采样 PROBE_LEG,seg=PROX / PROX2（宽面转完后超声一直在测，窄面行进中被直接量到）",
+      "探测结束云台保持侧视角 10 s（probe_hold_until），不再立刻断电回正",
+      "LF_SIDE_LOCK_TOL_MM 40->70（实车 TURN_PAR 后 h-(rho+pan_x) 系统偏大 28~58 mm）",
+      "LF_SIDE_KIND_SPLIT_MM 130->100（历史：宽 109.5~187.4 / 窄 43.6~79.7）",
+      "SIDE_LOCK 测斜改为沿面 60 mm 平移两点法（80 mm/s，前进-停-量-退回-转正-量），仅第一面做；1.5 s 走不到一半判卡住(warn=6)",
+      "锁定 h 取 h1/h2/h3 中最接近 pred 者；h3 出界时用 h2(warn=7)",
+      "LEG 收尾 seg=BACKUP：DRIVE2 末尾面已滑出侧视时倒回 40 mm 再进 SIDE_LOCK",
+      "转角 35->50 mm/s；TURN_PAR 超时 3->6 s；取消转前后退 20 mm（LF_TURN_PAR_BACKUP_RHO_MM=0）",
+      "诊断：PROBE_FACE 在 AIM->TURN_PAR 成功路径也打；PROBE_SIDE_LOCK 追加 h3/warn；PROBE_SIDE_FAIL 打 lock_stage"
+    ],
+    "open_items": [
+      "face1 w=182 at h≈180 (>150): beam-footprint compensation over-corrects",
+      "face2 s_m=-17.9 deg (~72 mm off centre): LEG dead-reckoning residual; PROX face_h/face_n could close the loop",
+      "G0-3 narrow->wide not run yet"
     ]
   }
 }
+

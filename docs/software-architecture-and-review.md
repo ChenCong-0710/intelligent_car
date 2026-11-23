@@ -49,7 +49,7 @@ flowchart TD
         TRACK["快速循迹控制器<br/>立方非线性P + 滤波D + 曲率前馈减速 + 快速切弯恢复"]
         ODO["里程计与滑窗测速模块 LfOdometry<br/>20ms(4拍)编码器滑窗测速 / 航向角 θ 与累计里程 s 积分"]
         MOT["双轮运动控制层<br/>前馈死区补偿 + 速度PI + 非对称加减速限幅(减速3.5×) + BRAKE_HOLD主动锁停"]
-        PROBE["停车后自动探测状态机<br/>M1: 两段式扫掠+面法线拟合 → 10s激光+蜂鸣 → 里程计顺时针绕角 → 3组两短一长鸣叫<br/>M2: 侧视横扫 SIDE_LOCK/SIDE_SCAN/SIDE_MOVE(+VERIFY)（台架 side 入口；M3 起接管自动流程）"]
+        PROBE["停车后自动探测状态机<br/>M1: 两段式扫掠+面法线拟合 → 10s激光+蜂鸣 → 里程计顺时针绕角 → 3组两短一长鸣叫<br/>M2: 侧视横扫 SIDE_LOCK/SIDE_SCAN/SIDE_MOVE(+VERIFY)（台架 side 入口；M3 起接管自动流程）<br/>M3: TURN_PAR + LEG（宽→窄台架通过）<br/>M4: 四面循环/回 AIM 重试/probetour（计划）"]
         BRG["H桥映射 Control/bridge_logic.c<br/>慢衰减驱动/制动 / 快衰减滑行 / 1111短接制动"]
     end
 

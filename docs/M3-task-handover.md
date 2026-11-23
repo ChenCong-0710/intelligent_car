@@ -1,8 +1,8 @@
 # M3 任务交接：TURN_PAR + LEG（2026-11-22）
 
 > **交接对象**：接手 M4（四面循环）的队友/代理。
-> **当前固件**：Debug `110816 B`（RAM 11792 B），已烧录并校验通过；源码见本仓当前 commit（`git log -1`）。
-> **一句话状态**：M3 代码全部落地；**宽面→窄面单向 LEG 已在台架端到端通过**；faces=2 自动全流程（AIM→TURN_PAR→SIDE_LOCK→…→LEG）尚未实车跑过。
+> **当前固件**：Debug `110816 B`（RAM ≈11.8 KB），已烧录并校验通过；源码见本仓当前 commit（`git log -1`）。
+> **一句话状态**：M3 代码全部落地；**宽面→窄面单向 LEG 已在台架端到端通过**；faces=2 自动全流程（AIM→TURN_PAR→SIDE_LOCK→…→LEG）尚未实车跑过。**M3 还没收口**，剩余四项见 §7 Gate 0；M4 计划见根目录 [M4计划_评审与修订.md](../../M4计划_评审与修订.md)。
 
 ---
 
@@ -10,14 +10,15 @@
 
 | 项 | 状态 | 说明 |
 | --- | --- | --- |
-| TURN_PAR | ✅ 代码 + 单测 | AIM 成功后按 φ 原地转 `side_left ? φ−90 : φ+90`；3 s 超时、8° 容差、失败即停；台架方向未单独跑 |
-| LEG 三段 | ✅ 代码 + 单测 + 台架 | DRIVE1→TURN→DRIVE2；无 ALIGN；宽→窄下一面 `h=215 ok=1` |
-| LEG 事件/日志 | ✅ | `PROBE_LEG,seg=DRIVE1/TURN/DRIVE2/FAIL` |
-| 面序宽窄锁存 | ✅ 代码 + 单测 | 首个 `w>=130` 锁存为宽，之后按面序奇偶交替；不重新 `side` 才保留锁存 |
+| TURN_PAR | ✅ 代码 + 单测 + **实车（2026-11-23）** | AIM 成功后按 φ 原地转 `side_left ? φ−90 : φ+90`；**50 mm/s、6 s 超时、8° 容差**；10:31 `cmd=-90.4/ach=-91.0`、11:50 `cmd=-90.6/ach=-90.9`，随后 `SIDE_LOCK ok=1` |
+| LEG 三段 | ✅ 代码 + 单测 + 台架 + 实车 | DRIVE1→TURN→DRIVE2；无 ALIGN；DRIVE2 末尾面滑出侧视时走 `seg=BACKUP` 倒回 40 mm |
+| LEG 事件/日志 | ✅ | `PROBE_LEG,seg=DRIVE1/TURN/DRIVE2/BACKUP/FAIL` + 侧距连续采样 `seg=PROX/PROX2` |
+| SIDE_LOCK 测斜 | ✅ 实车（2026-11-23） | 沿面 60 mm 平移两点法（80 mm/s，前进-停-量-退回-转正-量），仅第一面做；1.5 s 走不到一半判卡住 `warn=6`；锁定 h 取 h1/h2/h3 中最接近 `pred` 者，h3 出界用 h2（`warn=7`） |
+| 面序宽窄锁存 | ✅ 代码 + 单测 | 首个 `w>=100`（原 130，2026-11-23 改）锁存为宽，之后按面序奇偶交替；不重新 `side` 才保留锁存 |
 | 自动流程接入 | ✅ 代码 | AIM→TURN_PAR→SIDE_LOCK；LASER→LEG→下一面 SIDE_LOCK；`probe_face` 在 LASER 出口/LEG 入口递增 |
-| faces=2 自动全流程 | ⏳ **待验** | 需要在实车跑一次，确认 AIM/TURN_PAR/LEG 衔接与面 2 LASER 后 COMPLETE |
-| 窄→宽第二段 LEG | ⏳ 待验 | 不重新 `side`，直接 `leg`，看面序锁存与 h 收敛 |
-| `h_pred` | ⚠️ 偏差 39 mm | 21:49 `h_pred=176`、实测 215；公式未计转后云台轴/pan_x 偏置，M4 修 |
+| faces=2 自动全流程 | ✅ **实车通过（2026-11-23 11:54）** | 面1 `w=182.0 WIDE` → LEG `302.8/90.7/172.8` → 面2 `w=65.9 NARROW` → COMPLETE，无 FAIL；记录见 [M4-gate0-20261123.md](M4-gate0-20261123.md) |
+| 窄→宽第二段 LEG | ⏳ 待验 | 不重新 `side`，直接 `leg`；看当前 `leg_kind=0`（窄）、下一面 `kind=WIDE`、h 是否 150~220 |
+| `h_pred` | ⚠️ 偏差 39 mm | 21:49 `h_pred=176`、实测 215；平行时 pan_x 抵消，「未计 pan_x」不成立；算术更像宽度差 6.6 + 转角残差 30.5，M4 先做 k vs 量角器判别（M4 计划 §4.2） |
 
 ---
 
@@ -135,13 +136,17 @@ turn 20 60     # 必须左转（逆时针）
 
 ## 7. 已知问题 / M4 待办（按优先级）
 
-1. **faces=2 自动全流程未跑**：`set probe_faces 2`、`set probe_laser_ms 1000`、`set probe_side_verify 0`，从 15 cm 停车自动跑；确认面 1 AIM→TURN_PAR→SIDE_LOCK→…→LASER→LEG→面 2 SIDE_LOCK→SCAN→MOVE→LASER→COMPLETE。这是 M3c 的 DoD。
-2. **窄→宽第二段 LEG**：在 21:49 的窄面位置直接 `leg`（不要再 `side`），看 `leg_kind` 是否按面序取 0→1、h 是否继续外扩。
-3. **`h_pred` 修公式**：21:49 预测 176、实测 215（+39 mm）；当前 `h_pred = h_leg + margin`，未计转后云台轴在横向的 pan_x/波束偏置。M4 连续四面必须修，否则站位会越走越远。
-4. **面宽分类**：21:49 起始 `w=136.8` 刚过 130 判 WIDE；窄面测得 43.6~109.5，阈值 130 可用但不宽裕。M4 若出现 120~140 的实测要复核。
+1. **Gate 0（M3 收口，先做）**：
+   - **TURN_PAR 实车**：15~18 cm 停车自动 `probe`；看 `PROBE_TURN,tag=PAR` 的 `cmd/ach/ms/ok`，`abs(ach−cmd)≤8°`，随后 `SIDE_LOCK ok=1`。没有这条，不算 M3 完成。
+   - **窄→宽第二段 LEG**：在窄面位置直接 `leg`（不要再 `side`），看当前 `leg_kind=0`（窄面）、下一面 `SIDE_MID kind=WIDE`、h 是否仍 150~220；不要用下一面测得的 w 反推 kind。
+   - **faces=2 自动**：默认 `PROBE_TEST_ONE_FACE=1` 强制 `faces=1`；必须改 0 重新编译，`set probe_faces 2`、`set probe_laser_ms 1000`、`set probe_side_verify 0`，从 15 cm 停车自动跑；确认面 1 AIM→TURN_PAR→SIDE_LOCK→…→LASER→LEG→面 2 SIDE_LOCK→SCAN→MOVE→LASER→COMPLETE。
+   - **日志/回归**：`data/m3_*.log` 可查 `PROBE_TURN`、`PROBE_LEG` 三段、`PROBE_SIDE_MID.k`；33/33、Debug/Release 零告警。
+2. **`h_pred` 修公式（M4b）**：21:49 预测 176、实测 215（+39 mm）；平行时 pan_x 抵消，原「未计 pan_x」解释不成立。先做 k vs 量角器判别，再决定 `h_pred_a/b/c` 哪一项进日志/控制；验证前不要写进 L1。
+3. **`SIDE_LOCK.pred` 跨面（M4b）**：面 2~4 不 AIM，`face.rho` 还是第 1 面；M4 加 `probe_rho_pred_mm`，每面 LOCK 后用 `(side_h+margin)−pan_x` 更新。
+4. **面宽分类**：21:49 起始 `w=136.8` 刚过 130 判 WIDE；窄面测得 43.6~109.5。M4 用三带 + `probe_box_first` 人工覆盖；120~140 要记 `conf=0`。
 5. **电机死区未标定**：`db_L=db_R=0.140`、`MCAL=0(DEFAULT)`，实际约 22%/32%。连续四面直线/转角会有系统性偏差；建议 `mcal ground 5` + `use_mcal`。
-6. **TURN_PAR 未单独台架验收**：单测覆盖 φ/符号/堵转，但实车 AIM→TURN_PAR 的落点与残差还没量。
-7. **文档**：根目录《M3计划》《手册》《问题排查手册》已按 21:49 数据更新；本文件随代码仓提交。
+6. **33/33 的口径**：其中 `probeturn`/`probetour` 是 SKIP（`probe_pending`），实跑 31 项；不要把它当成四面已测。M4 目标 35/35（`probetour` 转正 + `probeh`/`proberetry`）。
+7. **M4 计划**：回 AIM 重试、`probetour`、参数/Flash 8、4 面 dry run、失败策略，见根目录 [M4计划_评审与修订.md](../../M4计划_评审与修订.md)。本文件只负责 M3 收口，不把 M4 说成 M3 已完成。
 
 ---
 
@@ -155,7 +160,7 @@ turn 20 60     # 必须左转（逆时针）
 | `Board/board.h` | `BOARD_SWAP_LR=0`（关键） |
 | `tests/test_controller.c` | `probepar`、`probeleg` 真值测试 |
 | `tools/_m3_bench.py` | 台架 `check/side/leg/m3/dirscan/raw` |
-| `docs/validation.json` | `m3_bench` 两轮记录、源码哈希、33/33 |
+| `docs/validation.json` | `m3_bench` 两轮记录、源码哈希、33/33（31 实跑 + 2 SKIP）、`m3_pending`/`m4_plan` |
 | `data/m3_m3_*.log` | 台架原始日志 |
 
 日志关键行：
@@ -177,6 +182,9 @@ PROBE_LEG,seg=FAIL,stage=...,why=...,h=...
 - [ ] 上电看到 `PROBE_BUILD,swaplr=0`；
 - [ ] `turn 20 60` 目视左转；
 - [ ] `python tools/_m3_bench.py check` 能连 COM3、状态 STOPPED；
-- [ ] 跑一次 `m3`，确认下一面 `SIDE_LOCK ok=1`、`w>30`、`h∈[150,220]`；
-- [ ] 跑 faces=2 自动全流程，记录面 2 的 `SIDE_LOCK/SCAN/MOVE/LASER`；
+- [ ] TURN_PAR 实车：15~18 cm 停车自动 `probe`，`PROBE_TURN,tag=PAR` 的 `ok=1`、`abs(ach−cmd)≤8°`，随后 `SIDE_LOCK ok=1`；
+- [ ] 跑一次 `m3`（宽面→窄面），确认下一面 `SIDE_LOCK ok=1`、`w>30`、`h∈[150,220]`；
+- [ ] 窄→宽：窄面 `side` 后直接 `leg`，不重新 `side`，确认当前 `leg_kind=0`、下一面 `kind=WIDE`；
+- [ ] faces=2 自动：`PROBE_TEST_ONE_FACE=0` 重新编译，`set probe_faces 2`、`set probe_laser_ms 1000`、`set probe_side_verify 0`，记录面 2 的 `SIDE_LOCK/SCAN/MOVE/LASER`；
+- [ ] 33/33（31 实跑 + 2 SKIP）与 Debug/Release 零告警；
 - [ ] 在 `docs/validation.json` 追加本次数据（编译字节数、单测数、台架结果）。

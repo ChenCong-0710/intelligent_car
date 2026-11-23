@@ -15,10 +15,12 @@
 >   `SIDE_LOCK`（舵机掰 90° 测站立距离 h 并自检）→ `SIDE_SCAN`（沿面平移，回波跳变找左右边界，位置域中点）→
 >   `SIDE_MOVE`（沿切线开到中点，含发射前复测）→ 侧向 10 s 激光。台架入口：**`side`（自走）/ `side push`（人工推车）**。
 >   详细落地记录见《手册》§3.9、《方案》§13.4、《问题排查手册》§17.14。
-> - ✅ **M3 转平行 + 绕行（2026-11-22 已烧录）**：`TURN_PAR` 接在 AIM 后；`LEG` 用 DRIVE1→TURN→DRIVE2 绕到下一面，**宽面→窄面单向台架通过**（下一面 `SIDE_LOCK h=215 ok=1`、`w=43.6 NARROW`、`TURN 90/91` 实车左转）。
+> - ✅ **M3 转平行 + 绕行（2026-11-22 已烧录）**：`TURN_PAR` 接在 AIM 后；`LEG` 用 DRIVE1→TURN→DRIVE2 绕到下一面，**宽面→窄面单向台架通过**（下一面 `SIDE_LOCK h=215 ok=1`、`w=43.6 NARROW`、`TURN 90/91` 实车左转）。**M3 还没收口**：TURN_PAR 实车、窄→宽、faces=2 自动是 Gate 0。
 >   关键修正：`BOARD_SWAP_LR=0`（否则日志左转、实车右转）、`track_width_mm=112.5`（90° 标度）、**LEG 不做 14° ALIGN**。
-> - 🚀 **下一阶段 M4**：四面循环、faces=2 自动全流程验证、`h_pred` 修正、`probetour`；
->   接手请读 **[docs/M3-task-handover.md](docs/M3-task-handover.md)** 与 **[docs/teammate-targeting-handover.md](docs/teammate-targeting-handover.md)**。
+> - ✅ **M4 Gate 0 实车（2026-11-23，已烧录）**：**G0-2 TURN_PAR 通过**（`cmd=-90.4 / ach=-91.0`，误差 0.6°，`SIDE_LOCK h=192 ok=1`）；**G0-4 faces=2 自动通过**（面1 `w=182.0 WIDE` → LEG `DRIVE1 302.8 / TURN 90.7 / DRIVE2 172.8` → 面2 `w=65.9 NARROW` → COMPLETE，无 FAIL）；G0-3 窄→宽待跑。
+>   这一轮新增：LEG 侧距连续采样 `PROBE_LEG,seg=PROX/PROX2`、`SIDE_LOCK` 沿面 60 mm 平移测斜、`seg=BACKUP` 收尾倒回 40 mm、宽窄判据 130→100、锁定容差 40→70 mm。记录见 **[docs/M4-gate0-20261123.md](docs/M4-gate0-20261123.md)**。
+> - 🚀 **下一阶段 M4**：四面循环、回 AIM 重试、`h_pred`/`pred` 跨面、面宽分类、`probetour`、参数/Flash 8；计划见根目录 **[M4计划_评审与修订.md](../M4计划_评审与修订.md)**。
+>   接手先读 **Gate 0**：[docs/M3-task-handover.md](docs/M3-task-handover.md)、[docs/teammate-targeting-handover.md](docs/teammate-targeting-handover.md)。
 
 为了让每位组员无需翻阅底层寄存器即可快速掌握整个项目，所有软件与硬件对接文档均整理在本工作区 `docs/` 目录下：
 
@@ -201,8 +203,8 @@ bench 0 0.22 800
 3. **`<15cm` 自动制动停车**：超声波测得前方 `<150 mm` 障碍物时，立即进入 `OBSTACLE_STOP`（`1111` 主动电磁短接制动保持、停车灯常亮、蜂鸣器长鸣 1s）。*桌面纯调循迹可先 `set obstacle 0`。* 行驶期间云台舵机被锁定并保持供电在机械中位（`TRACK_SERVO_CENTER=1`），保证测距方向始终是车头正前方。
 4. **停车后自动寻找障碍物垂直位置（法线方向，M1）**：停稳约 300 ms（`AUTO_PROBE_SETTLE_MS`）后**无需按键**自动进入 `PROBING/AIM`，舵机做**两段式**步进扫掠（粗扫 ±300 µs / 10 点，再以粗测法线为中心细扫 ±120 µs / 10 点，每点驻留 ≥180 ms、开头丢弃 120 ms），对回波做 `1/r = a·cosθ + b·sinθ` 最小二乘拟合，输出**面模型** `PROBE_FACE,phi,rho,rms,hits,valid`；`probe_scan_mode=0` 时随后锁定该角度进入 10 s 激光+蜂鸣器阶段，**核心板 LED 以 150 ms 周期闪烁表示“已找到垂直位置”**。
    - 也可随时手动发送 `probe`（或在 `OBSTACLE_STOP` 下按探测键）重新开始一轮寻找；`set probe_faces 4` + `PROBE_TEST_ONE_FACE 0` 可恢复四面打靶流程。
-5. **M2 侧视横扫（`probe_scan_mode=1`，默认）**：车头平行于目标面、舵机掰到 `probe_side_us`（默认 2400 µs = 右掰 90°、箱体在左侧固定）后，**沿面的切线方向平移扫掠**，用 8 点最小二乘 `d = h0 + k·s` 拟合面内距离（k 吃掉车不平行造成的线性漂移），靠回波跳变找左右两个边界；中点 `s_m=(s_L+s_R)/2` 是**位置域**量，不受 `pan_x`、侧角是否正好 90° 影响（扫描与发射同轴同角 → 仿射抵消）；宽度按波束半角 γ 补偿 `w=(s_R-s_L)-2·h·tanγ` 后判窄/宽面；随后沿切线开到 `s_m` 停稳、可选复测、保持同侧角发射 10 s 激光。
-   - **台架入口（M3 之前自动流程还不能转平行，必须用这两个命令）**：`side` = 自走扫描；`side push` = 电机断电、人工沿面推车扫描（到边界后按 `PROBE_SIDE_EDGE` 日志反向推）。
+5. **M2 侧视横扫（`probe_scan_mode=1`，默认）**：车头平行于目标面、舵机掰到 `probe_side_us`（默认 2400 µs = **+90° = 向左，箱体在左**）后，**沿面的切线方向平移扫掠**，用 8 点最小二乘 `d = h0 + k·s` 拟合面内距离（k 吃掉车不平行造成的线性漂移），靠回波跳变找左右两个边界；中点 `s_m=(s_L+s_R)/2` 是**位置域**量，不受 `pan_x`、侧角是否正好 90° 影响（扫描与发射同轴同角 → 仿射抵消）；宽度按波束半角 γ 补偿 `w=(s_R-s_L)-2·h·tanγ` 后判窄/宽面；随后沿切线开到 `s_m` 停稳、可选复测、保持同侧角发射 10 s 激光。
+   - **台架入口**：`side` = 自走扫描；`side push` = 电机断电、人工沿面推车扫描（到边界后按 `PROBE_SIDE_EDGE` 日志反向推）；`leg` = 用上一次 `side` 的 w/h 绕到下一面（M3）；`m3` = `side`+`leg`。自动流程从 M3 起是 `AIM→TURN_PAR→SIDE_LOCK→…→LASER→LEG`，不再需要手动先转平行。
    - 日志：`PROBE_SIDE_LOCK`（h/自检）、`PROBE_SIDE_EDGE`（两个边界）、`PROBE_SIDE_MID`（中点/宽度/宽窄/retry）、`PROBE_SIDE_FAIL`（失败原因）；参数见下方 `probe_side_*` 表。
 
 ---
@@ -247,6 +249,7 @@ bench 0 0.22 800
 | `start` | 启动 2 秒倒计时并发车循迹 |
 | `probe` | 手动启动探测/瞄准任务（`<15cm` 停车后已默认自动启动，无需按键） |
 | `side` / `side push` | **M2 台架侧扫**：跳过 AIM 直接 `SIDE_LOCK→SIDE_SCAN→SIDE_MOVE→LASER`；`push` = 电机断电、人工推车 |
+| `leg` | **M3 台架绕行**：用上一次 `side` 的 w/h 跑 DRIVE1→TURN→DRIVE2 到下一面；**不要再先 `side`**，否则面序锁存重置。`m3` 是上位机脚本 `tools/_m3_bench.py` 的组合命令，不是固件命令 |
 | `stop` | 立即刹车停止并清除当前故障状态 |
 | `save` / `load` / `defaults` | 手动将当前 RAM 参数写入 Flash / 从 Flash 加载 / 恢复编译期默认参数 |
 | `log 0` / `log 1` | 关闭 / 开启每 100 ms (10 Hz) 的 CSV 实时遥测数据流输出 |
@@ -284,7 +287,7 @@ bench 0 0.22 800
 | `probe_fit_rms_mm` | `15` | `2 ~ 20` | M2：面拟合残差上限 (mm) |
 | `probe_scan_mode` | `1` | `0` 或 `1` | M2：`1`=侧视横扫（主方案）；`0`=M1 过渡流程（AIM→正面发射→方阵巡边） |
 | `probe_side_left` | `1` | `0` 或 `1` | M2：`1`=箱体在左（逆时针巡边），M3 起决定转弯方向 |
-| `probe_side_us` | `2400` | `600 ~ 2400` | M2：侧视舵机脉宽 (µs)；2400=右掰 90°，顶死就降到 2200~2350 |
+| `probe_side_us` | `2400` | `600 ~ 2400` | M2：侧视舵机脉宽 (µs)；2400=**+90°=向左（箱体在左）**，顶死就降到 2200~2350 |
 | `probe_side_spd_mm_s` | `50` | `20 ~ 100` | M2：侧扫/开位速度 (mm/s)；50 对应 60 ms 走 3 mm 一个样本 |
 | `probe_side_reach_mm` | `260` | `80 ~ 400` | M2：单方向最大扫描行程 (mm) |
 | `probe_side_band_mm` | `15` | `4 ~ 30` | M2：面内判据带宽 (mm，车动时实测噪声 ±15 mm) |

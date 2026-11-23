@@ -413,8 +413,9 @@ bool lf_start_side_probe(LfController *c, uint32_t now, bool push) {
 
 /**
  * @brief 本段 LEG 的当前面宽窄：首面实测锁存 + 面序交替（宽↔窄）
- * @note  50 mm 窄面在 h≈150~205 处测得 109~155（波束足印偏置），单靠 w 分不开；
- *        已知长方体宽窄面交替，首面锁存后按面号奇偶取反，后续窄面不再信 w。
+ * @note  2026-11-23 复核历史日志：宽面实测 109.5~187.4，窄面 43.6~79.7，分界 100 分得开；
+ *        原先的 130 会把 h≈200 处的宽面（118.5）误判成窄面（见 LF_SIDE_KIND_SPLIT_MM 注释）。
+ *        仍保留「首面锁存 + 面号奇偶取反」：实测 w 有 ±15 mm 波动，后续面不再单独信 w。
  */
 static uint8_t probe_leg_current_kind(LfController *c) {
     if (!c->box_kind_ok && c->face.w > 20.0f) {
@@ -1621,7 +1622,7 @@ static LfLegResult probe_leg_fail(LfController *c, uint8_t why) {
  *        航向纠偏基准分别是 leg_hdg0（DRIVE1）和 leg_hdg2（DRIVE2），**不要用 probe_drive_signed**
  *        （它用 phase_start_rad，转完 90° 会命令 90° 差速修正）。
  */
-static LfLegResult probe_leg_tick(LfController *c, uint32_t now, float dt) {
+static LfLegResult probe_leg_tick(LfController *c, const LfInput *in, uint32_t now, float dt) {
     const LfProbeConfig *pr = &c->cfg.probe;
     c->out.enable = c->out.brake = true; /* 默认保持制动；speed_control 会覆盖成驱动 */
     if (!c->leg_started) {
@@ -1645,10 +1646,45 @@ static LfLegResult probe_leg_tick(LfController *c, uint32_t now, float dt) {
         c->leg_started = 1U;
         c->leg_stage = (uint8_t)LF_LEG_DRIVE1; /* 不做起步修正：k 只是诊断量，见 line_follower.h */
         c->turn_stage = (uint8_t)LF_TURN_IDLE;
+        /* 侧距连续采样的入口：h_expected 是"下一面应该在哪"的唯一先验，DRIVE2 认面用 */
+        c->leg_prox_since = now;
+        c->leg_prox_n = 0U;
+        c->leg_prox_last = 0U;
+        c->leg_prox_min = 0U;
+        c->leg_prox_max = 0U;
+        c->leg_face2_n = 0U;
+        c->leg_face2_h = 0U;
+        c->leg_face2_sum = 0U;
+        c->leg_prox_now = 0U;
+        c->leg_prox_now_ok = 0U;
+        c->leg_backup_start_mm = 0.0f;
+        c->leg_h_expected = h_leg;
         c->leg_cmd_mm = 0.0f;
         c->leg_ach_mm = 0.0f;
         c->leg_hdg_deg = 0.0f;
         return LF_LEG_RUN;
+    }
+    /* 侧距连续采样：LEG 期间舵机一直压在 side_us（宽面转完不回正），超声本来就在连续测距，
+     * 这里按 50 ms 留一帧轨迹。DRIVE2 里落在 h_expected±band 的帧就是"窄面从旁边过"的直接证据：
+     * 停车后 SIDE_LOCK 若被无关物体挡住（实测 h≈93），有这条轨迹就能分清是面还是挡块。 */
+    if ((uint32_t)(now - c->leg_prox_since) >= LF_LEG_PROX_PERIOD_MS) {
+        c->leg_prox_since = now;
+        c->leg_prox_now_ok = in->obstacle_valid ? 1U : 0U;
+        if (in->obstacle_valid) c->leg_prox_now = in->obstacle_mm;
+        if (in->obstacle_valid && in->obstacle_mm >= (uint16_t)LF_SIDE_H_MIN_MM &&
+            in->obstacle_mm <= (uint16_t)LF_SIDE_H_MAX_MM) {
+            uint16_t h = in->obstacle_mm;
+            if (c->leg_prox_n == 0U || h < c->leg_prox_min) c->leg_prox_min = h;
+            if (c->leg_prox_n == 0U || h > c->leg_prox_max) c->leg_prox_max = h;
+            c->leg_prox_last = h;
+            c->leg_prox_n = (uint16_t)(c->leg_prox_n + 1U);
+            if (c->leg_stage == (uint8_t)LF_LEG_DRIVE2 && c->leg_h_expected > 1.0f &&
+                fabsf((float)h - c->leg_h_expected) <= LF_LEG_PROX_FACE_BAND_MM) {
+                c->leg_face2_sum += h;
+                c->leg_face2_n = (uint16_t)(c->leg_face2_n + 1U);
+            }
+            if ((c->leg_prox_n & 1U) == 0U) c->leg_event |= (uint8_t)LF_LEG_EVENT_PROX;
+        }
     }
     if ((uint32_t)(now - c->leg_since) >= LF_LEG_TIMEOUT_MS) {
         uint8_t why = c->leg_stage == (uint8_t)LF_LEG_DRIVE1 ? 2U
@@ -1699,7 +1735,22 @@ static LfLegResult probe_leg_tick(LfController *c, uint32_t now, float dt) {
             c->leg_cmd_mm = c->leg_l2_mm;
             c->leg_ach_mm = ach;
             c->leg_hdg_deg = (c->odo.heading_rad - c->leg_hdg2) * 57.2957795f;
+            /* DRIVE2 结束时给窄面侧距统计：face_n>0 说明行进中确实看到过面（h≈pred），
+             * face_h 是它的均值；停车后 SIDE_LOCK 的 h1 与它一比就知道是不是被挡块顶替了。 */
+            c->leg_face2_h = c->leg_face2_n ? (uint16_t)(c->leg_face2_sum / c->leg_face2_n) : 0U;
+            c->leg_event |= (uint8_t)LF_LEG_EVENT_PROX2;
             c->leg_event |= (uint8_t)LF_LEG_EVENT_DRIVE2;
+            /* 收尾位置自检：停机时面已滑出侧视（h>H_MAX 或丢回波），但行进中确实看到过面 →
+             * 死算的 L2 越过窄面后沿了，倒回 LF_LEG_BACKUP_MM 再交给 SIDE_LOCK。 */
+            bool face_gone = !c->leg_prox_now_ok ||
+                             c->leg_prox_now > (uint16_t)LF_SIDE_H_MAX_MM;
+            if (face_gone && c->leg_face2_n >= 5U) {
+                c->leg_backup_start_mm = c->odo.distance_mm;
+                c->leg_drive_since = now;
+                probe_motion_reset(c);
+                c->leg_stage = (uint8_t)LF_LEG_BACKUP;
+                return LF_LEG_RUN;
+            }
             c->leg_stage = (uint8_t)LF_LEG_DONE;
             probe_motion_reset(c);
             c->out.enable = c->out.brake = true;
@@ -1710,6 +1761,22 @@ static LfLegResult probe_leg_tick(LfController *c, uint32_t now, float dt) {
             return probe_leg_fail(c, 4U);
         float corr = limit((c->odo.heading_rad - c->leg_hdg2) * 120.0f, -30.0f, 30.0f);
         speed_control(c, LF_LEG_SPEED_MM_S + corr, LF_LEG_SPEED_MM_S - corr, dt, true);
+        break;
+    }
+    case LF_LEG_BACKUP: {
+        /* 倒回固定距离再交给 SIDE_LOCK：DRIVE2 末尾窄面已滑出侧视时的补救 */
+        float back = c->leg_backup_start_mm - c->odo.distance_mm;
+        if (back >= LF_LEG_BACKUP_MM) {
+            probe_motion_reset(c);
+            c->out.enable = c->out.brake = true;
+            c->out.duty[0] = c->out.duty[1] = 0.0f;
+            c->leg_event |= (uint8_t)LF_LEG_EVENT_BACKUP;
+            c->leg_stage = (uint8_t)LF_LEG_DONE;
+            return LF_LEG_OK;
+        }
+        if ((uint32_t)(now - c->leg_drive_since) >= LF_LEG_DRIVE_TIMEOUT_MS)
+            return probe_leg_fail(c, 5U);
+        speed_control(c, -LF_LEG_BACKUP_SPEED_MM_S, -LF_LEG_BACKUP_SPEED_MM_S, dt, true);
         break;
     }
     default:
@@ -1881,35 +1948,52 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
             if (!probe_side_lock_sample(c, in, now)) break;
             c->side_h1 = probe_side_median(c, c->side_ring_n);
             if (c->side_h1 < LF_SIDE_H_MIN_MM || c->side_h1 > LF_SIDE_H_MAX_MM) { fail = true; break; }
-            if (c->side_push || LF_SIDE_TILT_PROBE_ENABLE == 0) {
-                c->side_h3 = c->side_h1;  /* 手推模式/预扫关闭：人工摆位即最终 h（自检通过才写 side_h） */
+            /* 测斜只在第一面做：第二面起是 50 mm 窄面，前后各 60 mm 的平移会把光束带出这个面 */
+            if (c->side_push || LF_SIDE_TILT_PROBE_ENABLE == 0 || c->probe_face > 0U) {
+                c->side_h3 = c->side_h1;  /* 不做测斜：人工摆位/LEG 已平行，直接用 h1（自检通过才写 side_h） */
                 c->side_lock_stage = 6;
                 break;
             }
+            /* 平移两点法：记下起点，沿面直行 30 mm 后测 h2（不再原地转 5°） */
             c->side_delta_rad = 0.0f;
+            c->side_tilt_corr_rad = 0.0f;
+            c->side_shift_start_mm = c->odo.distance_mm;
+            c->side_shift_done_ms = now; /* 平移起点时间戳：卡住检测用 */
             c->turn_stage = (uint8_t)LF_TURN_IDLE;
             c->side_lock_stage = 2;
             break;
-        case 2: /* 原地 +5°，测第二点 */
-            if (probe_turn_to(c, now, c->phase_start_rad, LF_SIDE_TILT_PROBE_DEG * d2r,
-                              LF_SIDE_TILT_PROBE_SPEED_MM_S, 3.0f, dt)) {
-                c->side_delta_rad = c->turn_ach_deg * d2r;
-                c->turn_stage = (uint8_t)LF_TURN_IDLE;
-                c->side_ring_n = 0;
-                c->side_ping_since = now;
+        case 2: { /* 沿面平移 30 mm：30 mm×tan15°=8 mm 信号，是 h 噪声的 2.7 倍 */
+            float moved = c->odo.distance_mm - c->side_shift_start_mm;
+            if (moved >= LF_SIDE_TILT_SHIFT_MM) {
+                probe_motion_reset(c);
+                c->out.enable = c->out.brake = true;
+                c->out.duty[0] = c->out.duty[1] = 0.0f;
+                c->side_shift_done_ms = now;
                 c->side_lock_stage = 3;
+            } else if ((uint32_t)(now - c->side_shift_done_ms) >= 1500U &&
+                       moved < 0.5f * LF_SIDE_TILT_SHIFT_MM) {
+                /* 低速顶住不动（2026-11-23 现场 45 mm/s 时确有一条：h1==h2 恰好相等、车没走）——
+                 * 放弃这次测斜，corr=0 继续，不因为一个诊断动作把整轮卡死。 */
+                c->side_warn = 6U;
+                c->side_tilt_corr_rad = 0.0f;
+                c->side_h2 = c->side_h1;
+                c->turn_stage = (uint8_t)LF_TURN_IDLE;
+                c->side_lock_stage = 4;
+            } else {
+                probe_drive_signed(c, LF_SIDE_TILT_PROBE_SPEED_MM_S, dt);
             }
             break;
-        case 3: { /* h2 → 求面法线角 */
+        }
+        case 3: { /* 停稳后测 h2 → 残余偏航 corr = atan2(h2−h1, 30 mm) */
+            if ((uint32_t)(now - c->side_shift_done_ms) < 200U) break;
             if (!probe_side_lock_sample(c, in, now)) break;
             c->side_h2 = probe_side_median(c, c->side_ring_n);
             float corr = 0.0f;
-            if (c->side_h2 >= LF_SIDE_H_MIN_MM && c->side_h2 <= LF_SIDE_H_MAX_MM &&
-                fabsf(c->side_delta_rad) >= 1.0f * d2r) {
-                /* 两条射线 d0·cos(θ0−φ)=d1·cos(θ0+δ−φ)：A=θ0−φ，corr=−A */
-                float a = atan2f(c->side_h2 * cosf(c->side_delta_rad) - c->side_h1,
-                                 c->side_h2 * sinf(c->side_delta_rad));
-                corr = limit(-a, -LF_SIDE_TILT_MAX_DEG * d2r, LF_SIDE_TILT_MAX_DEG * d2r);
+            if (c->side_h2 >= LF_SIDE_H_MIN_MM && c->side_h2 <= LF_SIDE_H_MAX_MM) {
+                /* 沿车轴前进 30 mm，h 的变化率就是车头相对箱面的残余偏航：
+                 * h2>h1 = 车头偏离开箱面（要往箱面转，正/左转）；h2<h1 = 车头顶向箱面（负/右转）。 */
+                float e = atan2f(c->side_h2 - c->side_h1, LF_SIDE_TILT_SHIFT_MM);
+                corr = limit(e, -LF_SIDE_TILT_MAX_DEG * d2r, LF_SIDE_TILT_MAX_DEG * d2r);
                 if (fabsf(corr) < LF_SIDE_TILT_MIN_DEG * d2r) corr = 0.0f;
             }
             c->side_tilt_corr_rad = corr;
@@ -1917,25 +2001,60 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
             c->side_lock_stage = 4;
             break;
         }
-        case 4: { /* 从当前（+δ）转到目标 corr；相对角 = corr−δ */
-            float rel = c->side_tilt_corr_rad - c->side_delta_rad;
+        case 4: { /* 先退回平移起点（扫描原点因此不变），再按 corr 原地转正 */
+            float back = c->odo.distance_mm - c->side_shift_start_mm;
+            if (back > 2.0f && (uint32_t)(now - c->side_shift_done_ms) < 2000U) {
+                probe_drive_signed(c, -LF_SIDE_TILT_PROBE_SPEED_MM_S, dt);
+                break;
+            }
+            probe_motion_reset(c);
+            c->out.enable = c->out.brake = true;
+            float rel = c->side_tilt_corr_rad;
             if (probe_turn_to(c, now, c->odo.heading_rad, rel,
                               LF_SIDE_TILT_PROBE_SPEED_MM_S, 3.0f, dt)) {
                 c->turn_stage = (uint8_t)LF_TURN_IDLE;
                 c->side_ring_n = 0;
                 c->side_ping_since = now;
+                c->side_shift_done_ms = now; /* 复用成 h3 采样起点（兜底超时用） */
                 c->side_lock_stage = 5;
             }
             break;
         }
-        case 5: /* h3（转正后的最终 h） */
-            if (!probe_side_lock_sample(c, in, now)) break;
-            c->side_h3 = probe_side_median(c, c->side_ring_n);
-            c->side_lock_stage = 6;
+        case 5: /* h3（转正后的最终 h）；800 ms 凑不满 5 帧就用 h2 兜底，别因一次丢回波整轮停机 */
+            if (probe_side_lock_sample(c, in, now)) {
+                c->side_h3 = probe_side_median(c, c->side_ring_n);
+                c->side_lock_stage = 6;
+            } else if ((uint32_t)(now - c->side_shift_done_ms) >= 800U) {
+                c->side_h3 = c->side_h2 > 0.0f ? c->side_h2 : c->side_h1;
+                c->side_warn = 5U; /* 诊断：h3 用兜底值 */
+                c->side_lock_stage = 6;
+            }
             break;
         default: { /* 6：ρ+pan_x 自检并通过才写 side_h */
-            float h = c->side_h3;
+            /* h3 丢面（>H_MAX 或 <H_MIN）而 h2 有效时用 h2 兜底：转正那一下常伴随一次丢回波 */
+            if ((c->side_h3 < LF_SIDE_H_MIN_MM || c->side_h3 > LF_SIDE_H_MAX_MM) &&
+                c->side_h2 >= LF_SIDE_H_MIN_MM && c->side_h2 <= LF_SIDE_H_MAX_MM) {
+                c->side_h3 = c->side_h2;
+                c->side_warn = 7U;
+            }
             float pred = (c->face.valid && c->face.rho > 1.0f) ? c->face.rho + pr->pan_x_mm : 0.0f;
+            /* h1/h2/h3 里挑最接近 pred 的那个：退回/转正过程中丢一次面很常见，
+             * 不能因为 h3=306 就把 h1=h2=240 这个真实读数丢掉。 */
+            float h = c->side_h3;
+            if (pred > 0.0f) {
+                float best = h;
+                float best_d = fabsf(h - pred);
+                if (c->side_h2 >= LF_SIDE_H_MIN_MM && c->side_h2 <= LF_SIDE_H_MAX_MM &&
+                    fabsf(c->side_h2 - pred) < best_d) {
+                    best = c->side_h2;
+                    best_d = fabsf(c->side_h2 - pred);
+                }
+                if (c->side_h1 >= LF_SIDE_H_MIN_MM && c->side_h1 <= LF_SIDE_H_MAX_MM &&
+                    fabsf(c->side_h1 - pred) < best_d) {
+                    best = c->side_h1;
+                }
+                h = best;
+            }
             bool ok = h >= LF_SIDE_H_MIN_MM && h <= LF_SIDE_H_MAX_MM &&
                       (pred <= 0.0f || fabsf(h - pred) <= LF_SIDE_LOCK_TOL_MM);
             if (ok) {
@@ -2020,13 +2139,62 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
         c->out.park_lamp = true;
         switch (c->side_move_stage) {
         case LF_SIDE_MOVE_DRIVE: {
+            if (c->side_move_since == 0U) {
+                /* 进入/重入平移段：清空测斜跟踪（首帧时间戳也在这里起算） */
+                c->side_move_since = now;
+                c->side_move_h0 = 0.0f;
+                c->side_move_h_last = 0.0f;
+                c->side_move_s0 = 0.0f;
+                c->side_move_ds = 0.0f;
+                c->side_move_dh = 0.0f;
+                c->side_move_dh_prev = 0.0f;
+                c->side_move_mono = 0U;
+                c->side_move_corr_rad = 0.0f;
+            }
             float err = c->side_target - probe_side_along(c);
+            /* 平移测斜采样：车沿面走时侧距若「单调、非突变」地漂移，就是车头相对箱面不平行。
+             * 突变（单帧 >40 mm）判为换面/擦边，清零计数，不参与判断。 */
+            if ((uint32_t)(now - c->side_move_since) >= 50U) {
+                c->side_move_since = now;
+                if (in->obstacle_valid && in->obstacle_mm >= (uint16_t)LF_SIDE_H_MIN_MM &&
+                    in->obstacle_mm <= (uint16_t)LF_SIDE_H_MAX_MM) {
+                    float h = (float)in->obstacle_mm;
+                    if (c->side_move_h0 <= 0.0f) {
+                        c->side_move_h0 = h;
+                        c->side_move_s0 = c->odo.distance_mm;
+                    } else {
+                        float d = h - c->side_move_h_last;
+                        if (fabsf(d) > 40.0f) c->side_move_mono = 0U;
+                        else if (d * c->side_move_dh_prev > 0.0f) ++c->side_move_mono;
+                        else c->side_move_mono = 0U;
+                        c->side_move_dh_prev = d;
+                    }
+                    c->side_move_h_last = h;
+                    c->side_move_ds = fabsf(c->odo.distance_mm - c->side_move_s0);
+                }
+            }
             if (fabsf(err) < LF_SIDE_ARRIVE_MM || elapsed >= LF_SIDE_MOVE_TIMEOUT_MS) {
                 if (fabsf(err) >= LF_SIDE_ARRIVE_MM) {
                     /* 开位超时（打滑/被挡/编码器异常）：显式告警，不许"看起来成功"；
                      * 若复测开着，随后的 VERIFY 会以当前位置重新找边界并再开一次，有机会自愈。 */
                     c->side_warn = 4U;
                     c->side_event |= (uint8_t)LF_SIDE_EVENT_FAIL;
+                }
+                /* 到点后判残余偏航：距离够、单调帧数够、漂移幅度够大才认；corr 正=左转/CCW */
+                if (c->side_move_h0 > 0.0f && c->side_move_ds >= LF_SIDE_MOVE_TILT_MIN_DS_MM &&
+                    c->side_move_mono >= 3U) {
+                    float dh = c->side_move_h_last - c->side_move_h0;
+                    c->side_move_dh = dh;
+                    if (fabsf(dh) >= LF_SIDE_MOVE_TILT_MIN_MM) {
+                        float e = atan2f(dh, c->side_move_ds);
+                        const float d2r = 0.01745329252f;
+                        if (fabsf(e) >= LF_SIDE_MOVE_TILT_DEADBAND_DEG * d2r &&
+                            fabsf(e) <= LF_SIDE_MOVE_TILT_MAX_DEG * d2r) {
+                            c->side_move_corr_rad = e;
+                            c->turn_stage = (uint8_t)LF_TURN_IDLE;
+                            c->side_event |= (uint8_t)LF_SIDE_EVENT_YAW;
+                        }
+                    }
                 }
                 probe_motion_reset(c);
                 c->out.enable = c->out.brake = true;
@@ -2042,6 +2210,15 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
             probe_motion_reset(c);
             c->out.enable = c->out.brake = true;
             if (elapsed >= LF_SIDE_SETTLE_MS) {
+                /* 平移段测出的残余偏航：先原地修平（corr 正=左转），再决定是否复测 */
+                if (c->side_move_corr_rad != 0.0f) {
+                    if (!probe_turn_to(c, now, c->odo.heading_rad, c->side_move_corr_rad,
+                                       LF_SIDE_TILT_PROBE_SPEED_MM_S, 3.0f, dt)) break;
+                    c->side_move_corr_rad = 0.0f;
+                    c->turn_stage = (uint8_t)LF_TURN_IDLE;
+                    c->phase_since = now;
+                    break;
+                }
                 if (pr->side_verify && !c->side_verify_done && probe_side_verify_begin(c, now)) {
                     c->phase_since = now; /* 复测扫描的计时/采样节拍从停稳后重新起算 */
                     c->side_move_stage = (uint8_t)LF_SIDE_MOVE_VERIFY;
@@ -2151,7 +2328,7 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
         c->out.park_lamp = false;
         c->out.laser = c->out.buzzer = false;
         c->side_locked = 1U;
-        LfLegResult lr = probe_leg_tick(c, now, dt);
+        LfLegResult lr = probe_leg_tick(c, in, now, dt);
         if (lr == LF_LEG_OK) {
             probe_side_lock_begin(c, now);
             change_probe_phase(c, LF_PROBE_SIDE_LOCK, now);

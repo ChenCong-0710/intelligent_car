@@ -28,8 +28,9 @@
 /* 循迹行驶期间把云台舵机锁定并保持供电在中位：1 = 启用（推荐，保证 <15cm 停车测距方向始终朝前） */
 #define TRACK_SERVO_CENTER 1
 
-/* 单面打靶台架测试：1 = 只打一面、无激光、用核心板 LED 闪烁表示完成 */
-#define PROBE_TEST_ONE_FACE 1
+/* 单面打靶台架测试：1 = 只打一面、无激光、用核心板 LED 闪烁表示完成；
+ * 0 = 正常多面流程（面数/激光/扫掠由 probe_* 参数决定，Gate 0 与 M4 用这个）。 */
+#define PROBE_TEST_ONE_FACE 0
 #define PROBE_TEST_LASER_MS 10000U  /* 锁定目标后的保持/模拟发射时间（LED 闪烁） */
 #define PROBE_TEST_BLINK_MS 10000U  /* 完成后 LED 继续闪烁 10 s，期间保持瞄准 */
 #define PROBE_TEST_SWEEP_US 600U    /* 单侧扫掠半幅：1500±600 = 900..2100us */
@@ -76,7 +77,11 @@ static LfOutput outtest_output;
 static bool servo_sweep_active;
 static uint32_t servo_sweep_since;
 static uint16_t servo_sweep_period_ms = 2000U;
+#if PROBE_TEST_ONE_FACE
 static uint32_t probe_done_blink_until;
+#endif
+/* 打靶结束后保持侧视角的时间戳 (ms)：0=不保持（与 PROBE_TEST_ONE_FACE 无关） */
+static uint32_t probe_hold_until;
 
 static void clear_aux_modes(void) {
     bench_active = false; vtest_active = false; outtest_active = false;
@@ -983,9 +988,15 @@ int main(void) {
                               g_lf.face.kind == 0U ? "NARROW" : "WIDE", (unsigned)g_lf.side_warn,
                               (double)g_lf.side_k);
                 }
+                if (side_ev & (uint8_t)LF_SIDE_EVENT_YAW) {
+                    /* 平移测斜：侧距单调漂移 → 车头相对箱面不平行，换算成修正角 */
+                    board_log("PROBE_SIDE_YAW,dh=%.1f,ds=%.1f,corr=%.2f\r\n",
+                              (double)g_lf.side_move_dh, (double)g_lf.side_move_ds,
+                              (double)(g_lf.side_move_corr_rad * 57.2957795f));
+                }
                 if (side_ev & (uint8_t)LF_SIDE_EVENT_FAIL) {
-                    board_log("PROBE_SIDE_FAIL,stage=%u,edges=%u,retry=%u,h=%.1f\r\n",
-                              (unsigned)g_lf.side_stage, (unsigned)g_lf.side_edges,
+                    board_log("PROBE_SIDE_FAIL,lock_stage=%u,edges=%u,retry=%u,h=%.1f\r\n",
+                              (unsigned)g_lf.side_lock_stage, (unsigned)g_lf.side_edges,
                               (unsigned)g_lf.side_retry, (double)g_lf.side_h);
                 }
             }
@@ -1015,6 +1026,26 @@ int main(void) {
                     board_log("PROBE_LEG,seg=DRIVE2,len=%.1f,ach=%.1f,hdg=%.2f\r\n",
                               (double)g_lf.leg_cmd_mm, (double)g_lf.leg_ach_mm,
                               (double)g_lf.leg_hdg_deg);
+                }
+                if (leg_ev & (uint8_t)LF_LEG_EVENT_PROX) {
+                    /* 行进中的侧距轨迹：窄面经过时 h 落在 pred 附近，无关挡块会明显偏小 */
+                    board_log("PROBE_LEG,seg=PROX,stage=%u,h=%u,min=%u,max=%u,ms=%lu\r\n",
+                              (unsigned)g_lf.leg_stage, (unsigned)g_lf.leg_prox_last,
+                              (unsigned)g_lf.leg_prox_min, (unsigned)g_lf.leg_prox_max,
+                              (unsigned long)(now - g_lf.leg_since));
+                }
+                if (leg_ev & (uint8_t)LF_LEG_EVENT_BACKUP) {
+                    /* 收尾倒回：DRIVE2 末尾面已滑出侧视，按固定距离退回后重新交给 SIDE_LOCK */
+                    board_log("PROBE_LEG,seg=BACKUP,len=%.1f,ach=%.1f,h=%u\r\n",
+                              (double)LF_LEG_BACKUP_MM,
+                              (double)(g_lf.leg_backup_start_mm - g_lf.odo.distance_mm),
+                              (unsigned)g_lf.leg_prox_now);
+                }
+                if (leg_ev & (uint8_t)LF_LEG_EVENT_PROX2) {
+                    board_log("PROBE_LEG,seg=PROX2,pred=%.0f,n=%u,face_n=%u,face_h=%u,h_min=%u,h_max=%u\r\n",
+                              (double)g_lf.leg_h_expected, (unsigned)g_lf.leg_prox_n,
+                              (unsigned)g_lf.leg_face2_n, (unsigned)g_lf.leg_face2_h,
+                              (unsigned)g_lf.leg_prox_min, (unsigned)g_lf.leg_prox_max);
                 }
                 if (leg_ev & (uint8_t)LF_LEG_EVENT_FAIL) {
                     board_log("PROBE_LEG,seg=FAIL,stage=%u,why=%u,h=%.1f\r\n",
@@ -1053,6 +1084,17 @@ int main(void) {
                 g_lf.out.servo_us = g_lf.best_servo_us ? g_lf.best_servo_us : g_lf.cfg.servo_center_us;
             }
 #endif
+
+            /* 打靶/台架探测结束后 10 s 内保持侧视角：侧视锁定之后没有"回正"的理由，
+             * 现场要能直接看/量窄面；到期才照常断电（board.c 仍是先停波后断电）。 */
+            if (g_lf.state == LF_STOPPED && probe_hold_until != 0U) {
+                if ((int32_t)(probe_hold_until - now) > 0 && g_lf.cfg.probe.scan_mode != 0U) {
+                    g_lf.out.servo_enable = true;
+                    g_lf.out.servo_us = g_lf.cfg.probe.side_us;
+                } else {
+                    probe_hold_until = 0U;
+                }
+            }
 
             if (vtest_active && g_lf.state == LF_STOPPED && g_lf.fault == LF_OK && (now - vtest_since >= 250U)) {
                 vtest_sum_speed[0] += g_lf.measured_mm_s[0];
@@ -1195,6 +1237,8 @@ int main(void) {
             if (g_lf.state != previous_state) {
                 board_log("EVENT %lu %s %s\r\n", (unsigned long)now, lf_state_name(g_lf.state), lf_fault_name(g_lf.fault));
                 if (previous_state == LF_CALIBRATING) status();
+                /* 探测结束：10 s 内云台留在侧视角（不回正、不断电），到期自动释放 */
+                if (previous_state == LF_PROBING) probe_hold_until = now + 10000U;
 #if PROBE_TEST_ONE_FACE
                 if (previous_state == LF_PROBING && g_lf.state == LF_STOPPED) {
                     probe_done_blink_until = now + PROBE_TEST_BLINK_MS;
@@ -1207,7 +1251,10 @@ int main(void) {
             if (g_lf.probe_phase != previous_probe_phase) {
                 /* AIM 结束：模式 B 转 SIDE_LOCK，模式 A / AIM 失败则直接进 LASER（两种都要打 PROBE_FACE） */
                 if (previous_probe_phase == LF_PROBE_AIM &&
-                    (g_lf.probe_phase == LF_PROBE_LASER || g_lf.probe_phase == LF_PROBE_SIDE_LOCK)) {
+                    (g_lf.probe_phase == LF_PROBE_LASER || g_lf.probe_phase == LF_PROBE_SIDE_LOCK ||
+                     g_lf.probe_phase == LF_PROBE_TURN_PAR)) {
+                    /* 2026-11-23：成功路径是 AIM→TURN_PAR，原来只在 AIM→LASER/SIDE_LOCK 打，
+                     * 导致「转向为什么不是 90°」一直看不到 φ/ρ，这里补上。 */
                     /* M1：面模型（法线角/垂直距离/残差/内点数），侧视横扫的自检与绕行距离都靠它 */
                     board_log("PROBE_FACE,phi=%.2f,rho=%.1f,rms=%.1f,hits=%u,valid=%u\r\n",
                         (double)(g_lf.face.phi * 57.2957795f), (double)g_lf.face.rho,
@@ -1225,11 +1272,11 @@ int main(void) {
                 if (previous_probe_phase == LF_PROBE_SIDE_LOCK) {
                     const LfProbeConfig *lp = &g_lf.cfg.probe;
                     float pred = g_lf.face.rho > 1.0f ? g_lf.face.rho + lp->pan_x_mm : 0.0f;
-                    board_log("PROBE_SIDE_LOCK,h=%.1f,pred=%.1f,us=%u,ok=%u,h1=%.1f,h2=%.1f,corr=%.1f\r\n",
+                    board_log("PROBE_SIDE_LOCK,h=%.1f,pred=%.1f,us=%u,ok=%u,h1=%.1f,h2=%.1f,h3=%.1f,corr=%.1f,warn=%u\r\n",
                               (double)g_lf.side_h, (double)pred, (unsigned)lp->side_us,
                               (unsigned)(g_lf.probe_phase == LF_PROBE_SIDE_SCAN ? 1U : 0U),
-                              (double)g_lf.side_h1, (double)g_lf.side_h2,
-                              (double)(g_lf.side_tilt_corr_rad * 57.2957795f));
+                              (double)g_lf.side_h1, (double)g_lf.side_h2, (double)g_lf.side_h3,
+                              (double)(g_lf.side_tilt_corr_rad * 57.2957795f), (unsigned)g_lf.side_warn);
                 }
                 if (previous_probe_phase == LF_PROBE_TURN_PAR) {
                     /* TURN_PAR 结束（成功进 SIDE_LOCK 或失败停机都打）：cmd/ach 是停稳后的值。
