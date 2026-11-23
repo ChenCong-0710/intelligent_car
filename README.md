@@ -19,6 +19,7 @@
 >   关键修正：`BOARD_SWAP_LR=0`（否则日志左转、实车右转）、`track_width_mm=112.5`（90° 标度）、**LEG 不做 14° ALIGN**。
 > - ✅ **M4 Gate 0 实车（2026-11-23，已烧录）**：**G0-2 TURN_PAR 通过**（`cmd=-90.4 / ach=-91.0`，误差 0.6°，`SIDE_LOCK h=192 ok=1`）；**G0-4 faces=2 自动通过**（面1 `w=182.0 WIDE` → LEG `DRIVE1 302.8 / TURN 90.7 / DRIVE2 172.8` → 面2 `w=65.9 NARROW` → COMPLETE，无 FAIL）；**G0-3 窄→宽通过**（不重新 `side`，窄面 `w=71.2 NARROW` → 下一面 `w=170.8 WIDE h=160 ok=1`）。Gate 0 三项齐。
 >   这一轮新增：LEG 侧距连续采样 `PROBE_LEG,seg=PROX/PROX2`、`SIDE_LOCK` 沿面 60 mm 平移测斜、`seg=BACKUP` 收尾倒回 40 mm、宽窄判据 130→100、锁定容差 40→70 mm。记录见 **[docs/M4-gate0-20261123.md](docs/M4-gate0-20261123.md)**。
+> - ✅ **M4e 残余偏航一次性修正（2026-11-23 已实现并复核，台架/实车待 ST-Link）**：删掉 `SIDE_MOVE` 到位后的原地转（**扫描开始到 LASER 结束之间不许转身**）、`h_leg` 去掉 `side_k`、测斜死区 `1.5°→7°`、窄面基线 30 mm、每面最多转 1 次；`PROBE_SIDE_LOCK` 只追加 `eps=/shift=`。提交 `2e00745`/`8575ecd`/`a6ee2fe`；主机单测 **37/37**、Debug 112312 B / Release 105200 B、零告警，`bin SHA256` 经 clean rebuild 复核一致。台架 A/B/C 见《台架测量操作单》§10，数据落 `docs/validation.json` 的 `m4e` 段；**本机 2026-11-23 17:55 检测不到 ST-Link，新固件未烧录，A/B/C 与实车 hdg 复核未执行**。
 > - 🚀 **下一阶段 M4**：四面循环、回 AIM 重试、`h_pred`/`pred` 跨面、面宽分类、`probetour`、参数/Flash 8；计划见根目录 **[M4计划_评审与修订.md](../M4计划_评审与修订.md)**。
 >   接手先读 **Gate 0**：[docs/M3-task-handover.md](docs/M3-task-handover.md)、[docs/teammate-targeting-handover.md](docs/teammate-targeting-handover.md)。
 
@@ -30,7 +31,7 @@
 4. **[docs/hardware-interface-manual.md](docs/hardware-interface-manual.md)**：**《STM32G474 核心板与主扩展板硬件接口逐脚对应手册》** —— 详细到每一个 MCU 引脚、核心板排针、主扩展板排母、逻辑门芯片引脚与外部传感器/电机的电气对接关系。
 5. **[docs/software-architecture-and-review.md](docs/software-architecture-and-review.md)**：**《固件审查与软件总体架构设计》** —— 记录硬件复用修复、定时器零冲突分配矩阵与快速循迹专项优化设计。
 6. **[docs/board-pin-map.csv](docs/board-pin-map.csv)**：全车 27 项 MCU 引脚、网络名与外设复用速查表格。
-7. **[docs/validation.json](docs/validation.json)**：每次代码修改后的 Debug/Release 编译、静态检查、**33 项**自动化单元测试与**台架验证**记录；M2 台架遥测在 [data/m2_side_bench_20261122.csv](data/m2_side_bench_20261122.csv)。
+7. **[docs/validation.json](docs/validation.json)**：每次代码修改后的 Debug/Release 编译、静态检查、**37 项**自动化单元测试与**台架验证**记录；M2 台架遥测在 [data/m2_side_bench_20261122.csv](data/m2_side_bench_20261122.csv)。
 
 ---
 
@@ -56,7 +57,7 @@
 - **命令面板方式**：按 `Ctrl + Shift + P` → 输入并选择 **`Tasks: Run Task`** → 选择：
   - **`Build Debug`**：编译带调试符号的 Debug 固件（输出至 `build/Debug/line-following.elf/.hex/.bin`）。
   - **`Build Release`**：编译体积与速度优化的 Release 固件（输出至 `build/Release/line-following.elf/.hex/.bin`）。
-  - **`Test Controller`**：在电脑本机运行全部 **33 项控制算法自动化单元测试**（无需连接开发板）。
+  - **`Test Controller`**：在电脑本机运行全部 **37 项控制算法自动化单元测试**（无需连接开发板）。
 
 ---
 
@@ -74,7 +75,7 @@
 
 **等价终端命令**（也可在 VS Code 终端中直接粘贴执行）：
 ```powershell
-# 仅编译 Debug / Release / 运行 33 项主机测试：
+# 仅编译 Debug / Release / 运行 37 项主机测试：
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\build.ps1 -Configuration Debug
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\build.ps1 -Configuration Release
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\build.ps1 -Test

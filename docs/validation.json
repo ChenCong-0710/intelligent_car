@@ -275,6 +275,66 @@
       "face2 s_m=-17.9 deg (~72 mm), G0-3 next face s_m=-35.2 deg: LEG dead-reckoning residual; PROX face_h/face_n could close the loop",
       "repeatability run of faces=2 and G0-3 still to do"
     ]
+  },
+  "m4e": {
+    "date": "2026-11-23",
+    "design_docs": ["../../M4e计划_遍间航向闭环.md", "../../M4e_实现提示词.md"],
+    "status": "已实现并提交（2026-11-23 17:38）；2026-11-23 17:57 独立复核：Debug/Release clean rebuild 0 告警 + 主机单测 37/37 全绿，bin SHA256 与提交时产物逐位一致。台架 A/B/C 与实车两项**未执行**：2026-11-23 17:55 STM32_Programmer_CLI -l 报「No ST-Link detected」，无新固件可烧，不用旧固件数据充数。",
+    "changes": [
+      "止血①：删 SIDE_MOVE 到位后按平移段侧距漂移的原地转（扫描开始到 LASER 结束之间一个角都不动）",
+      "止血②：LEG 入口 h_leg = side_h（去掉 side_k·s_m）；PROBE_LEG 的 h_pred 诊断同步去 side_k",
+      "测斜：死区 1.5°→7.0°、按面宽选基线（宽 60 / 窄 30 mm）、每面最多转 1 次；PROBE_SIDE_LOCK 只追加 eps=/shift= 两个字段",
+      "不新增 probe_* 参数、不动 FLASH_STORAGE_VERSION(7)、不动日志旧字段顺序"
+    ],
+    "commits": [
+      "2e00745 fix(probe): SIDE_MOVE 不再在扫描后转向 + h_leg 去掉 side_k",
+      "8575ecd feat(probe): 测斜死区 7° + 窄面基线 30 mm + 每面最多转一次",
+      "a6ee2fe test(probe): 新增 3 组（死区/钳位/SIDE_MOVE 不转）"
+    ],
+    "firmware": {
+      "toolchain": "arm-none-eabi-gcc 14.3.1 (-Wall -Wextra -Wpedantic -Werror)",
+      "warnings": 0,
+      "rebuilt_at": "2026-11-23 17:57（MinGW Makefiles --clean-first，Debug/Release 各一次）",
+      "rebuild_verified": "编译/链接 0 warning 0 error；Debug bin 112312 B / Release bin 105200 B，SHA256 与 17:38 首次产物一致",
+      "debug": { "flash_bytes": 112312, "ram_bytes": 11880, "bin_bytes": 112312,
+                 "bin_sha256": "455dde068e1a2ec013f7da2e48bd5600c0372c78ccd46ac048b7a054a6f073fd" },
+      "release": { "flash_bytes": 105200, "ram_bytes": 11880, "bin_bytes": 105200,
+                   "bin_sha256": "cc7f9a4dd5afccfd7282b1a5fe34dadc0a6d0554279d07e5fe65dd2eca21fe75" },
+      "flash_storage_version": 7,
+      "note": "本机 DSH 沙箱下 Ninja 在第二个子进程起卡死，故用同一份 CMakeLists.txt / cmake/arm-gcc.cmake 的 MinGW Makefiles 生成器 + mingw32-make 产出：build/Debug-make、build/Release-make。基线（M4e 前）Debug 112664 B / RAM 11872 B → 本次 112312 B / 11880 B（删掉的代码多于新增）。"
+    },
+    "host_tests": {
+      "passed": 37,
+      "failed": 0,
+      "baseline": "M4e 前 34 项（含 probeturn/probetour 两个占位）",
+      "rerun_at": "2026-11-23 17:56",
+      "rerun_command": "cmake -S tests -B build/host-make -G 'MinGW Makefiles' + cmake --build + ctest（同一份 tests/CMakeLists.txt，避开本机沙箱 ninja 卡死）",
+      "new": [
+        "probesidetiltdead：真值 5°，eps≈5° 但 <7° 死区 → corr=0、turn_start_ms 不变",
+        "probesidetiltclamp：真值 20° → 只转一次（side_tilt_iter==1）、corr 钳到 15°、实测转角 15°±8°",
+        "probemovenoturn：注入 150 mm 单调漂移的 SIDE_MOVE → 航向不变、无 probe_turn_to、side_move_corr_rad=0"
+      ]
+    },
+    "bench_abc": {
+      "status": "blocked：需先插 ST-Link 烧 build/Debug-make/line-following.elf；2026-11-23 17:55 本机检测不到 ST-Link（未执行任何 A/B/C 组）",
+      "blocker": {
+        "detected_at": "2026-11-23 17:55",
+        "check": "STM32_Programmer_CLI -l",
+        "result": "No ST-Link detected",
+        "needed": "ST-Link 插主扩展板 J_SWD（SWCLK/GND/SWDIO/NRST）并给板子上电，然后烧 build/Debug-make/line-following.elf；烧完按《台架测量操作单》§10 跑 A/B/C"
+      },
+      "excluded_runs": "2026-11-23 13:34 的 side-tilt 试跑是旧固件（无 eps 字段、死区 1.5°、h3 丢面），不作为 M4e 数据。",
+      "setup": "150 mm 宽面朝车、云台轴距面约 180 mm、箱体在左（probe_side_left=1、side_us=2400）、side 自走、每次重新摆位",
+      "expected": {
+        "A1~A3": "平行 0°：h2−h1 ≤ ±3 mm、eps <7°、一次都不转；三次极差 ≤4 mm",
+        "B1~B3": "车头偏向面 10°：h2−h1 ≈ −10.6 mm、eps ≈ −10.4°、转一次、|corr+10.4| ≤3°",
+        "C1~C3": "车头离开面 10°：h2−h1 ≈ +10.6 mm、eps ≈ +10.4°、转一次、|corr−10.4| ≤3°"
+      },
+      "hdg_unchanged": "pending（同 blocked；合成世界的该性质已由 probemovenoturn 单测覆盖：注入 150 mm 单调漂移的 SIDE_MOVE 后 hdg 不变、无 probe_turn_to、side_move_corr_rad=0）",
+      "narrow_face_note": "面 2/4 用 30 mm 基线：σ_ε≈2.7°，eps 只在大于死区时可信；平移把波束带出面时按设计走 warn=8 跳过，不算故障",
+      "runs": []
+    },
+    "real_car": { "status": "blocked：同 bench_abc（无 ST-Link，新固件未烧录）；判据不变：side 单面 → faces=2，每面 eps 合理、SIDE_MID→LASER 航向不变，光斑与改动前持平即可" }
   }
 }
 
