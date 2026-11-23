@@ -1492,11 +1492,21 @@ static void probe_side_lock_begin(LfController *c, uint32_t now) {
     c->side_retry = 0U;
     c->side_locked = 0U;
     c->side_lock_warn = 0U;
-    /* M3 预扫测斜状态 */
+    /* M3/M4e 预扫测斜状态 */
     c->side_lock_stage = 0U;
     c->side_h1 = c->side_h2 = c->side_h3 = 0.0f;
     c->side_delta_rad = 0.0f;
     c->side_tilt_corr_rad = 0.0f;
+    c->side_tilt_eps_deg = 0.0f;
+    c->side_tilt_iter = 0U;
+    /* 本面平移基线：按面宽选。面 0 还没扫过、不知道宽窄（首面基准在 LEG 入口才锁存），按宽面 60 mm 给；
+     * 若它其实是 50 mm 窄面，平移会把波束带出去 → warn=8 → 本次跳过测斜，不影响正确性。
+     * 面 1~3 用首面锁存 + 面序交替（与 probe_leg_current_kind() 同一套规则）：第 i 面 = first_kind ^ (i & 1)。 */
+    uint8_t wide = 1U;
+    if (c->probe_face > 0U && c->box_kind_ok) {
+        wide = (uint8_t)(c->box_first_kind ^ (c->probe_face & 1U));
+    }
+    c->side_tilt_shift_mm = wide ? LF_SIDE_TILT_SHIFT_MM : LF_SIDE_TILT_SHIFT_NARROW_MM;
     c->turn_stage = (uint8_t)LF_TURN_IDLE;
     probe_side_begin(c, now); /* 这里会把 side_ping_since 归零、清扫描环 */
 }
@@ -1950,13 +1960,13 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
             if (!probe_side_lock_sample(c, in, now)) break;
             c->side_h1 = probe_side_median(c, c->side_ring_n);
             if (c->side_h1 < LF_SIDE_H_MIN_MM || c->side_h1 > LF_SIDE_H_MAX_MM) { fail = true; break; }
-            /* 测斜只在第一面做：第二面起是 50 mm 窄面，前后各 60 mm 的平移会把光束带出这个面 */
-            if (c->side_push || LF_SIDE_TILT_PROBE_ENABLE == 0 || c->probe_face > 0U) {
+            /* M4e：每面都做测斜（窄面用 30 mm 基线，见 probe_side_lock_begin）。手推模式电机断电，跳过。 */
+            if (c->side_push || LF_SIDE_TILT_PROBE_ENABLE == 0) {
                 c->side_h3 = c->side_h1;  /* 不做测斜：人工摆位/LEG 已平行，直接用 h1（自检通过才写 side_h） */
                 c->side_lock_stage = 6;
                 break;
             }
-            /* 平移两点法：记下起点，沿面直行 30 mm 后测 h2（不再原地转 5°） */
+            /* 平移两点法：记下起点，沿面直行本面基线长度后测 h2（不再原地转 5°） */
             c->side_delta_rad = 0.0f;
             c->side_tilt_corr_rad = 0.0f;
             c->side_shift_start_mm = c->odo.distance_mm;
@@ -1965,10 +1975,10 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
             c->turn_stage = (uint8_t)LF_TURN_IDLE;
             c->side_lock_stage = 2;
             break;
-        case 2: { /* 沿面平移 60 mm：60 mm×tan10°=10.6 mm 信号，是 h 中位数噪声的 10 倍；1.5 s 走不到一半判卡住 */
+        case 2: { /* 沿面平移本面基线（宽 60 / 窄 30 mm）；1.5 s 走不到一半判卡住 */
             float moved = c->odo.distance_mm - c->side_shift_start_mm;
             if (moved > c->side_shift_peak_mm) c->side_shift_peak_mm = moved;
-            if (moved >= LF_SIDE_TILT_SHIFT_MM) {
+            if (moved >= c->side_tilt_shift_mm) {
                 probe_motion_reset(c);
                 c->out.enable = c->out.brake = true;
                 c->out.duty[0] = c->out.duty[1] = 0.0f;
@@ -1980,7 +1990,7 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
                 c->side_ping_since = now;
                 c->side_lock_stage = 3;
             } else if ((uint32_t)(now - c->side_shift_done_ms) >= 1500U &&
-                       moved < 0.5f * LF_SIDE_TILT_SHIFT_MM) {
+                       moved < 0.5f * c->side_tilt_shift_mm) {
                 /* 低速顶住不动（2026-11-23 现场 45 mm/s 时确有一条：h1==h2 恰好相等、车没走）——
                  * 放弃这次测斜，corr=0 继续，不因为一个诊断动作把整轮卡死。 */
                 c->side_warn = 6U;
@@ -1993,35 +2003,41 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
             }
             break;
         }
-        case 3: { /* 停稳后测 h2 → 残余偏航 corr = atan2(h2−h1, 60 mm) */
+        case 3: { /* 停稳后测 h2 → 残余偏航 ε̂ = atan2(h2−h1, 本面基线)；死区 7°、每面最多转一次 */
             if ((uint32_t)(now - c->side_shift_done_ms) < 200U) break;
             bool h2_full = probe_side_lock_sample(c, in, now);
             if (!h2_full && (uint32_t)(now - c->side_shift_done_ms) < LF_SIDE_TILT_H2_TIMEOUT_MS) break;
             if (c->side_ring_n >= 3U) {
                 c->side_h2 = probe_side_median(c, c->side_ring_n);
             } else {
-                /* 60 mm 平移把光束带出了面（50 mm 窄面/强丢回波），5 帧永远凑不满：
+                /* 平移把光束带出了面（50 mm 窄面/强丢回波），5 帧永远凑不满：
                  * 沿用 h1、corr=0 继续，宁可少一次诊断也不能把 SIDE_LOCK 卡到 9 s 超时停机。 */
                 c->side_h2 = c->side_h1;
                 c->side_warn = 8U; /* stage 6 会把它抄进 side_lock_warn，进 SIDE_SCAN 的清零擦不掉 */
             }
             float corr = 0.0f;
             if (c->side_h2 >= LF_SIDE_H_MIN_MM && c->side_h2 <= LF_SIDE_H_MAX_MM) {
-                /* 沿车轴前进 60 mm，h 的变化率就是车头相对箱面的残余偏航：
-                 * 左面（side_left=1）h2>h1 = 车头偏离开箱面，要左转/CCW 挽回（corr 取正）；
+                /* 沿车轴前进 Δs，h 的变化率就是车头相对箱面的残余偏航：
+                 * 左面（side_left=1）h2>h1 = 车头偏离开箱面，要左转/CCW 挽回（ε̂ 取正）；
                  * 右面是镜像几何：同样的 h2>h1 要右转/CW，符号必须反过来。
                  * （单侧伺服角 side_us 与 side_left 一起翻转，见 lf_config_valid。） */
-                float e = atan2f(c->side_h2 - c->side_h1, LF_SIDE_TILT_SHIFT_MM);
+                float e = atan2f(c->side_h2 - c->side_h1, c->side_tilt_shift_mm);
                 if (!pr->side_left) e = -e;
-                corr = limit(e, -LF_SIDE_TILT_MAX_DEG * d2r, LF_SIDE_TILT_MAX_DEG * d2r);
-                if (fabsf(corr) < LF_SIDE_TILT_MIN_DEG * d2r) corr = 0.0f;
+                c->side_tilt_eps_deg = e * 57.2957795f;
+                /* 死区 7°：平行时一次都不转（A 组判据）；|ε̂|>15° 说明 AIM 的 φ 已经错了，钳位即可。 */
+                if (c->side_tilt_iter == 0U &&
+                    fabsf(c->side_tilt_eps_deg) > LF_SIDE_TILT_MIN_DEG) {
+                    corr = limit(e, -LF_SIDE_TILT_MAX_DEG * d2r, LF_SIDE_TILT_MAX_DEG * d2r);
+                }
+            } else {
+                c->side_tilt_eps_deg = 0.0f;
             }
             c->side_tilt_corr_rad = corr;
             c->turn_stage = (uint8_t)LF_TURN_IDLE;
             c->side_lock_stage = 4;
             break;
         }
-        case 4: { /* 先退回平移起点（扫描原点因此不变），再按 corr 原地转正 */
+        case 4: { /* 先退回平移起点（扫描原点因此不变），再按 corr 原地转正；corr=0 时直接进 h3 重采 */
             float back = c->odo.distance_mm - c->side_shift_start_mm;
             if (back > 2.0f && (uint32_t)(now - c->side_shift_done_ms) < 2000U) {
                 probe_drive_signed(c, -LF_SIDE_TILT_PROBE_SPEED_MM_S, dt);
@@ -2031,17 +2047,24 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
              * 建立的 target_mm_s/applied_duty 一起清零。放在这里每拍执行 → 车轮只收到 7.5 mm/s
              * 的脉冲、占空比刚建立就被抹掉，原地转 9 s 只挪 2~4°，15° 永远到不了（2026-11-23 12:52 实车）。
              * 判据用 turn_stage==IDLE：probe_turn_to() 第一拍会把它置 DRIVE，之后就只清这一次。 */
-            if (c->turn_stage == (uint8_t)LF_TURN_IDLE) probe_motion_reset(c);
-            c->out.enable = c->out.brake = true;
-            float rel = c->side_tilt_corr_rad;
-            if (probe_turn_to(c, now, c->odo.heading_rad, rel,
-                              LF_SIDE_TILT_PROBE_SPEED_MM_S, 3.0f, dt)) {
-                c->turn_stage = (uint8_t)LF_TURN_IDLE;
-                c->side_ring_n = 0;
-                c->side_ping_since = now;
-                c->side_shift_done_ms = now; /* 复用成 h3 采样起点（兜底超时用） */
-                c->side_lock_stage = 5;
+            if (c->turn_stage == (uint8_t)LF_TURN_IDLE) {
+                probe_motion_reset(c);
+                c->out.enable = c->out.brake = true;
+                c->out.duty[0] = c->out.duty[1] = 0.0f;
             }
+            /* 死区内（corr=0）一个角都不动：不调用 probe_turn_to，省掉 150 ms 停稳空转，
+             * 台架判据「平行时一次都不转」才能从 turn_start_ms 上直接看出来。 */
+            if (c->side_tilt_corr_rad != 0.0f &&
+                !probe_turn_to(c, now, c->odo.heading_rad, c->side_tilt_corr_rad,
+                               LF_SIDE_TILT_PROBE_SPEED_MM_S, 3.0f, dt)) {
+                break;
+            }
+            c->turn_stage = (uint8_t)LF_TURN_IDLE;
+            if (c->side_tilt_corr_rad != 0.0f) ++c->side_tilt_iter; /* 本面最多转一次 */
+            c->side_ring_n = 0;
+            c->side_ping_since = now;
+            c->side_shift_done_ms = now; /* 复用成 h3 采样起点（兜底超时用） */
+            c->side_lock_stage = 5;
             break;
         }
         case 5: /* h3（转正后的最终 h）；800 ms 凑不满 5 帧就用 h2 兜底，别因一次丢回波整轮停机 */

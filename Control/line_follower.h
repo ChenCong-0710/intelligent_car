@@ -256,24 +256,30 @@
 #define LF_SIDE_KIND_SPLIT_MM 100.0f
 
 /**
- * @brief SIDE_LOCK 预扫测斜：沿面平移 60 mm 两点法（h1 → 前进 60 → h2 → 退回 → 转正 → h3）
+ * @brief SIDE_LOCK 预扫测斜：沿面平移两点法（h1 → 前进基线 → h2 → 退回 → 转正 → h3）
  * @note  2026-11-22 的「原地 +5° 两点法」已废弃：5° 只有 h·tan5°≈14 mm 的横向基线，
  *        静态 h 噪声 3 mm 就被解成 14.7°，把本来平行的车转歪（11-22 15:56 日志）。
- *        side push（电机断电）跳过；第二面起是 50 mm 窄面，前后各 60 mm 会把光束带出这个面，也跳过。
+ *        side push（电机断电）跳过。2026-11-23 M4e 起**每面都做**，基线按实测面宽选：
+ *        宽面(150) 60 mm、窄面(50) 30 mm（50 mm 的面放不下 60 mm 平移，单侧波束足印就有 23.7 mm）。
  */
 #define LF_SIDE_TILT_PROBE_DEG 5.0f   /* 旧旋转法遗留常数，现行平移法不用 */
 #define LF_SIDE_TILT_PROBE_SPEED_MM_S 80.0f
-/* 2026-11-23 改为**沿面平移 60 mm 两点法**：60 mm×tan(10°)=10.6 mm 信号，是 h 中位数噪声（±1 mm）的 10 倍；
- * 解出的残余偏航 corr=atan2(h2−h1, 60)，只有当 1.5°≤|corr|≤15° 才原地转 corr 修正，否则 corr=0 继续。
+/* 2026-11-23 改为**沿面平移两点法**：宽面 60 mm×tan(10°)=10.6 mm 信号，是 h 中位数噪声（±1 mm）的 10 倍；
+ * 解出的残余偏航 ε̂=atan2(h2−h1, 基线)，|ε̂|>死区 7°(≈5σ) 才原地转 corr=clamp(ε̂,±15°)，**每面最多转 1 次**。
  * 关键前提：h2 必须是「平移之后重新采的 5 帧」。2026-11-23 12:13 之前 side_ring_n 没清零，
  * h2 直接复用了 h1 的样本环 → h1==h2 恒成立 → corr 永远是 0（回归用例 probesidetilt）。
  * 背景：TURN_PAR 目标角=90°−φ_AIM，φ 抖 ±8° 会留 4~8° 残余偏航，直接让侧扫 w 在 118~159 之间跳。 */
 #define LF_SIDE_TILT_PROBE_ENABLE 1
-/** @brief 测斜平移距离 (mm)：沿面直行，比较前后两点 h */
+/** @brief 测斜平移距离 (mm)：沿面直行，比较前后两点 h（宽面；窄面用 LF_SIDE_TILT_SHIFT_NARROW_MM） */
 #define LF_SIDE_TILT_SHIFT_MM 60.0f
-#define LF_SIDE_TILT_MIN_DEG 1.5f
+/** @brief 窄面测斜基线 (mm)：50 mm 的面放不下 60 mm 平移（单侧足印 23.7 mm），压到 30 mm；
+ *         能测就测——平移把波束带出面时 h2 重采不足 → warn=8 → 本面跳过测斜，不影响正确性 */
+#define LF_SIDE_TILT_SHIFT_NARROW_MM 30.0f
+/** @brief 测斜死区 (°)：60 mm 基线 σ_ε≈1.3°，7°≈5σ；平行时一次都不该转（台架 A 组判据） */
+#define LF_SIDE_TILT_MIN_DEG 7.0f
+/** @brief 单次修正钳位 (°)：每面最多转 1 次，残余 >15° 说明 AIM 的 φ 已经错了，是异常 */
 #define LF_SIDE_TILT_MAX_DEG 15.0f
-/** @brief h2 重采超时 (ms)：停稳后最多等这么久凑 5 帧；凑不满 3 帧说明 60 mm 平移把光束带出了面
+/** @brief h2 重采超时 (ms)：停稳后最多等这么久凑 5 帧；凑不满 3 帧说明平移把光束带出了面
  *         （50 mm 窄面或强丢回波）→ 放弃测斜（corr=0, warn=8）继续，不许把整轮卡死在 SIDE_LOCK */
 #define LF_SIDE_TILT_H2_TIMEOUT_MS 800U
 
@@ -740,8 +746,11 @@ typedef struct {
     float side_h2;             /**< 沿面平移 60 mm 后重采的 h (mm)（必须重新采样，不能复用 h1 的样本环） */
     float side_h3;             /**< 退回并转正后 h (mm) */
     float side_delta_rad;      /**< 旧旋转法转过的 +δ (rad)，现方法恒 0 */
-    float side_tilt_corr_rad;  /**< 由 atan2(h2−h1, 60 mm) 求出的车头残余偏航修正角 (rad)，正=左转/CCW */
-    float side_shift_start_mm; /**< 测斜平移起点 (mm)：SIDE_LOCK 沿面 60 mm 两点法的基准 */
+    float side_tilt_corr_rad;  /**< 由 atan2(h2−h1, 本面基线) 求出的车头残余偏航修正角 (rad)，正=左转/CCW */
+    float side_tilt_eps_deg;   /**< 本次两点测斜的 ε̂ (°，正 = 需左转)，供日志与诊断（M4e） */
+    float side_tilt_shift_mm;  /**< 本面平移基线 (mm)：宽 60 / 窄 30（按面宽交替选择，M4e） */
+    uint8_t side_tilt_iter;    /**< 本面已执行的修正转次数 0/1（每面最多一次，M4e） */
+    float side_shift_start_mm; /**< 测斜平移起点 (mm)：SIDE_LOCK 沿面平移两点法的基准 */
     float side_shift_peak_mm;  /**< 测斜段实际走到的最大里程 (mm)：>0 才说明平移真的发生（诊断 h1==h2 是平行还是没动） */
     uint32_t side_shift_done_ms; /**< 平移结束（制动停稳）时间戳 (ms)，停稳后再测 h2 */
     uint8_t leg_stage;         /**< LEG 子状态 DRIVE1 / TURN / DRIVE2 / DONE */
