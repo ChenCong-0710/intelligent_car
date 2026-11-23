@@ -554,6 +554,7 @@ static void command(char *line, uint32_t now) {
         board_log("       set probe_side_band_mm probe_side_jump_mm probe_side_verify probe_beam_half_deg probe_pan_x_mm probe_fit_rms_mm V\r\n");
         board_log("SIDE-BENCH: side          (自走侧扫台架)  |  side push  (电机断电，人工推车扫)\r\n");
         board_log("LEG-BENCH:  leg            (用上一次 side 的 w/h 绕到下一面，M3 验收)\r\n");
+    board_log("YAW-BIAS:   yawbias DEG     (给 TURN_PAR 注入偏置 |DEG|<=20，RAM-only，造坏工况)\r\n");
         board_log("PROBE-CAL: scan [span_us=220] [step_us=20] [dwell_ms=140] | drive MM [SPD=120] | turn DEG [SPD=90] | outtest lamp/buz/laser/servo/led/stop VAL [MS]\r\n");
         board_log("SERVO: servosweep [period_ms=2000] (continuous 900..2100us) | servosweep stop | stop\r\n");
         board_log("HW-EMU: hw_preset stock|group_b; set hw_emu/hw_netlist/hw_r45_5v/hw_i/hw_coast 0/1; mcurve/vtest/bench/calset/defaults\r\n");
@@ -584,6 +585,21 @@ static void command(char *line, uint32_t now) {
         return;
     }
     if (!strcmp(cmd, "leg")) { start_leg_probe(now); return; }
+    if (!strcmp(cmd, "yawbias")) {
+        /* 台架专用：给 TURN_PAR 的转角命令注入已知偏置（RAM-only，不进 Flash 配置）。
+         * 为什么需要它：AIM 正常时把车摆歪并不会留下残余偏航（TURN_PAR 会补掉），
+         * 所以"扫描结束二次微调"的坏工况只能靠注入已知量来复现，否则只能靠运气。
+         * 用法：yawbias 10   造 +10° 残余；yawbias 0  关闭。 */
+        char *a = strtok(NULL, " 	"), *ea = NULL;
+        float v = a ? strtof(a, &ea) : NAN;
+        if (a && *ea == 0 && isfinite(v) && fabsf(v) <= 20.0f) {
+            g_lf.probe_yaw_bias_deg = v;
+            board_log("YAWBIAS %.1f deg (RAM only, TURN_PAR cmd += this)\r\n", (double)v);
+        } else {
+            board_log("YAWBIAS ERROR (usage: yawbias DEG, |DEG| <= 20)\r\n");
+        }
+        return;
+    }
     if (!strcmp(cmd, "servosweep")) {
         /* 舵机连续往返台架测试：默认 2 s 一个完整 900->2100->900 周期，直到 stop 或 servosweep stop */
         char *v = strtok(NULL, " \t");
@@ -989,10 +1005,11 @@ int main(void) {
                               (double)g_lf.side_k);
                 }
                 if (side_ev & (uint8_t)LF_SIDE_EVENT_YAW) {
-                    /* 平移测斜：侧距单调漂移 → 车头相对箱面不平行，换算成修正角 */
-                    board_log("PROBE_SIDE_YAW,dh=%.1f,ds=%.1f,corr=%.2f\r\n",
-                              (double)g_lf.side_move_dh, (double)g_lf.side_move_ds,
-                              (double)(g_lf.side_move_corr_rad * 57.2957795f));
+                    /* 扫描结束自检：长基线回归判出车头与面不平行、已转正并重扫一遍。
+                     * yaw 正=需要左转；bias=台架注入的偏置（见 yawbias 命令），便于造坏工况。 */
+                    board_log("PROBE_SIDE_YAW,yaw=%.2f,cmd=%.1f,ach=%.1f,n=%u\r\n",
+                              (double)g_lf.side_yaw_deg, (double)g_lf.turn_cmd_deg,
+                              (double)g_lf.turn_ach_deg, (unsigned)g_lf.side_fit_n);
                 }
                 if (side_ev & (uint8_t)LF_SIDE_EVENT_FAIL) {
                     board_log("PROBE_SIDE_FAIL,lock_stage=%u,edges=%u,retry=%u,h=%.1f\r\n",

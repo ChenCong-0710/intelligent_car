@@ -73,6 +73,8 @@ static void change_state(LfController *c, LfState s, uint32_t now) {
 
 /** @brief 清空云台步进扫掠采样缓存并复位本轮瞄准结果（具体实现见模块 8a） */
 static void probe_scan_reset(LfController *c);
+static float probe_scan_dir(const LfController *c);
+static float probe_scan_us_at(const LfController *c, float index);
 
 /* M2 侧视横扫的辅助函数定义在模块 8b（文件靠后），这里先给 lf_start_side_probe 用到的两个做前置声明 */
 static void probe_motion_reset(LfController *c);
@@ -136,7 +138,10 @@ LfConfig lf_default_config(void) {
         /* 四面顺时针障碍物探测与 10s 激光打靶默认参数（均可经蓝牙 set probe_* 在线标定） */
         .probe = {
             .clockwise = true, .faces = 4U,
-            .aim_ms = 2000U, .sweep_us = 300U, .scan_step_us = 60U, .laser_ms = 10000U,
+            /* aim_ms 2000→3000（2026-11-23）：第二段改成同幅独立复测后点数受驻留时长限制
+             * （max_n = sweep_ms/180）；3000 ms 让第二段拿到 15 点、第一段 11 点。
+             * 全流程只发生一次 AIM，多花 1 s 可以接受。 */
+            .aim_ms = 3000U, .sweep_us = 300U, .scan_step_us = 60U, .laser_ms = 10000U,
             .aim_min_mm = 40U, .aim_max_mm = 400U, .phase_timeout_ms = 4500U,
             .turn_speed_mm_s = 90.0f, .drive_speed_mm_s = 120.0f, .approach_speed_mm_s = 85.0f,
             .turn_deg = 90.0f, .edge1_mm = 220.0f, .edge2_mm = 220.0f, .approach_max_mm = 260.0f,
@@ -949,9 +954,7 @@ static bool morse_2short_1long(uint32_t elapsed_ms) {
 
 /** @brief 第 index 个离散采样点对应的舵机脉宽 (us，按 ±sweep_us 线性分布并限幅到 600..2400 全行程) */
 static uint16_t probe_scan_pulse(const LfController *c, uint16_t index) {
-    float span = c->scan_points > 1U ? (float)(c->scan_points - 1U) : 1.0f;
-    float offset = -1.0f * (float)c->aim_span_us + 2.0f * (float)c->aim_span_us * (float)index / span;
-    float us = (float)c->aim_center_us + offset;
+    float us = probe_scan_us_at(c, (float)index);
     if (us < (float)LF_SERVO_US_MIN) us = (float)LF_SERVO_US_MIN;
     if (us > (float)LF_SERVO_US_MAX) us = (float)LF_SERVO_US_MAX;
     return (uint16_t)(us + 0.5f);
@@ -993,11 +996,28 @@ static uint16_t probe_scan_plan(LfController *c, uint32_t sweep_ms) {
     return (uint16_t)n;
 }
 
+/**
+ * @brief 本轮扫掠的方向：+1 = 从 −span 往 +span 扫（第一段），−1 = 反过来（第二段反向扫）
+ * @note  2026-11-23：第二段改成"与第一段同幅、但反向"的独立复测。
+ *        依据：两轮实测里第二段相对第一段的 φ 差是 **+8.51° / +8.14°**（几乎恒定），
+ *        这种"方向固定、偏差恒定"的东西是单向扫掠下舵机回差/滞环引起的角度滞后，
+ *        取反方向扫一次再平均即可对消（噪声也顺带降 √2）。
+ *        附带好处：第一段结束停在 +span，第二段正好从 +span 往回扫，舵机不用再空跑一趟。 */
+static float probe_scan_dir(const LfController *c) {
+    return (c->aim_pass == 1U) ? -1.0f : 1.0f;
+}
+
+/** @brief 离散（可为小数）序号 → 舵机脉宽 (us)。扫掠方向由 probe_scan_dir() 决定 */
+static float probe_scan_us_at(const LfController *c, float index) {
+    float span = c->scan_points > 1U ? (float)(c->scan_points - 1U) : 1.0f;
+    return (float)c->aim_center_us +
+           probe_scan_dir(c) * (-(float)c->aim_span_us +
+                                2.0f * (float)c->aim_span_us * index / span);
+}
+
 /** @brief 第 index 个离散采样点对应的方位角 (rad，相对车头正前，向左为正) */
 static float probe_scan_angle(const LfController *c, unsigned index) {
-    float span = c->scan_points > 1U ? (float)(c->scan_points - 1U) : 1.0f;
-    float offset = -1.0f * (float)c->aim_span_us + 2.0f * (float)c->aim_span_us * (float)index / span;
-    float us = (float)c->aim_center_us + offset;
+    float us = probe_scan_us_at(c, (float)index);
     return ((us - (float)c->cfg.servo_center_us) / LF_PROBE_SCAN_US_PER_DEG) * 0.01745329252f;
 }
 
@@ -1110,8 +1130,8 @@ static bool probe_fit_normal(LfController *c, uint16_t *pulse_us, uint16_t *dist
          * 所以先把法线角换算成相对本轮扫掠中心的偏移，才能反解出采样点序号 */
         float center_deg = ((float)c->aim_center_us - (float)c->cfg.servo_center_us) /
                            LF_PROBE_SCAN_US_PER_DEG;
-        chosen_index = ((normal_deg - center_deg) * LF_PROBE_SCAN_US_PER_DEG + half_us) /
-                       offset_per_index;
+        chosen_index = (probe_scan_dir(c) * (normal_deg - center_deg) * LF_PROBE_SCAN_US_PER_DEG +
+                        half_us) / offset_per_index;
         float relative_error = 0;
         for (unsigned i = fit_start; i < fit_end; ++i) {
             float radians = probe_scan_angle(c, i);
@@ -1137,7 +1157,7 @@ static bool probe_fit_normal(LfController *c, uint16_t *pulse_us, uint16_t *dist
     unsigned nearest = (unsigned)(chosen_index + 0.5f);
     if (nearest < best_start) nearest = best_start;
     if (nearest >= best_start + best_len) nearest = best_start + best_len - 1U;
-    float us = (float)c->aim_center_us + (-half_us + offset_per_index * chosen_index);
+    float us = probe_scan_us_at(c, chosen_index);
     if (us < (float)LF_SERVO_US_MIN) us = (float)LF_SERVO_US_MIN;
     if (us > (float)LF_SERVO_US_MAX) us = (float)LF_SERVO_US_MAX;
     *pulse_us = (uint16_t)(us + 0.5f);
@@ -1215,6 +1235,19 @@ static void probe_side_ring_reset(LfController *c) {
 
 /** @brief 把一帧面内样本压入 8 点滑动环（环形覆盖，最小二乘与顺序无关） */
 static void probe_side_ring_push(LfController *c, float s, float d) {
+    /* 长基线累加（面内样本）：给"扫描结束后的二次微调"用，判车头与面是否平行。
+     * 8 点环只有 ~24 mm 基线、斜率还被 LF_SIDE_K_LIMIT 钳住；这里用整遍扫描的全部面内样本，
+     * 基线 ±90 mm、样本上百个，实测 σ=0.55~0.70°。 */
+    if (c->side_fit_n == 0U) { c->side_fit_min_s = s; c->side_fit_max_s = s; }
+    else {
+        if (s < c->side_fit_min_s) c->side_fit_min_s = s;
+        if (s > c->side_fit_max_s) c->side_fit_max_s = s;
+    }
+    c->side_fit_sum_s += s;
+    c->side_fit_sum_d += d;
+    c->side_fit_sum_ss += s * s;
+    c->side_fit_sum_sd += s * d;
+    if (c->side_fit_n < UINT16_MAX) ++c->side_fit_n;
     c->side_ring_s[c->side_ring_i] = s;
     c->side_ring_d[c->side_ring_i] = d;
     c->side_ring_i = (uint8_t)((c->side_ring_i + 1U) % LF_SIDE_RING);
@@ -1234,6 +1267,15 @@ static void probe_side_scan_reset(LfController *c) {
     c->side_k = 0.0f;
     c->side_inface = 0U;
     c->side_edge_frames = 0U;
+    c->side_fit_sum_s = 0.0f;
+    c->side_fit_sum_d = 0.0f;
+    c->side_fit_sum_ss = 0.0f;
+    c->side_fit_sum_sd = 0.0f;
+    c->side_fit_min_s = 0.0f;
+    c->side_fit_max_s = 0.0f;
+    c->side_fit_n = 0U;
+    /* side_yaw_deg 不在这里清：它要在重扫之后仍然保留，供 PROBE_SIDE_YAW 日志与单测读；
+     * 每面一次的清零在 probe_side_lock_begin() 里做。 */
     probe_side_ring_reset(c);
 }
 
@@ -1265,11 +1307,15 @@ static void probe_side_begin(LfController *c, uint32_t now) {
 /**
  * @brief 沿当前航向有符号直行（带里程计航向纠偏），侧扫与开位共用
  * @note  纠偏项与行驶方向无关：dθ = (右-左)/轮距，所以倒车时仍然是 (spd + corr, spd - corr) 拉回原航向。
+ * @note  增益 120→300、限幅 30→40（2026-11-23）：SIDE_SCAN 第一遍扫实测航向漂了 **2.7°**
+ *        （hdg −88.21→−85.51），直接把 w 从真值 150 拉成 124.9；而同一轮的复测扫只漂 0.49°、w 回到 145.7。
+ *        120 意味着"每偏 1° 只给 2.1 mm/s 差速"（≈6°/s 的纠正能力），持续性漂移会留下 2~3° 稳态误差。
+ *        300 对应 ≈15°/s，稳态误差应压到 ~1°。若出现低频摆动，把这两个数改回 120 / 30 即可。
  */
 static void probe_drive_signed(LfController *c, float speed_mm_s, float dt) {
     float sign = speed_mm_s >= 0.0f ? 1.0f : -1.0f;
     float spd = fabsf(speed_mm_s);
-    float corr = limit((c->odo.heading_rad - c->phase_start_rad) * 120.0f, -30.0f, 30.0f);
+    float corr = limit((c->odo.heading_rad - c->phase_start_rad) * 300.0f, -40.0f, 40.0f);
     speed_control(c, sign * spd + corr, sign * spd - corr, dt, true);
 }
 
@@ -1387,6 +1433,36 @@ static bool probe_side_center(LfController *c) {
     return true;
 }
 
+/**
+ * @brief 扫描结束后自检：车头与面是否不平行到值得"转正后重扫一遍"
+ * @return true = 需要转正；此时 side_yaw_rad 就是要转的相对角（正=左转/CCW）
+ * @note  用整遍扫描的**全部面内样本**做长基线回归（不是 8 点环）：d(s) = h0 + k·s，
+ *        dh/ds = -tan(δ)，δ 是车头相对面的偏航。要转正就是转 -δ = atan(k)（右面镜像取反）。
+ *        实测 σ=0.55~0.70°（181~486 样本），4° 死区 ≈6σ；好工况（残余 2~3°）一次都不转。
+ *        当年 7bded7f 那版要求平移 ≥100 mm、而 SIDE_MOVE 只走 |s_m|~20 mm，数学上永不触发；
+ *        现在把判据放在**扫描结束**处（扫描行程 ±90 mm 起），才是它该在的位置。
+ */
+static bool probe_side_yaw_should_fix(LfController *c) {
+    if (c->side_yaw_fix != 0U) return false;                 /* 每面只做一次 */
+    if (c->side_fit_n < LF_SIDE_YAW_MIN_SAMPLES) return false;
+    if (c->side_fit_max_s - c->side_fit_min_s < LF_SIDE_YAW_MIN_SPAN_MM) return false;
+    float n = (float)c->side_fit_n;
+    float den = n * c->side_fit_sum_ss - c->side_fit_sum_s * c->side_fit_sum_s;
+    if (den < 1.0e3f) return false;                           /* 退化：样本都挤在一点 */
+    float k = (n * c->side_fit_sum_sd - c->side_fit_sum_s * c->side_fit_sum_d) / den;
+    /* 推导：面沿 x、车在 y=h、车头与面夹角 ψ 时，侧视读数是 (h − s·sinψ)/cosψ
+     *       → dh/ds = −tanψ → ψ = −atan(k)；要摆正就得转 −ψ = atan(k)。
+     * 实测校验（probe_fix4）：k=−0.0432 → 应转 −2.47°，而由侧扫反推的正确航向
+     * 也确实比 TURN_PAR 给的再低 2.47°。右视面几何镜像 → 取反。 */
+    float rot = atanf(k);                                     /* 左视面：要转的角 */
+    if (!c->cfg.probe.side_left) rot = -rot;                  /* 镜像面：符号取反 */
+    c->side_yaw_deg = rot * 57.2957795f;
+    if (fabsf(c->side_yaw_deg) < LF_SIDE_YAW_DEADBAND_DEG) return false;
+    if (fabsf(c->side_yaw_deg) > LF_SIDE_YAW_MAX_DEG) return false;
+    c->side_yaw_rad = rot;
+    return true;
+}
+
 /** @brief 由最终确定的 s_m / w 反推 s_l / s_r，保证三者满足 s_l = s_m - w/2、s_r = s_m + w/2（复测平均后必须重算） */
 static void probe_side_sync_lr(LfController *c) {
     c->face.s_l = c->face.s_m - 0.5f * c->face.w;
@@ -1500,6 +1576,10 @@ static void probe_side_lock_begin(LfController *c, uint32_t now) {
     c->side_tilt_eps_deg = 0.0f;
     c->side_tilt_iter = 0U;
     c->side_tilt_retry = 0U;
+    /* 扫描结束后的"二次微调"：每面最多一次，进 SIDE_LOCK 时复位 */
+    c->side_yaw_fix = 0U;
+    c->side_yaw_rad = 0.0f;
+    c->side_yaw_deg = 0.0f;
     /* 本面平移基线：按面宽选。面 0 还没扫过、不知道宽窄（首面基准在 LEG 入口才锁存），按宽面 60 mm 给；
      * 若它其实是 50 mm 窄面，平移会把波束带出去 → warn=8 → 本次跳过测斜，不影响正确性。
      * 面 1~3 用首面锁存 + 面序交替（与 probe_leg_current_kind() 同一套规则）：第 i 面 = first_kind ^ (i & 1)。 */
@@ -1843,26 +1923,51 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
         if (elapsed >= pr->aim_ms) {
             probe_scan_finish(c);
             if (c->aim_pass == 0U && c->face.valid) {
-                /* 第一段粗扫成功：以粗测法线为中心做第二段细扫，
-                 * 让 50 mm 窄面从「3 个采样点」变成「8~10 个采样点」 */
+                /* 第一段粗扫成功：做第二段**独立复测**（2026-11-23 重做）。
+                 * 旧设计是「以粗测法线为中心、只扫 ±120 us（±12°）的细扫」，有三个叠加缺陷：
+                 *   ① 力臂只有粗扫的 1/2.5 → 同样 5° 的角度偏差，距离变化只有 1/6.25；
+                 *   ② 中心锁在粗扫的 φ 上 → 粗扫偏了就"错也自洽"，两遍不可能互相纠正；
+                 *   ③ 驻留时长把点数压到 10 个。
+                 * 实测两轮（真值由随后 SIDE_SCAN 的 187 mm 长基线反推）：
+                 *   probe_fix2 真值 +1.40°：粗 −1.60 / 细 +6.91 / 平均 +2.66（误差 3.0 / 5.5 / 1.3）
+                 *   probe_fix3 真值 +2.10°：粗 +4.10 / 细 +12.24 / 平均 +8.17（误差 2.0 / 10.1 / 6.1）
+                 * → 细扫就是拖后腿的那个。现在改成：**同样的 ±sweep_us 全幅、中心固定在舵机中位、
+                 *   步进更密**（点数受驻留时长限制，aim_ms=3000 时 15 点 vs 粗扫 11 点）。
+                 * 两遍因此是同力臂的独立测量，合并（取平均）才有意义；两遍差 >25° 时按下面的门限退粗扫。 */
                 c->aim_first = c->face;
-                /* phi 是弧度，先换成度再换成脉宽偏移 */
-                float center = (float)c->cfg.servo_center_us +
-                               c->face.phi * 57.29577951f * LF_PROBE_SCAN_US_PER_DEG;
-                float lo = (float)c->cfg.servo_center_us - (float)pr->sweep_us +
-                           (float)LF_PROBE_AIM2_SPAN_US;
-                float hi = (float)c->cfg.servo_center_us + (float)pr->sweep_us -
-                           (float)LF_PROBE_AIM2_SPAN_US;
-                center = limit(center, lo, hi);
-                c->aim_center_us = (uint16_t)(center + 0.5f);
-                c->aim_span_us = LF_PROBE_AIM2_SPAN_US;
+                c->aim_center_us = c->cfg.servo_center_us;   /* 不再依赖粗扫的 φ，去掉自证 */
+                c->aim_span_us = pr->sweep_us;               /* 与粗扫同幅，力臂一样长 */
                 c->aim_pass = 1U;
                 probe_scan_clear(c);
                 memset(&c->face, 0, sizeof(c->face));
                 c->phase_since = now;
                 c->out.servo_us = probe_scan_pulse(c, 0U);
             } else {
-                if (c->aim_pass == 1U && !c->face.valid) c->face = c->aim_first;
+                if (c->aim_pass == 1U) {
+                    if (!c->face.valid) {
+                        /* 细扫无效：整段退回粗扫结果 */
+                        c->face = c->aim_first;
+                    } else if (c->aim_first.valid) {
+                        /* 两遍合并（2026-11-23）：粗细扫是**同一个静止场景的两次独立测量**。
+                         * 粗扫基线 ±300 us（比细扫长 2.5 倍、对噪声更稳），细扫点更密但只覆盖 ±120 us；
+                         * 固件自己的日志里两遍可以差 12°（193724：粗 −8.9 / 细 +1.14），单用任何一遍都偏 5° 量级。
+                         * 标定用例 probe_fix2（人摆正、面在 146 mm）：真值 +1.40°（由随后 SIDE_SCAN 的
+                         * 187 mm 长基线反推），粗 −1.60 / 细 +6.91 / 平均 +2.66 → 误差 3.00 / 5.51 / 1.26°。
+                         * 两遍差超过门限说明至少一遍认错了东西，此时信基线更长的粗扫。 */
+                        float dphi = fabsf(c->aim_first.phi - c->face.phi) * 57.2957795f;
+                        if (dphi <= LF_PROBE_AIM_MERGE_MAX_DEG) {
+                            c->face.phi = 0.5f * (c->aim_first.phi + c->face.phi);
+                            c->face.rho = 0.5f * (c->aim_first.rho + c->face.rho);
+                        } else {
+                            c->face = c->aim_first;
+                        }
+                        /* 瞄准脉宽跟着合并后的 φ 走，保证 PROBE_LOCK / best_servo_us 与 PROBE_FACE 自洽 */
+                        float us = (float)c->cfg.servo_center_us +
+                                   c->face.phi * 57.2957795f * LF_PROBE_SCAN_US_PER_DEG;
+                        us = limit(us + 0.5f, (float)LF_SERVO_US_MIN, (float)LF_SERVO_US_MAX);
+                        c->best_servo_us = (uint16_t)us;
+                    }
+                }
                 c->out.servo_us = probe_servo_hold(c);
                 /* M3：AIM 成功 → 原地转到侧视方向（TURN_PAR）→ SIDE_LOCK。
                  * 注意：旧条件里的 side_bench 只由 lf_start_side_probe() 置 1，而它直接从
@@ -1890,7 +1995,11 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
         c->out.servo_us = pr->side_us; /* 转身期间舵机就先甩到侧视，SIDE_LOCK 的 400 ms 只作余量 */
         c->out.park_lamp = false;
         float phi_deg = c->face.phi * 57.2957795f;
-        float cmd_deg = pr->side_left ? (phi_deg - 90.0f) : (phi_deg + 90.0f);
+        /* probe_yaw_bias_deg 是**台架注入**的偏置（console: yawbias DEG，RAM-only，不进 Flash 配置）。
+         * 用途：AIM 正常工作时，人为把车摆歪并不会留下残余偏航（TURN_PAR 会补偿掉），
+         * 所以想把"扫描结束二次微调"的坏工况造出来，只能在转角命令上注入已知量。默认 0。 */
+        float cmd_deg = (pr->side_left ? (phi_deg - 90.0f) : (phi_deg + 90.0f)) +
+                        c->probe_yaw_bias_deg;
         if (fabsf(phi_deg) > LF_TURN_PAR_MAX_PHI_DEG) {
             /* φ 离谱（AIM 被邻面/棱角带偏）：不转，带着 ok=0 停机，避免为了对齐法线把车转进箱子 */
             c->turn_cmd_deg = cmd_deg;
@@ -1935,11 +2044,10 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
         break;
     }
     case LF_PROBE_SIDE_LOCK: {
-        /* 舵机掰到侧视 ±90°（默认 2400us = +90° = 箱体在左），等它走完。
-         * M3：先做两点测斜（h1 → 原地 +5° → h2 → 转正 → h3），把车头残余倾角修掉，
-         * 否则 SIDE_MOVE 沿斜轴走会把车“侧面划出去”。side push 电机断电，跳过预扫。
+        /* 舵机掰到侧视 ±90°（默认 2400us = +90° = 箱体在左），等它走完，然后采一次 h 就结束。
+         * 2026-11-23 起这里**不做任何平移、不做任何转角**（扫描前自动测斜已整段删除，
+         * 原因见 case 1 的注释）；残余偏航交给 SIDE_SCAN 结束后的"二次微调"。
          * 手推台架模式必须断电：否则 H 桥短接制动，人工推不动（与 side push 的承诺矛盾）。 */
-        const float d2r = 0.01745329252f;
         c->out.park_lamp = true;
         c->out.servo_us = pr->side_us;
         if (c->side_push) {
@@ -1961,155 +2069,15 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
             if (!probe_side_lock_sample(c, in, now)) break;
             c->side_h1 = probe_side_median(c, c->side_ring_n);
             if (c->side_h1 < LF_SIDE_H_MIN_MM || c->side_h1 > LF_SIDE_H_MAX_MM) { fail = true; break; }
-            /* M4e：每面都做测斜（窄面用 30 mm 基线，见 probe_side_lock_begin）。手推模式电机断电，跳过。 */
-            if (c->side_push || LF_SIDE_TILT_PROBE_ENABLE == 0) {
-                c->side_h3 = c->side_h1;  /* 不做测斜：人工摆位/LEG 已平行，直接用 h1（自检通过才写 side_h） */
-                c->side_lock_stage = 6;
-                break;
-            }
-            /* 平移两点法：记下起点，沿面直行本面基线长度后测 h2（不再原地转 5°） */
-            c->side_delta_rad = 0.0f;
-            c->side_tilt_corr_rad = 0.0f;
-            c->side_shift_start_mm = c->odo.distance_mm;
-            c->side_shift_peak_mm = 0.0f;
-            c->side_shift_done_ms = now; /* 平移起点时间戳：卡住检测用 */
-            c->turn_stage = (uint8_t)LF_TURN_IDLE;
-            c->side_lock_stage = 2;
-            break;
-        case 2: { /* 沿面平移本面基线（宽 60 / 窄 30 mm）；1.5 s 走不到一半判卡住 */
-            float moved = c->odo.distance_mm - c->side_shift_start_mm;
-            if (moved > c->side_shift_peak_mm) c->side_shift_peak_mm = moved;
-            if (moved >= c->side_tilt_shift_mm) {
-                probe_motion_reset(c);
-                c->out.enable = c->out.brake = true;
-                c->out.duty[0] = c->out.duty[1] = 0.0f;
-                c->side_shift_done_ms = now;
-                /* 关键：h2 必须重新采样。probe_side_lock_sample() 只在凑满 5 帧时返回 true，
-                 * 不清环的话 stage 3 第一拍就"采样成功"，h2 = h1（同一批样本）→ corr 恒 0。
-                 * 2026-11-23 12:13 之前所有日志 h1==h2 都是这个原因，不是车真的平行。 */
-                c->side_ring_n = 0U;
-                c->side_ping_since = now;
-                c->side_lock_stage = 3;
-            } else if ((uint32_t)(now - c->side_shift_done_ms) >= 1500U &&
-                       moved < 0.5f * c->side_tilt_shift_mm) {
-                /* 低速顶住不动（2026-11-23 现场 45 mm/s 时确有一条：h1==h2 恰好相等、车没走）——
-                 * 放弃这次测斜，corr=0 继续，不因为一个诊断动作把整轮卡死。 */
-                c->side_warn = 6U;
-                c->side_tilt_corr_rad = 0.0f;
-                c->side_h2 = c->side_h1;
-                c->turn_stage = (uint8_t)LF_TURN_IDLE;
-                c->side_lock_stage = 4;
-            } else {
-                probe_drive_signed(c, LF_SIDE_TILT_PROBE_SPEED_MM_S, dt);
-            }
-            break;
-        }
-        case 3: { /* 停稳后测 h2 → 残余偏航 ε̂ = atan2(h2−h1, 本面基线)；死区 7°、每面最多转一次 */
-            if ((uint32_t)(now - c->side_shift_done_ms) < 200U) break;
-            bool h2_full = probe_side_lock_sample(c, in, now);
-            if (!h2_full && (uint32_t)(now - c->side_shift_done_ms) < LF_SIDE_TILT_H2_TIMEOUT_MS) break;
-            bool valid = false;
-            if (c->side_ring_n >= 3U) {
-                c->side_h2 = probe_side_median(c, c->side_ring_n);
-                /* 静止测面时 5 帧离散度正常 ≤3~4 mm；面边缘/换面时会 60~160 mm 乱跳（2026-11-23 实测），
-                 * 只看中位数会把这种坏数据当有效值。离散度超限直接判无效。 */
-                float lo = c->side_ring_d[0], hi = c->side_ring_d[0];
-                for (unsigned i = 1U; i < c->side_ring_n; ++i) {
-                    if (c->side_ring_d[i] < lo) lo = c->side_ring_d[i];
-                    if (c->side_ring_d[i] > hi) hi = c->side_ring_d[i];
-                }
-                if ((hi - lo) <= LF_SIDE_TILT_SPREAD_MM &&
-                    c->side_h2 >= LF_SIDE_H_MIN_MM && c->side_h2 <= LF_SIDE_H_MAX_MM) valid = true;
-            } else {
-                /* 平移把光束带出了面（窄面/强丢回波），5 帧凑不满：本次数据无效（走重测/放弃） */
-                c->side_h2 = c->side_h1;
-            }
-            float corr = 0.0f;
-            c->side_tilt_eps_deg = 0.0f;
-            if (valid) {
-                /* 沿车轴前进 Δs，h 的变化率就是车头相对箱面的残余偏航：
-                 * 左面（side_left=1）h2>h1 = 车头偏离开箱面，要左转/CCW 挽回（ε̂ 取正）；
-                 * 右面是镜像几何：同样的 h2>h1 要右转/CW，符号必须反过来。
-                 * （单侧伺服角 side_us 与 side_left 一起翻转，见 lf_config_valid。） */
-                float e = atan2f(c->side_h2 - c->side_h1, c->side_tilt_shift_mm);
-                if (!pr->side_left) e = -e;
-                c->side_tilt_eps_deg = e * 57.2957795f;
-                /* 死区 7°：平行时一次都不转（A 组判据）。
-                 * 修正钳位 ±45°：任务书允许箱子斜 70~110°（φ 到 ±20°），而 AIM 近距 φ 有偏（实测 +21°），
-                 * TURN_PAR 后残差可到 20~30°，±15° 修不回来；>55° 判无效（超出模型）。 */
-                if (fabsf(c->side_tilt_eps_deg) > LF_SIDE_TILT_ABORT_DEG) {
-                    valid = false;
-                } else if (c->side_tilt_iter == 0U &&
-                           fabsf(c->side_tilt_eps_deg) > LF_SIDE_TILT_MIN_DEG) {
-                    corr = limit(e, -LF_SIDE_TILT_MAX_DEG * d2r, LF_SIDE_TILT_MAX_DEG * d2r);
-                }
-            }
-            if (!valid) {
-                c->side_tilt_eps_deg = 0.0f;
-                c->side_warn = (c->side_ring_n >= 3U) ? 9U : 8U;
-                /* 第一次测量无效（原点贴面边缘/大残差时 60/30 mm 平移正好出界）：退回原点后
-                 * 改用 20 mm 小基线重测一次（stage 4 负责识别并跳回 stage 2）。 */
-                if (c->side_tilt_retry == 0U) c->side_tilt_retry = 1U;
-            }
-            c->side_tilt_corr_rad = corr;
-            c->turn_stage = (uint8_t)LF_TURN_IDLE;
-            c->side_lock_stage = 4;
-            break;
-        }
-        case 4: { /* 先退回平移起点（扫描原点因此不变），再按 corr 原地转正；corr=0 时直接进 h3 重采 */
-            float back = c->odo.distance_mm - c->side_shift_start_mm;
-            if (back > 2.0f && (uint32_t)(now - c->side_shift_done_ms) < 2000U) {
-                probe_drive_signed(c, -LF_SIDE_TILT_PROBE_SPEED_MM_S, dt);
-                break;
-            }
-            /* 第一次测斜无效（大残差/原点贴面边缘时 60/30 mm 平移出了面）：退回原点后改 20 mm 小基线重测一次 */
-            if (c->side_tilt_retry == 1U) {
-                c->side_tilt_retry = 2U;
-                c->side_tilt_shift_mm = LF_SIDE_TILT_RETRY_SHIFT_MM;
-                c->side_shift_start_mm = c->odo.distance_mm;
-                c->side_shift_peak_mm = 0.0f;
-                c->side_shift_done_ms = now;
-                c->side_ring_n = 0U;
-                c->side_ping_since = now;
-                c->side_tilt_corr_rad = 0.0f;
-                c->side_warn = 0U;
-                c->turn_stage = (uint8_t)LF_TURN_IDLE;
-                c->side_lock_stage = 2U;
-                break;
-            }
-            /* 只在「转还没开始」那一拍清斜坡：probe_motion_reset() 会把 speed_control 每拍
-             * 建立的 target_mm_s/applied_duty 一起清零。放在这里每拍执行 → 车轮只收到 7.5 mm/s
-             * 的脉冲、占空比刚建立就被抹掉，原地转 9 s 只挪 2~4°，15° 永远到不了（2026-11-23 12:52 实车）。
-             * 判据用 turn_stage==IDLE：probe_turn_to() 第一拍会把它置 DRIVE，之后就只清这一次。 */
-            if (c->turn_stage == (uint8_t)LF_TURN_IDLE) {
-                probe_motion_reset(c);
-                c->out.enable = c->out.brake = true;
-                c->out.duty[0] = c->out.duty[1] = 0.0f;
-            }
-            /* 死区内（corr=0）一个角都不动：不调用 probe_turn_to，省掉 150 ms 停稳空转，
-             * 台架判据「平行时一次都不转」才能从 turn_start_ms 上直接看出来。 */
-            if (c->side_tilt_corr_rad != 0.0f &&
-                !probe_turn_to(c, now, c->odo.heading_rad, c->side_tilt_corr_rad,
-                               LF_SIDE_TILT_PROBE_SPEED_MM_S, 3.0f, dt)) {
-                break;
-            }
-            c->turn_stage = (uint8_t)LF_TURN_IDLE;
-            if (c->side_tilt_corr_rad != 0.0f) ++c->side_tilt_iter; /* 本面最多转一次 */
-            c->side_ring_n = 0;
-            c->side_ping_since = now;
-            c->side_shift_done_ms = now; /* 复用成 h3 采样起点（兜底超时用） */
-            c->side_lock_stage = 5;
-            break;
-        }
-        case 5: /* h3（转正后的最终 h）；800 ms 凑不满 5 帧就用 h2 兜底，别因一次丢回波整轮停机 */
-            if (probe_side_lock_sample(c, in, now)) {
-                c->side_h3 = probe_side_median(c, c->side_ring_n);
-                c->side_lock_stage = 6;
-            } else if ((uint32_t)(now - c->side_shift_done_ms) >= 800U) {
-                c->side_h3 = c->side_h2 > 0.0f ? c->side_h2 : c->side_h1;
-                c->side_warn = 5U; /* 诊断：h3 用兜底值 */
-                c->side_lock_stage = 6;
-            }
+            /* 扫描前自动测斜（h1→平移→h2→退回→转正→h3）已于 2026-11-23 **整段删除**：
+             * 它的输入是侧视超声在 side_us=2400 处的双稳态读数（同一位置 ±13~22 mm 跳变），
+             * 60 mm 基线上的真实信号只有 5 mm，信噪比 0.3 —— 不是修正，是把噪声当信号再转一次。
+             * 现场一次 eps=21° 把车从 −93.3° 转到 −67.1°、一次 eps=−53.8°→钳位−45° 甩转，
+             * 都是它干的。扫描↔发射同轴（性质①）本来就不需要扫描前的任何转角。
+             * 现在改为：只采一次 h，直接进 stage 6 自检；真歪了由 SIDE_SCAN 结束后的
+             * '二次微调'（probe_side_yaw_should_fix）处理，那里有 ±90 mm 的长基线做依据。 */
+            c->side_h3 = c->side_h1;
+            c->side_lock_stage = 6;
             break;
         default: { /* 6：ρ+pan_x 自检并通过才写 side_h */
             /* h3 丢面（>H_MAX 或 <H_MIN）而 h2 有效时用 h2 兜底：转正那一下常伴随一次丢回波 */
@@ -2164,6 +2132,32 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
     }
     case LF_PROBE_SIDE_SCAN: {
         c->out.servo_us = pr->side_us;
+        if (c->side_yaw_fix == 1U) {
+            /* "二次微调"第 2 步：原地转正（角度由长基线回归给出），转完**重扫一遍**。
+             * 重扫由 probe_side_begin() 重新锁原点，最终 s_m 由这一次给出，
+             * 所以"扫描↔发射同航向"（性质①）仍然成立 —— 这正是 2e00745 当年
+             * 删掉"到点后转身"时那条硬规则（verify=0 时转完直接发射会偏 h·tanε≈26 mm）
+             * 在本轮（verify=1）的精确放宽：要动角就必须紧接着重扫。 */
+            if (!probe_turn_to(c, now, c->odo.heading_rad, c->side_yaw_rad,
+                               LF_LEG_TURN_SPEED_MM_S, 3.0f, dt)) break;
+            c->side_yaw_fix = 2U;
+            c->turn_stage = (uint8_t)LF_TURN_IDLE;
+            c->side_event |= (uint8_t)LF_SIDE_EVENT_YAW;  /* 再报一次：这次带上真实的 cmd/ach */
+
+            /* 关键：**不重锁扫描原点**。转完先沿面退回原来那个扫描原点（s=0），
+             * 再用已有的 side_rescan 机制从原点重扫一遍 —— 这样 s_m 仍在同一个坐标系里，
+             * SIDE_MOVE 的 side_target 才有意义。（重锁原点会让车在"面边缘"起扫，
+             * 单测 probeside 的 8° 用例就是靠这一点暴露出来的。） */
+            c->side_target = 0.0f;
+            c->side_rescan = 1U;
+            c->side_verify_done = 1U;   /* 这次回退不做复测，重扫完成后再复位成 0 */
+            c->side_retry = 0U;
+            c->side_move_stage = (uint8_t)LF_SIDE_MOVE_DRIVE;
+            probe_motion_reset(c);
+            c->phase_since = now;
+            change_probe_phase(c, LF_PROBE_SIDE_MOVE, now);
+            break;
+        }
         LfSideResult sr = probe_side_scan_tick(c, in, now, dt);
         if (sr == LF_SIDE_SCAN_OK) {
             probe_side_center(c);
@@ -2192,6 +2186,17 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
                 c->out.brake = false;
                 c->out.duty[0] = c->out.duty[1] = 0.0f;
                 change_probe_phase(c, LF_PROBE_COMPLETE_BEEPS, now);
+            } else if (probe_side_yaw_should_fix(c)) {
+                /* "二次微调"第 1 步：扫描自己量出车头与面不平行（|k| 超死区）→ 转正后重扫。
+                 * 好工况（残余 2~3°）走不到这里，一个角都不动。 */
+                c->side_yaw_fix = 1U;
+                c->turn_stage = (uint8_t)LF_TURN_IDLE;
+                c->turn_ok = 0U;
+                c->side_event |= (uint8_t)LF_SIDE_EVENT_YAW;
+                probe_motion_reset(c);
+                c->out.enable = c->out.brake = true;
+                c->out.duty[0] = c->out.duty[1] = 0.0f;
+                break;  /* 同一拍只做决策，下一拍才开始转 */
             } else {
                 probe_motion_reset(c);
                 c->side_target = c->face.s_m;
@@ -2342,6 +2347,14 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
                 }
             } else if (!more) {
                 change_probe_phase(c, LF_PROBE_COMPLETE_BEEPS, now);
+            } else if (pr->scan_mode != 0U) {
+                /* 侧视模式下面没锁上（AIM valid=0 / SIDE_LOCK 失败）= 这一面打不了。
+                 * 以前这里会掉进模式 A 的方阵巡边（TURN_OUT→DRIVE_EDGE1→TURN_CORNER→…），
+                 * 实车表现就是"绕过箱子盲走一圈再回来"：2026-11-23 20:50 那次 AIM 无效后正是这样，
+                 * 白跑 12 s 并朝箱子开过去。侧视模式一律失败即停——宁可少打一面，也不带着错误位姿乱走。 */
+                c->side_locked = 0U;
+                c->side_event |= (uint8_t)LF_SIDE_EVENT_FAIL;
+                lf_stop(c, now);
             } else {
                 /* 模式 A（scan_mode=0）兜底：仍沿用方阵巡边；M4 不再走这条 */
                 c->side_locked = 0U;

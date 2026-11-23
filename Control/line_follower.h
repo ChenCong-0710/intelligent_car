@@ -56,7 +56,12 @@
  * @note  第一段 ±sweep_us 粗扫定位平面，第二段以上一段求得的法线为中心、±120us(±12°) 细扫，
  *        步长 20us(2°)、约 10 个点。50 mm 窄面在第一段只有 3 个点，第二段能拿到 8~10 个点。
  */
-#define LF_PROBE_AIM2_SPAN_US 120U
+/** @brief 粗细两遍 φ 的合并门限 (°)：两遍差 <= 它取平均，> 它改用基线更长的粗扫
+ *  @note  2026-11-23：粗扫 ±300 us / 细扫 ±120 us 是同一个静止场景的两次独立测量，实测可差 12°。
+ *         标定用例 probe_fix2：真值 +1.40°，粗 −1.60 / 细 +6.91 / 平均 +2.66（误差 3.00 / 5.51 / 1.26°）。 */
+#define LF_PROBE_AIM_MERGE_MAX_DEG 25.0f
+/* 第二段已改为"与粗扫同幅的独立复测"（2026-11-23，见 line_follower.c 里的说明），
+ * 所以不再有"细扫半幅"这个常数；只有步进更密（20 us = 2°/点，点数受驻留时长限制）。 */
 #define LF_PROBE_AIM2_STEP_US 20U
 
 /**
@@ -120,6 +125,17 @@
 #define LF_SIDE_EDGE_ZERO_FRAMES 10U
 
 /** @brief 侧视锁定：舵机 90° 到位等待时间 (ms)。实测 1500→2400 的 90° 行程 ≤0.4 s（含 60 ms 测距节拍） */
+/* --- 扫描结束后的"二次微调"（2026-11-23）---
+ * 历史教训：7bded7f 曾在 SIDE_MOVE 里按侧距漂移转身，但要求平移 >= 100 mm，而 SIDE_MOVE 只走 |s_m|~20 mm，
+ * 那个 if 数学上永远进不去；2e00745 干脆删掉并立下"扫描→发射之间一个角都不许动"的硬规则
+ * （依据是 verify=0 时转完直接发射，光斑偏 h·tanε≈26 mm，而 50 mm 窄面半宽只有 25 mm）。
+ * 现在 verify=1，硬规则精确放宽为：**要动角就必须紧接着重扫一遍**，最终 s_m 由重扫给出（性质①仍成立）。
+ * 触发量是 SIDE_SCAN 自己的长基线回归（面内全部样本）：实测 σ=0.55~0.70°（181~486 样本）。 */
+#define LF_SIDE_YAW_MIN_SAMPLES 30U      /**< 长基线回归最少面内样本数 */
+#define LF_SIDE_YAW_MIN_SPAN_MM 50.0f    /**< 面内样本的 s 跨度下限 (mm)：跨度不够时斜率不可信 */
+#define LF_SIDE_YAW_DEADBAND_DEG 4.0f    /**< 死区 (°)：约 6σ，好工况（残余 2~3°）一次都不转 */
+#define LF_SIDE_YAW_MAX_DEG 20.0f        /**< 上限 (°)：超过它说明扫描本身有问题，不转（任务书箱子最多斜 ±20°） */
+
 #define LF_SIDE_LOCK_WAIT_MS 400U
 
 /** @brief 侧视锁定：连测帧数（每 60 ms 一帧，取中位数） */
@@ -152,18 +168,11 @@
 #define LF_SIDE_ARRIVE_MM 2.0f
 #define LF_SIDE_SETTLE_MS 150U
 
-/**
- * @brief SIDE_MOVE 平移测斜门限：沿面走 ≥40 mm 时，侧距单调（非突变）漂移 ≥12 mm 才认作残余偏航
- * @note  2026-11-23 现场：TURN_PAR 后车头若仍差 10°，沿面走 100 mm 侧距会单调变化 ~17 mm，
- *        这种「慢慢增大/减小」的漂移就是转向角不对的直接证据；突变（>40 mm/帧）判为换面/边缘，不计入。
- */
-/* 2026-11-23 M4e：以下 4 个门限**已停用**——SIDE_MOVE 到位后不再按漂移转身。
- * 那个转身发生在 SIDE_SCAN 之后、LASER 之前，probe_side_verify=0 时转完直接发射，光斑偏 26 mm；
- * 定义保留只为不动日志字段与历史，控制路径不再引用（见 line_follower.c 的 LF_SIDE_MOVE_DRIVE）。 */
-#define LF_SIDE_MOVE_TILT_MIN_DS_MM 100.0f
-#define LF_SIDE_MOVE_TILT_MIN_MM 12.0f
-#define LF_SIDE_MOVE_TILT_DEADBAND_DEG 2.0f
-#define LF_SIDE_MOVE_TILT_MAX_DEG 12.0f
+/* 旧的 SIDE_MOVE 平移测斜门限（MIN_DS_MM/MIN_MM/DEADBAND/MAX）已于 2026-11-23 删除：
+ * 那版判据要求平移 ≥100 mm、而 SIDE_MOVE 只走 |s_m|~20 mm，数学上永远进不去；
+ * 而它想做的转身又发生在 SIDE_SCAN 之后、LASER 之前（verify=0 时转完直接发射会偏 26 mm）。
+ * "扫描后纠偏"现在改在 SIDE_SCAN 结束时用长基线回归做，见 LF_SIDE_YAW_* 与
+ * probe_side_yaw_should_fix()。 */
 
 /** @brief SIDE_MOVE 单次驱动超时 (ms)：最长的“扫失败后退回原点”约 280 mm，50 mm/s 需要 5.6 s */
 #define LF_SIDE_MOVE_TIMEOUT_MS 10000U
@@ -276,7 +285,22 @@
  * 关键前提：h2 必须是「平移之后重新采的 5 帧」。2026-11-23 12:13 之前 side_ring_n 没清零，
  * h2 直接复用了 h1 的样本环 → h1==h2 恒成立 → corr 永远是 0（回归用例 probesidetilt）。
  * 背景：TURN_PAR 目标角=90°−φ_AIM，φ 抖 ±8° 会留 4~8° 残余偏航，直接让侧扫 w 在 118~159 之间跳。 */
-#define LF_SIDE_TILT_PROBE_ENABLE 1
+
+/**
+ * @brief 扫描前自动测斜（含转正）总开关：**已关闭**，0 = 只测 h1、不平移、不转、直接进 SIDE_SCAN
+ * @note  关闭依据（2026-11-23 20:41 台架，车由人摆成"传感器正对障碍物"）：
+ *          第一次转（TURN_PAR −98.8/ach −98.9，误差 0.1°）之后车头是**正**的；
+ *          紧接着本测斜给出 h1=179 / h2=202 / h3=167、eps=21.0 → corr=+21°，
+ *          车头从 −93.3° 被转到 −67.1°（实测 +26.1°，230 ms），**从此跑偏 26°**。
+ *        而这三个读数（179/202/167）全部落在侧视超声在 side_us=2400 处的**双稳态格点**上
+ *        （静止实测：同一位置 ±13~22 mm 在 167/179/192/202 之间跳，跨次不可重复）。
+ *        60 mm 基线上真实信号只有 60·tan(ε)；航向自己漂 4.6° 时才 5 mm，而噪声 18 mm —— **信噪比 0.3**，
+ *        这一步不是修正，是"把噪声当信号再转一次"。它同时也是 19:37 那次 eps=−53.8°→钳位−45°→甩转
+ *        的直接来源。扫描与发射同轴（性质①）本来就不需要任何扫描前的转角，
+ *        所以正确做法是整段关掉，而不是继续调它的门限/钳位（那是把噪声分类得更细）。
+ *        单测 probesidetiltoff 守着"一趟 SIDE_LOCK 里一次转都不许发生"。
+ *        将来若重新打开：必须先解决侧视双稳态（见 side_us 的选点），并重新标定死区/钳位。 */
+#define LF_SIDE_TILT_PROBE_ENABLE 0
 /** @brief 测斜平移距离 (mm)：沿面直行，比较前后两点 h（宽面；窄面用 LF_SIDE_TILT_SHIFT_NARROW_MM） */
 #define LF_SIDE_TILT_SHIFT_MM 60.0f
 /** @brief 窄面测斜基线 (mm)：50 mm 的面放不下 60 mm 平移（单侧足印 23.7 mm），压到 30 mm；
@@ -427,7 +451,7 @@ typedef enum {
     LF_SIDE_EVENT_EDGE = 0x01,  /**< 找到一个边界 */
     LF_SIDE_EVENT_MID = 0x02,   /**< 中点/宽度确定（含复测后更新） */
     LF_SIDE_EVENT_FAIL = 0x04,  /**< 本次扫描 / SIDE_LOCK 失败 */
-    LF_SIDE_EVENT_YAW = 0x08    /**< 停用（M4e）：SIDE_MOVE 不再按平移漂移转身，本事件不再置位 */
+    LF_SIDE_EVENT_YAW = 0x08    /**< SIDE_SCAN 结束时判出车头与面不平行、已转正并重扫（见 LF_SIDE_YAW_*） */
 } LfSideEvent;
 
 /**
@@ -720,17 +744,21 @@ typedef struct {
                                    与 side_warn 分开存：进 SIDE_SCAN 时 probe_side_begin() 会清 side_warn，
                                    以前 warn=6 就是在成功路径上被那次清零擦掉的（日志永远 warn=0）。 */
     uint8_t side_move_stage;   /**< SIDE_MOVE 子状态 LF_SIDE_MOVE_DRIVE / SETTLE / VERIFY / DONE */
-    /* 以下 side_move_* 测斜字段自 M4e 起**不再赋值**（SIDE_MOVE 到位后不许再转身）；
-     * 定义保留只为不动 main.c 的 PROBE_SIDE_YAW 日志格式，读出来恒 0。 */
-    uint8_t side_move_mono;    /**< （停用）平移段侧距「同向增量」连续帧数 */
-    uint32_t side_move_since;  /**< （停用）平移段侧距采样节拍时间戳 (ms，50 ms) */
-    float side_move_h0;        /**< （停用）平移段起始侧距 (mm)，0=还没取到 */
-    float side_move_h_last;    /**< （停用）平移段最近有效侧距 (mm) */
-    float side_move_s0;        /**< （停用）平移段起始里程 (mm) */
-    float side_move_ds;        /**< （停用）平移段已走距离 (mm) */
-    float side_move_dh;        /**< （停用）平移段侧距总漂移 (mm，末−首) */
-    float side_move_dh_prev;   /**< （停用）上一次采样增量 (mm)，判单调用 */
-    float side_move_corr_rad;  /**< （停用）平移测出的残余偏航 (rad)；M4e 起恒 0，不再触发转身 */
+    /* 旧的 side_move_* 平移测斜字段已于 2026-11-23 删除（那版要求平移 ≥100 mm，
+     * 而 SIDE_MOVE 只走 |s_m|~20 mm，那个 if 数学上永远进不去，所以"从来没生效过"；
+     * 现在改用 SIDE_SCAN 的长基线回归 + 下面的 side_fit_* / side_yaw_*）。 */
+    /* --- 扫描结束后的"二次微调"（2026-11-23 新增）：长基线回归判车头与面是否平行 --- */
+    float    side_fit_sum_s;   /**< Σs（面内样本，长基线）》 */
+    float    side_fit_sum_d;   /**< Σd */
+    float    side_fit_sum_ss;  /**< Σs² */
+    float    side_fit_sum_sd;  /**< Σs·d */
+    float    side_fit_min_s;   /**< 面内样本的 s 最小值 (mm)：判扫描跨度够不够 */
+    float    side_fit_max_s;   /**< 面内样本的 s 最大值 (mm) */
+    uint16_t side_fit_n;       /**< 面内样本数（长基线回归用） */
+    float    probe_yaw_bias_deg; /**< 台架注入的 TURN_PAR 偏置 (°，RAM-only)：造"坏工况"用，默认 0 */
+    float    side_yaw_rad;     /**< 本面要转的"转正"角 (rad，正=左转/CCW)；由 atan(k) 镜像而来 */
+    float    side_yaw_deg;     /**< 同上，弧度换算成度（日志用） */
+    uint8_t  side_yaw_fix;     /**< 0=还没判 / 1=正在原地转正 / 2=已转正并重扫（每面最多一次） */
     uint8_t side_verify_mode;  /**< 1 = 当前这一遍扫描是发射前复测（reach 收窄、原点已重锁存） */
     uint8_t side_verify_done;  /**< 1 = 本面已经做过一次复测（避免重复进 VERIFY） */
     uint8_t side_rescan;       /**< 1 = SIDE_MOVE 到位后回到 SIDE_SCAN 重扫一次 */

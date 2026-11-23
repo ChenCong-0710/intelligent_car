@@ -720,8 +720,16 @@ void board_sample(LfInput *sample) {
         previous_count[i] = counts[i];
     }
 
-    /* 若 TIM8_CH2 捕获到新的超声波回波下降沿，按声速 343 m/s 换算为毫米距离 */
+    /* 读取 TIM8_CH2 捕获到的超声波回波下降沿，按声速 343 m/s 换算为毫米距离。
+     * CC2IF 是 rc_w0 标志位，**必须软件写 0 清**：本工程没有 TIM8 中断，HAL_TIM_IRQHandler 里那句
+     * __HAL_TIM_CLEAR_FLAG 永远不会执行，所以这里不清就没人清。
+     * 不清的后果（2026-11-23 定位）：第一次捕获之后 CC2IF 恒为 1，于是每 5 ms 都把同一个 CCR2
+     * 当成"新回波"去刷新 obstacle_time → obstacle_valid 永远为真，旧距离被无限重放。
+     * 于是"丢回波"在侧扫里永远不会以 d==0 出现，零回波型边界（LF_SIDE_EDGE_ZERO_FRAMES）永不触发，
+     * 只剩跳变型边界可用——是多次 PROBE_SIDE_FAIL,edges=0 的成因之一。
+     * 清掉之后 obstacle_valid 的语义恢复为"220 ms 内真的收到过一次回波"。 */
     if (TIM8->SR & TIM_SR_CC2IF) {
+        TIM8->SR = ~TIM_SR_CC2IF;                  /* 只清 CC2IF；其余位是 rc_w0，写 1 无副作用 */
         uint16_t pulse_us = (uint16_t)TIM8->CCR2;
         if (pulse_us >= 80U && pulse_us <= 18000U) {
             latest_obstacle_mm = (uint16_t)(((uint32_t)pulse_us * 343U + 1000U) / 2000U);
