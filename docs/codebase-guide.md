@@ -110,16 +110,16 @@ flowchart LR
    - **模块 8b（M2，已烧录 + 4 次台架验证）**：侧扫可从**台架入口**（`side` / `side push` → `lf_start_side_probe()`）直接进入；
      M3 起自动流程为 `AIM → TURN_PAR → SIDE_LOCK → … → LASER → LEG`（`probe_scan_mode=1`）。
      侧扫流程为 `SIDE_LOCK → SIDE_SCAN → SIDE_MOVE(+VERIFY) → LASER`：
-     - `SIDE_LOCK`：舵机锁到 `probe_side_us`（2400 µs = **+90° = 向左，箱体在左**），等 400 ms 后按 60 ms 超声节拍连测 5 帧取中位数得站立距离 h，并自检 `|h-(rho+pan_x)|≤40 mm`、`h∈[80,350]`；
+     - `SIDE_LOCK`：舵机锁到 `probe_side_us`（2400 µs = **+90° = 向左，箱体在左**），等 400 ms 后按 60 ms 超声节拍连测 5 帧取中位数得站立距离 h，并自检 `|h-(rho+pan_x)|≤70 mm`（2026-11-23 实车转向横移 28~58 mm，40 mm 会误杀）、`h∈[80,350]`；
      - `SIDE_SCAN`：车沿面切线平移（50 mm/s，60 ms 一帧 = 3 mm），用 8 点最小二乘 `d=h0+k·s` 拟合面内距离（k 吸收车不平行漂移），边界确认分两类证据（跳变型 3 帧且 |d−h|>jump / 真无回波型 10 帧），FWD 找 +s 边界、REV 找 −s 边界，行程上限相对扫描原点对称 ±`side_reach_mm`；
-     - 边界取「最后一个面内样本 + 第一个外点样本」中点，`s_m=(lo+hi)/2`、`w=(hi−lo)−2·h·tanγ`、`kind=(w<130?窄:宽)`（`LF_SIDE_KIND_SPLIT_MM`）；
+     - 边界取「最后一个面内样本 + 第一个外点样本」中点，`s_m=(lo+hi)/2`、`w=(hi−lo)−2·h·tanγ`、`kind=(w<100?窄:宽)`（`LF_SIDE_KIND_SPLIT_MM`）；
      - `SIDE_MOVE`：沿切线开到 `s_m`（末段 20 mm 降到 25 mm/s，到位 2 mm 停车 + 150 ms 主动制动），可选 `SIDE_VERIFY` 复测（原点改锁到中点，行程 ±(w/2+h·tanγ+确认距离) 动态算，|s_m2−s_m|<8 取平均）；开位超时会置 `side_warn=4`，留给复测自愈；
      - `LASER`：**保持 side_us 不动**发射 10 s（扫描与发射同轴同角 → 中点与 `pan_x`/侧角无关）；侧视模式但未锁定时先等 400 ms 再点灯（自动流程里舵机本来就在法线角，等于无额外动作）。
      - 台架入口 `lf_start_side_probe(c, now, push)`（`side` / `side push` 命令）跳过 AIM 直接进 `SIDE_LOCK`，用于《问题排查手册》§17.12 的台架验收。
    - 蓝牙回传 `PROBE_MODE`、`PROBE_FACE`、`PROBE_SIDE_LOCK`、`PROBE_SIDE_EDGE`、`PROBE_SIDE_MID`、`PROBE_SIDE_FAIL`、`PROBE_SIDE_CFG` 等日志，现场可直接核对法线角/站立距离/两个边界/中点是否与卷尺一致。
    - **模块 8c（M3/M4 Gate 0，已烧录；2026-11-23 实车 G0-2 与 G0-4 通过）**：
      - `TURN_PAR`：AIM 成功后按 `side_left ? φ−90 : φ+90` 原地转（`probe_turn_to`，50 mm/s、6 s 超时、8° 容差、失败即停）。`cmd` 与 −90 的差就是 AIM 测到的车头偏航 φ；车摆正时实测 `cmd=-90.6 / ach=-90.9`；
-     - `SIDE_LOCK`：锁面后可选**沿面 60 mm 平移两点测斜**（前进 60 mm@80 mm/s → 停 200 ms → 量 h2 → 退回原点 → 按 `corr=atan2(h2−h1,60)` 原地转正 → 量 h3），只对第一面做；1.5 s 走不到一半判卡住（`warn=6`）跳过；锁定 h 取 h1/h2/h3 中最接近 `pred` 者，h3 出界用 h2（`warn=7`）；
+     - `SIDE_LOCK`：锁面后可选**沿面 60 mm 平移两点测斜**（前进 60 mm@80 mm/s → 停 200 ms → **清样本环重采 5 帧**得 h2 → 退回原点 → 按 `corr=atan2(h2−h1,60)` 原地转正（右面取反）→ 量 h3），只对第一面做；1.5 s 走不到一半判卡住（`warn=6`）；h2 重采 800 ms 凑不满 3 帧（窄面/丢回波）跳过测斜（`warn=8`）；锁定 h 取 h1/h2/h3 中最接近 `pred` 者，h3 出界用 h2（`warn=7`）。**2026-11-23 12:26 修复**：此前 h2 复用了 h1 的样本环，`h1==h2` 恒成立、corr 永远 0（见 [M4-side-tilt-fix-20261123.md](M4-side-tilt-fix-20261123.md)）；
      - `LEG`：`probe_leg_tick` 三段 `DRIVE1 → TURN → DRIVE2`，入口锁存 `leg_origin_mm/leg_hdg0`，`L1=w_nom/2+pan_x+h+margin`、`L2=h+d_B/2−pan_x`；宽窄由首面实测锁存 + 面序交替（判据 `LF_SIDE_KIND_SPLIT_MM=100`）；DRIVE2 末尾若面已滑出侧视（h>350 或丢回波）且行进中 `face_n>=5`，走 `LF_LEG_BACKUP` 先倒回 40 mm；
      - **LEG 侧距连续采样**：舵机全程保持 `side_us`，每 50 ms 取一帧，`PROBE_LEG,seg=PROX`（100 ms 一行）/ `seg=PROX2`（DRIVE2 统计 `pred/n/face_n/face_h`）——窄面在行进中被直接量到；
      - **无 14° ALIGN**：`side_k` 只作诊断；`BOARD_SWAP_LR=0`、`track_width_mm=112.5` 是方向/标度正确的两个前提；

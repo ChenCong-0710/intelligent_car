@@ -930,7 +930,7 @@ int main(void) {
     board_log("BOOT_CFG,flash_load=%u,cal_valid=%u\r\n", (unsigned)cfg_loaded, (unsigned)g_lf.cal.valid);
     /* 二进制自证：板级左右对调开关。以后任何一份日志都能对上它跑的是哪版固件，
      * 不再靠"两个文件时间戳谁更新"去猜（2026-11-22 转向争议就是这么糊涂的）。 */
-    board_log("PROBE_BUILD,swaplr=%u,h_pred=1\r\n", (unsigned)BOARD_SWAP_LR);
+    board_log("PROBE_BUILD,swaplr=%u,h_pred=1,tilt=2\r\n", (unsigned)BOARD_SWAP_LR);
     board_log("CSV,ms,state,fault,raw0,raw1,raw2,raw3,q0,q1,q2,q3,pos,confidence,vL,vR,tL,tR,uL,uR\r\n");
     uint32_t last_log = board_millis();
     LfState previous_state = g_lf.state;
@@ -1272,11 +1272,12 @@ int main(void) {
                 if (previous_probe_phase == LF_PROBE_SIDE_LOCK) {
                     const LfProbeConfig *lp = &g_lf.cfg.probe;
                     float pred = g_lf.face.rho > 1.0f ? g_lf.face.rho + lp->pan_x_mm : 0.0f;
-                    board_log("PROBE_SIDE_LOCK,h=%.1f,pred=%.1f,us=%u,ok=%u,h1=%.1f,h2=%.1f,h3=%.1f,corr=%.1f,warn=%u\r\n",
+                    board_log("PROBE_SIDE_LOCK,h=%.1f,pred=%.1f,us=%u,ok=%u,h1=%.1f,h2=%.1f,h3=%.1f,corr=%.1f,warn=%u,ds=%.0f\r\n",
                               (double)g_lf.side_h, (double)pred, (unsigned)lp->side_us,
                               (unsigned)(g_lf.probe_phase == LF_PROBE_SIDE_SCAN ? 1U : 0U),
                               (double)g_lf.side_h1, (double)g_lf.side_h2, (double)g_lf.side_h3,
-                              (double)(g_lf.side_tilt_corr_rad * 57.2957795f), (unsigned)g_lf.side_warn);
+                              (double)(g_lf.side_tilt_corr_rad * 57.2957795f), (unsigned)g_lf.side_lock_warn,
+                              (double)g_lf.side_shift_peak_mm);
                 }
                 if (previous_probe_phase == LF_PROBE_TURN_PAR) {
                     /* TURN_PAR 结束（成功进 SIDE_LOCK 或失败停机都打）：cmd/ach 是停稳后的值。

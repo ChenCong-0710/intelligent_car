@@ -26,6 +26,7 @@
  *   25. probefit    : M1 面模型（phi/rho/rms/hits）在无噪声/噪声/丢帧/无回波下的精度
  *   26. probeside    : M2 侧视横扫（SIDE_LOCK / SIDE_SCAN / SIDE_MOVE + 复测）在合成侧扫世界里的中点/宽度精度
  *   27~28. probeturn / probetour : M3/M4 骨架（现为 SKIP）
+ *   29. probesidetilt: SIDE_LOCK 60 mm 平移两点测斜（10° 斜置必须量出 10.6 mm / corr≈10°，卡住走 warn=6）
  */
 
 #include "line_follower.h"
@@ -494,10 +495,13 @@ static void side_expect(const LfController *c, float center_mm, float half_w_mm,
  * 窄面 |s_m|<5 且判窄；不平行 |s_m|<5；15% 丢帧不误判边界；激光必须保持扫描侧角（性质①）。
  */
 static void probeside(void) {
-    /* ① 宽面居中：±75 mm、h=180、σ=2 mm、10% 丢帧（关复测，验证基本流程 + SIDE_MOVE 到位） */
+    /* ① 宽面居中：±75 mm、h=180、σ=1 mm、不丢帧（关复测，验证基本流程 + SIDE_MOVE 到位）。
+     *    这里只验"干净世界"的流程与 3 mm 判据；丢帧鲁棒性由 ⑥（15% 丢帧×3 种子）覆盖。
+     *    （SIDE_LOCK 两点测斜修好后会多采 5 帧回波，噪声序列整体后移；10% 丢帧下
+     *      「最后一个面内样本」会被丢帧提前 ~5 mm，s_m 的 3 mm 判据本来就在边缘。） */
     {
         LfController c; LfInput in; uint32_t now;
-        SynthSide w = {0.0f, 75.0f, 180.0f, 0.0f, 7.5f, 2.0f, 0.10f, 0.0f};
+        SynthSide w = {0.0f, 75.0f, 180.0f, 0.0f, 7.5f, 1.0f, 0.0f, 0.0f};
         side_start(&c, &in, &now, false, false, 2400U);
         side_run(&c, &in, &now, &w, false, 0.0f);
         assert(c.probe_phase == LF_PROBE_LASER);
@@ -542,6 +546,9 @@ static void probeside(void) {
         side_start(&c, &in, &now, false, false, 2400U);
         side_run(&c, &in, &now, &w, false, 0.0f);
         assert(c.probe_phase == LF_PROBE_LASER);
+        /* 窄面首面：60 mm 平移把光束带出 ±25 mm 面，h2 重采不到 3 帧 →
+         * 必须走 warn=8 兜底（corr=0、沿用 h1）继续，不许卡到 SIDE_LOCK 9 s 超时 */
+        assert(c.side_lock_warn == 8U);
         side_expect(&c, 0.0f, 25.0f, 5.0f, 8.0f);
     }
     /* ④b 远距离 h=300 mm + 复测：复测行程必须按 h·tanγ（≈39.5 mm）与确认距离动态算，
@@ -699,6 +706,74 @@ static void probeside(void) {
         c.cal.valid = true;
         c.cfg.probe.scan_mode = 0U;
         assert(!lf_start_side_probe(&c, 0U, false)); /* 角度法模式下台架侧扫入口必须拒绝 */
+    }
+}
+/**
+ * M4：SIDE_LOCK 的 60 mm 平移两点测斜。2026-11-23 12:13 之前所有日志 h1==h2、corr 恒 0 的回归用例。
+ * 合成世界里 h(s)=h0+tilt·s，车沿自身轴前进 60 mm：
+ *   ① 左面斜 10°（tilt=tan10°）：h2−h1≈10.6 mm，corr≈+10.4°（车头偏离开箱面，要左转/CCW 挽回）；
+ *   ② 右面同样斜 10°：几何镜像，corr≈−10.4°（同样的 h2>h1 要右转/CW）；
+ *   ③ 平行：h2−h1 只剩噪声，corr 落在 1.5° 死区里 → 不许转；
+ *   ④ 编码器不走（轮子打滑/被挡）：1.5 s 兜底 → warn=6、h2 沿用 h1、corr=0，整轮不因测斜卡死。
+ * 旧代码在 ① 就会失败：stage 3 没清 side_ring_n，h2 直接复用 h1 的 5 帧样本，h2−h1 恒等于 0。
+ */
+static void probesidetilt(void) {
+    const float d2r = 3.14159265f / 180.0f;
+    const float tilt10 = tanf(10.0f * d2r);
+    /* ① 左面斜 10°：60 mm×tan10°≈10.6 mm 信号必须被量到，corr 必须约 +10.4° */
+    {
+        LfController c; LfInput in; uint32_t now;
+        SynthSide w = {0.0f, 75.0f, 180.0f, tilt10, 7.5f, 0.6f, 0.0f, 0.0f};
+        side_start(&c, &in, &now, false, false, 2400U);
+        side_run(&c, &in, &now, &w, false, 0.0f);
+        assert(c.side_shift_peak_mm >= 55.0f);           /* 平移真的走完了 */
+        assert(c.side_h2 - c.side_h1 >= 8.0f);           /* 不是复用 h1 的旧样本 */
+        assert(c.side_tilt_corr_rad >= 8.0f * d2r);      /* 正=左转/CCW */
+        assert(c.side_tilt_corr_rad <= 13.0f * d2r);
+        assert(c.side_lock_warn == 0U);                  /* 不是卡住兜底 */
+    }
+    /* ② 右面（side_left=0）同样斜 10°：corr 必须反号 */
+    {
+        LfController c; LfInput in; uint32_t now;
+        SynthSide w = {0.0f, 75.0f, 180.0f, tilt10, 7.5f, 0.6f, 0.0f, 0.0f};
+        side_start(&c, &in, &now, false, false, 600U);
+        c.cfg.probe.side_left = false;
+        side_run(&c, &in, &now, &w, false, 0.0f);
+        assert(c.side_h2 - c.side_h1 >= 8.0f);
+        assert(c.side_tilt_corr_rad <= -8.0f * d2r);     /* 负=右转/CW */
+        assert(c.side_tilt_corr_rad >= -13.0f * d2r);
+    }
+    /* ③ 平行 + 噪声：h2 与 h1 各自独立采样，差 1~2 mm 是允许的，但不许越过 1.5° 死区 */
+    {
+        LfController c; LfInput in; uint32_t now;
+        SynthSide w = {0.0f, 75.0f, 180.0f, 0.0f, 7.5f, 0.6f, 0.0f, 0.0f};
+        side_start(&c, &in, &now, false, false, 2400U);
+        side_run(&c, &in, &now, &w, false, 0.0f);
+        assert(fabsf(c.side_h2 - c.side_h1) <= 2.0f);
+        assert(fabsf(c.side_tilt_corr_rad) < 1.5f * d2r);
+    }
+    /* ④ 卡住：target 有速度但编码器 0 → 1.5 s 兜底，warn=6 要活到日志（以前会被 probe_side_begin 清 0） */
+    {
+        LfController c; LfInput in; uint32_t now;
+        SynthSide w = {0.0f, 75.0f, 180.0f, 0.0f, 7.5f, 1.0f, 0.0f, 0.0f};
+        side_start(&c, &in, &now, false, false, 2400U);
+        unsigned guard = 0U, ping = 0U;
+        while (c.state == LF_PROBING && c.probe_phase == LF_PROBE_SIDE_LOCK && ++guard < 4000U) {
+            if (++ping >= 12U) { /* 60 ms 超声节拍 */
+                ping = 0U;
+                uint16_t d = synth_side_echo(&w, c.odo.x_mm);
+                in.obstacle_mm = d;
+                in.obstacle_valid = d != 0U;
+            }
+            in.encoder_delta[0] = in.encoder_delta[1] = 0; /* 轮子不转 */
+            now += 5U;
+            lf_step(&c, &in, now, 0.005f);
+        }
+        assert(guard < 4000U);
+        assert(c.side_lock_warn == 6U);
+        assert(c.side_tilt_corr_rad == 0.0f);
+        assert(c.side_h2 == c.side_h1);          /* 兜底：明确沿用 h1 */
+        assert(c.side_shift_peak_mm < 1.0f);     /* ds 能判出"根本没动" */
     }
 }
 /**
@@ -1035,6 +1110,7 @@ int main(int argc,char **argv) {
     else if(!strcmp(name,"probeaim"))probeaim();
     else if(!strcmp(name,"probefit"))probefit();
     else if(!strcmp(name,"probeside"))probeside();
+    else if(!strcmp(name,"probesidetilt"))probesidetilt();
     else if(!strcmp(name,"probepar"))probepar();
     else if(!strcmp(name,"probeleg"))probeleg();
     else if(!strcmp(name,"probeturn"))probeturn();

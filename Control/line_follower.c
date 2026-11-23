@@ -1491,6 +1491,7 @@ static void probe_side_lock_begin(LfController *c, uint32_t now) {
     c->side_rescan = 0U;
     c->side_retry = 0U;
     c->side_locked = 0U;
+    c->side_lock_warn = 0U;
     /* M3 预扫测斜状态 */
     c->side_lock_stage = 0U;
     c->side_h1 = c->side_h2 = c->side_h3 = 0.0f;
@@ -1958,17 +1959,24 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
             c->side_delta_rad = 0.0f;
             c->side_tilt_corr_rad = 0.0f;
             c->side_shift_start_mm = c->odo.distance_mm;
+            c->side_shift_peak_mm = 0.0f;
             c->side_shift_done_ms = now; /* 平移起点时间戳：卡住检测用 */
             c->turn_stage = (uint8_t)LF_TURN_IDLE;
             c->side_lock_stage = 2;
             break;
-        case 2: { /* 沿面平移 30 mm：30 mm×tan15°=8 mm 信号，是 h 噪声的 2.7 倍 */
+        case 2: { /* 沿面平移 60 mm：60 mm×tan10°=10.6 mm 信号，是 h 中位数噪声的 10 倍；1.5 s 走不到一半判卡住 */
             float moved = c->odo.distance_mm - c->side_shift_start_mm;
+            if (moved > c->side_shift_peak_mm) c->side_shift_peak_mm = moved;
             if (moved >= LF_SIDE_TILT_SHIFT_MM) {
                 probe_motion_reset(c);
                 c->out.enable = c->out.brake = true;
                 c->out.duty[0] = c->out.duty[1] = 0.0f;
                 c->side_shift_done_ms = now;
+                /* 关键：h2 必须重新采样。probe_side_lock_sample() 只在凑满 5 帧时返回 true，
+                 * 不清环的话 stage 3 第一拍就"采样成功"，h2 = h1（同一批样本）→ corr 恒 0。
+                 * 2026-11-23 12:13 之前所有日志 h1==h2 都是这个原因，不是车真的平行。 */
+                c->side_ring_n = 0U;
+                c->side_ping_since = now;
                 c->side_lock_stage = 3;
             } else if ((uint32_t)(now - c->side_shift_done_ms) >= 1500U &&
                        moved < 0.5f * LF_SIDE_TILT_SHIFT_MM) {
@@ -1984,15 +1992,26 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
             }
             break;
         }
-        case 3: { /* 停稳后测 h2 → 残余偏航 corr = atan2(h2−h1, 30 mm) */
+        case 3: { /* 停稳后测 h2 → 残余偏航 corr = atan2(h2−h1, 60 mm) */
             if ((uint32_t)(now - c->side_shift_done_ms) < 200U) break;
-            if (!probe_side_lock_sample(c, in, now)) break;
-            c->side_h2 = probe_side_median(c, c->side_ring_n);
+            bool h2_full = probe_side_lock_sample(c, in, now);
+            if (!h2_full && (uint32_t)(now - c->side_shift_done_ms) < LF_SIDE_TILT_H2_TIMEOUT_MS) break;
+            if (c->side_ring_n >= 3U) {
+                c->side_h2 = probe_side_median(c, c->side_ring_n);
+            } else {
+                /* 60 mm 平移把光束带出了面（50 mm 窄面/强丢回波），5 帧永远凑不满：
+                 * 沿用 h1、corr=0 继续，宁可少一次诊断也不能把 SIDE_LOCK 卡到 9 s 超时停机。 */
+                c->side_h2 = c->side_h1;
+                c->side_warn = 8U; /* stage 6 会把它抄进 side_lock_warn，进 SIDE_SCAN 的清零擦不掉 */
+            }
             float corr = 0.0f;
             if (c->side_h2 >= LF_SIDE_H_MIN_MM && c->side_h2 <= LF_SIDE_H_MAX_MM) {
-                /* 沿车轴前进 30 mm，h 的变化率就是车头相对箱面的残余偏航：
-                 * h2>h1 = 车头偏离开箱面（要往箱面转，正/左转）；h2<h1 = 车头顶向箱面（负/右转）。 */
+                /* 沿车轴前进 60 mm，h 的变化率就是车头相对箱面的残余偏航：
+                 * 左面（side_left=1）h2>h1 = 车头偏离开箱面，要左转/CCW 挽回（corr 取正）；
+                 * 右面是镜像几何：同样的 h2>h1 要右转/CW，符号必须反过来。
+                 * （单侧伺服角 side_us 与 side_left 一起翻转，见 lf_config_valid。） */
                 float e = atan2f(c->side_h2 - c->side_h1, LF_SIDE_TILT_SHIFT_MM);
+                if (!pr->side_left) e = -e;
                 corr = limit(e, -LF_SIDE_TILT_MAX_DEG * d2r, LF_SIDE_TILT_MAX_DEG * d2r);
                 if (fabsf(corr) < LF_SIDE_TILT_MIN_DEG * d2r) corr = 0.0f;
             }
@@ -2007,7 +2026,11 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
                 probe_drive_signed(c, -LF_SIDE_TILT_PROBE_SPEED_MM_S, dt);
                 break;
             }
-            probe_motion_reset(c);
+            /* 只在「转还没开始」那一拍清斜坡：probe_motion_reset() 会把 speed_control 每拍
+             * 建立的 target_mm_s/applied_duty 一起清零。放在这里每拍执行 → 车轮只收到 7.5 mm/s
+             * 的脉冲、占空比刚建立就被抹掉，原地转 9 s 只挪 2~4°，15° 永远到不了（2026-11-23 12:52 实车）。
+             * 判据用 turn_stage==IDLE：probe_turn_to() 第一拍会把它置 DRIVE，之后就只清这一次。 */
+            if (c->turn_stage == (uint8_t)LF_TURN_IDLE) probe_motion_reset(c);
             c->out.enable = c->out.brake = true;
             float rel = c->side_tilt_corr_rad;
             if (probe_turn_to(c, now, c->odo.heading_rad, rel,
@@ -2057,6 +2080,9 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
             }
             bool ok = h >= LF_SIDE_H_MIN_MM && h <= LF_SIDE_H_MAX_MM &&
                       (pred <= 0.0f || fabsf(h - pred) <= LF_SIDE_LOCK_TOL_MM);
+            /* 先把本阶段的告警存下来：成功路径紧接着的 probe_side_begin() 会清 side_warn，
+             * 以前 warn=6/5/7 就是在这一拍被擦成 0，日志里永远看不到"平移卡住"。 */
+            c->side_lock_warn = c->side_warn;
             if (ok) {
                 c->side_h = h;
                 c->face.h = h;
@@ -2207,7 +2233,8 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
             break;
         }
         case LF_SIDE_MOVE_SETTLE:
-            probe_motion_reset(c);
+            /* 同上：转开始后不能再每拍清斜坡，否则 SIDE_MOVE 的 corr 修正同样转不动 */
+            if (c->turn_stage == (uint8_t)LF_TURN_IDLE) probe_motion_reset(c);
             c->out.enable = c->out.brake = true;
             if (elapsed >= LF_SIDE_SETTLE_MS) {
                 /* 平移段测出的残余偏航：先原地修平（corr 正=左转），再决定是否复测 */
