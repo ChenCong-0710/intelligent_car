@@ -3,7 +3,7 @@
   "mcu": "STM32G474VET6",
   "milestone": "Gate 0 complete on real car (2026-11-23): G0-2 TURN_PAR, G0-3 narrow->wide LEG and G0-4 faces=2 (wide->narrow->COMPLETE) all pass. Details in docs/M4-gate0-20261123.md",
   "hardware_flash_performed": true,
-  "flashed_image": "build/Debug/line-following.elf (112024 B, STM32CubeProgrammer SWD verify OK, 2026-11-23 11:52)",
+  "flashed_image": "build/Debug-make/line-following.elf (112312 B, STM32_Programmer_CLI SWD verify OK, 2026-11-23 18:04, M4e; 此前 11:52 为 112024 B 的 Gate0 版)",
   "real_track_verified": false,
   "bench_verified": true,
   "profiles": {
@@ -279,7 +279,7 @@
   "m4e": {
     "date": "2026-11-23",
     "design_docs": ["../../M4e计划_遍间航向闭环.md", "../../M4e_实现提示词.md"],
-    "status": "已实现并提交（2026-11-23 17:38）；2026-11-23 17:57 独立复核：Debug/Release clean rebuild 0 告警 + 主机单测 37/37 全绿，bin SHA256 与提交时产物逐位一致。台架 A/B/C 与实车两项**未执行**：2026-11-23 17:55 STM32_Programmer_CLI -l 报「No ST-Link detected」，无新固件可烧，不用旧固件数据充数。",
+    "status": "已实现并提交（2026-11-23 17:38）；2026-11-23 17:57 独立复核：Debug/Release clean rebuild 0 告警 + 主机单测 37/37 全绿，bin SHA256 与提交时产物逐位一致。实车：2026-11-23 18:04 烧录后跑 4 次全流程（4 面/激光 1 s），M4e 的三条判据全部验证通过；全 4 面未跑通的原因全部落在摆位/标定/场地（见 real_car.open_issues），不是 M4e 回归。",
     "changes": [
       "止血①：删 SIDE_MOVE 到位后按平移段侧距漂移的原地转（扫描开始到 LASER 结束之间一个角都不动）",
       "止血②：LEG 入口 h_leg = side_h（去掉 side_k·s_m）；PROBE_LEG 的 h_pred 诊断同步去 side_k",
@@ -316,12 +316,12 @@
       ]
     },
     "bench_abc": {
-      "status": "blocked：需先插 ST-Link 烧 build/Debug-make/line-following.elf；2026-11-23 17:55 本机检测不到 ST-Link（未执行任何 A/B/C 组）",
+      "status": "未执行（受控 A/B/C 摆位组）：ST-Link 已于 18:04 连接并烧录，改为直接跑 4 面全流程（见 real_car）；A/B/C 仍欠一次专门摆位，B/C 的 ±10° 符号/量级需补测",
       "blocker": {
         "detected_at": "2026-11-23 17:55",
         "check": "STM32_Programmer_CLI -l",
-        "result": "No ST-Link detected",
-        "needed": "ST-Link 插主扩展板 J_SWD（SWCLK/GND/SWDIO/NRST）并给板子上电，然后烧 build/Debug-make/line-following.elf；烧完按《台架测量操作单》§10 跑 A/B/C"
+        "result": "resolved：18:04 ST-Link 已连接并烧录 verify OK",
+        "needed": "（留档）当时无设备；后已解决，见 real_car"
       },
       "excluded_runs": "2026-11-23 13:34 的 side-tilt 试跑是旧固件（无 eps 字段、死区 1.5°、h3 丢面），不作为 M4e 数据。",
       "setup": "150 mm 宽面朝车、云台轴距面约 180 mm、箱体在左（probe_side_left=1、side_us=2400）、side 自走、每次重新摆位",
@@ -330,11 +330,38 @@
         "B1~B3": "车头偏向面 10°：h2−h1 ≈ −10.6 mm、eps ≈ −10.4°、转一次、|corr+10.4| ≤3°",
         "C1~C3": "车头离开面 10°：h2−h1 ≈ +10.6 mm、eps ≈ +10.4°、转一次、|corr−10.4| ≤3°"
       },
-      "hdg_unchanged": "pending（同 blocked；合成世界的该性质已由 probemovenoturn 单测覆盖：注入 150 mm 单调漂移的 SIDE_MOVE 后 hdg 不变、无 probe_turn_to、side_move_corr_rad=0）",
+      "hdg_unchanged": "PASS（实车证据见 real_car.m4e_checks.no_turn_after_scan：3 面无 PROBE_TURN、单拍最大跳变 <=0.5°、净漂移 <=1.3°；合成世界由 probemovenoturn 单测覆盖）",
       "narrow_face_note": "面 2/4 用 30 mm 基线：σ_ε≈2.7°，eps 只在大于死区时可信；平移把波束带出面时按设计走 warn=8 跳过，不算故障",
       "runs": []
     },
-    "real_car": { "status": "blocked：同 bench_abc（无 ST-Link，新固件未烧录）；判据不变：side 单面 → faces=2，每面 eps 合理、SIDE_MID→LASER 航向不变，光斑与改动前持平即可" }
+    "real_car": {
+      "date": "2026-11-23 18:04~18:21（ST-Link 到货后）",
+      "firmware": "build/Debug-make/line-following.elf（112312 B）烧录并 verify OK",
+      "precondition": "烧录复位会清掉 RAM 电机标定（MCAL=0 DEFAULT）：侧面驱动时航向累计漂 ~10°，先推回 data/latest_calibration.json 的 GROUND 曲线（MCAL=1 gnd=1）再测",
+      "logs": "data/bench/m4e_full_20261123_181247/181403/181813/181914_f4.log，同名 m4e_full_summary.jsonl",
+      "runs": [
+        { "tag": "18:12", "aim_phi": -37.58, "result": "超 AIM 包络：TURN_PAR 5 ms 被拒，未动", "cause": "摆位" },
+        { "tag": "18:14", "aim_phi": 3.96, "face0": { "lock": { "h": 176, "eps": -2.9, "shift": 60, "corr": 0, "warn": 0 }, "mid": { "w": 144.0, "kind": "WIDE" } },
+          "result": "face0 正常；face1 SIDE_LOCK h1=370 自检失败", "cause": "MCAL 丢失：侧扫期间航向漂 10.3°（有标定时 ~3°）→ LEG 落点偏 ~200 mm" },
+        { "tag": "18:18", "aim_phi": 25.91, "result": "摆位超包络（对角+贴近）：TURN_PAR 后侧距 63 mm <80，SIDE_LOCK stage1 失败", "cause": "摆位" },
+        { "tag": "18:19", "aim_phi": 31.66, "faces_lased": 3, "result": "3 面激光成功（face2 eps=+14.9 转一次）；第 4 面 h1=97 失败；LEG 中途撞无关物体", "cause": "摆位超包络 + 场地无关物体" }
+      ],
+      "m4e_checks": {
+        "no_turn_after_scan": "PASS：3 面 SIDE_MID→LASER 无 PROBE_TURN、无 phase=TURN；单拍最大跳变 0.50/0.33/0.41°，净漂移 +0.74/+1.23/+0.99°（编码器低速摆动，不是转身）",
+        "deadzone": "PASS：face0 eps=-2.9°（<7°）→ corr=0、没调用 probe_turn_to（与单测 probesidetiltdead 一致）",
+        "narrow_baseline": "PASS：face1 shift=30 且 warn=8（h2 重采不足按设计跳过测斜）；face3 shift=30 eps=-13.1（当时 h1=97 过近，数据不可用）",
+        "one_iter_per_face": "PASS：face2 eps=+14.9 → corr=+14.9 只转 1 次，未出现第二轮",
+        "eps_shift_log": "PASS：PROBE_SIDE_LOCK 追加 eps=/shift= 可解析",
+        "h_leg": "PASS：PROBE_LEG.seg=TURN 的 h_pred = side_h + 20（183/203），无 side_k·s_m 项"
+      },
+      "open_issues": [
+        "摆位必须在 AIM 包络内：|phi|<=20°（最好 <=10°）、距面 15~18 cm、150 mm 面正对且对准面中线；phi=25.9/31.7 时 AIM 仍报 valid=1，但 TURN_PAR 后残留大，SIDE_LOCK 直接 h=63/97 失败",
+        "烧录/上电后必须 push GROUND 电机标定（RAM-first）；否则 MCAL=0 时 5~6 s 侧扫航向漂 10.3°，LEG 落点偏大",
+        "场地上无关物体：18:19 那次 LEG 的 PROX 出现 h=93/90 mm、DRIVE1/DRIVE2 航向误差 -19.9/-26.8°，车被撞转 20°+，第 4 面锁不上",
+        "M4 遗留（非 M4e 回归）：LEG 死算落点散布（h_pred 176/203 vs 实测 183~370）与 AIM 大角度拟合偏差；建议 M4b 用 PROX2 的 face_h/face_n 做落点闭环 + AIM 覆盖/残差门限",
+        "A/B/C 受控摆位组仍未跑：18:19 的 3 面数据可作为部分证据，但 B/C（±10°）的符号/量级仍需一次专门台架"
+      ]
+    }
   }
 }
 
