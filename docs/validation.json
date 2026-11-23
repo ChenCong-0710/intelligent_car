@@ -344,7 +344,16 @@
         { "tag": "18:14", "aim_phi": 3.96, "face0": { "lock": { "h": 176, "eps": -2.9, "shift": 60, "corr": 0, "warn": 0 }, "mid": { "w": 144.0, "kind": "WIDE" } },
           "result": "face0 正常；face1 SIDE_LOCK h1=370 自检失败", "cause": "MCAL 丢失：侧扫期间航向漂 10.3°（有标定时 ~3°）→ LEG 落点偏 ~200 mm" },
         { "tag": "18:18", "aim_phi": 25.91, "result": "摆位超包络（对角+贴近）：TURN_PAR 后侧距 63 mm <80，SIDE_LOCK stage1 失败", "cause": "摆位" },
-        { "tag": "18:19", "aim_phi": 31.66, "faces_lased": 3, "result": "3 面激光成功（face2 eps=+14.9 转一次）；第 4 面 h1=97 失败；LEG 中途撞无关物体", "cause": "摆位超包络 + 场地无关物体" }
+        { "tag": "18:19", "aim_phi": 31.66, "faces_lased": 3, "result": "3 面激光成功（face2 eps=+14.9 转一次）；第 4 面 h1=97 失败；LEG 中途撞无关物体", "cause": "摆位超包络 + 场地无关物体" },
+        { "tag": "19:02", "firmware": "98ad89b（放宽后）", "aim_phi": 11.59, "aim_rho": 118.8,
+          "face0": { "lock": { "h": 160, "h1": 160, "h2": 97, "h3": 167, "eps": -46.4, "shift": 60, "corr": 0, "warn": 9 },
+                     "mid": { "w": 148.2, "kind": "WIDE", "s_m": -1.6 }, "laser": true,
+                     "note": "新硬门生效：|ε̂|=46.4°>25° → corr=0、warn=9，没有再硬转 15°；SIDE_SCAN/LASER 照常" },
+          "leg": { "drive1": 285.0, "turn_ach": 90.3, "drive2": 155.4, "prox2_face_h": 163, "face_n": 12, "backup": 40.0 },
+          "face1": "DRIVE2 结束时侧距已跳到 623 mm（背景）；BACKUP 40 mm 后仍 437~626；SIDE_LOCK 9 s 超时（h1 采不到合法帧）→ 停机",
+          "result": "fail（第 2 面锁面）",
+          "cause": "LEG 落点偏 >200 mm：近距（118 mm）150 mm 面的 AIM φ=11.59°，TURN_PAR 只保证转命令精度（ach−cmd=−0.6°），φ 偏差成为真实残余偏航，285+155 mm 死算放大成下一面横向错位，50 mm 面从视野滑过",
+          "next": "M4b：SIDE_LOCK 失败/落点偏时回 AIM 重试 + PROX2 face_h 落点闭环；AIM 近距离加覆盖/边沿剔除" }
       ],
       "m4e_checks": {
         "no_turn_after_scan": "PASS：3 面 SIDE_MID→LASER 无 PROBE_TURN、无 phase=TURN；单拍最大跳变 0.50/0.33/0.41°，净漂移 +0.74/+1.23/+0.99°（编码器低速摆动，不是转身）",
@@ -359,7 +368,8 @@
         "烧录/上电后必须 push GROUND 电机标定（RAM-first）；否则 MCAL=0 时 5~6 s 侧扫航向漂 10.3°，LEG 落点偏大",
         "场地上无关物体：18:19 那次 LEG 的 PROX 出现 h=93/90 mm、DRIVE1/DRIVE2 航向误差 -19.9/-26.8°，车被撞转 20°+，第 4 面锁不上",
         "M4 遗留（非 M4e 回归）：LEG 死算落点散布（h_pred 176/203 vs 实测 183~370）与 AIM 大角度拟合偏差；建议 M4b 用 PROX2 的 face_h/face_n 做落点闭环 + AIM 覆盖/残差门限",
-        "A/B/C 受控摆位组仍未跑：18:19 的 3 面数据可作为部分证据，但 B/C（±10°）的符号/量级仍需一次专门台架"
+        "A/B/C 受控摆位组仍未跑：18:19 的 3 面数据可作为部分证据，但 B/C（±10°）的符号/量级仍需一次专门台架",
+        "19:02 放宽后验证：LEG 门禁（h=163）与测斜硬门（ε̂=46.4°→warn=9）都按设计生效；卡点已从「门禁太紧」转移到 M4 遗留的 LEG 落点/AIM 近距精度——下一面 50 mm 面被死算偏差错过，SIDE_LOCK 等合法帧 9 s 超时（观测值 437~626 > 采样窗上限 400）"
       ]
     },
     "relax_20261123": {
@@ -378,6 +388,26 @@
       },
       "host_tests": { "passed": 38, "failed": 0, "new": ["probesidetiltabort：真值 30°>25° → eps≈30、corr=0、不转、warn=9、照常进 SIDE_SCAN"] },
       "next": "按任务书真实摆位重跑 4 面：50mm 窄面朝车（箱子长边压线）、obs 100~150、箱子与引导线夹角 70~110°（phi 自然落在 ±20°）"
+    },
+    "retry_20261123": {
+      "date": "2026-11-23 19:30",
+      "problem": "90° 转弯后的航向修正失效（车头朝障碍物、SIDE_LOCK 测斜 h2 跑到背景、LEG 落点偏到下一面看不见）",
+      "diagnosis": [
+        "原地转准确性排除：连续 4×turn 90 60 编码器 90.26/90.34/90.18/90.18°，用户目视 4 次后几乎回到原方向 → 转向执行准，不是转速/轮距标定问题",
+        "疑似 AIM 的 φ 估偏：手动 ±60° 云台扫掠（scan 600 60 250，21 点）显示 150 mm 面在 -36°..+36° 可见（136~173 mm），±42° 外是背景 450~571；独立拟合 phi=-6.13°, rho=133.7 mm（15 内点）。同一次摆位 AIM 报 phi=+21.45° → 近距大面积上 1/r 平面拟合的 φ 不可靠，TURN_PAR 因此少转约 21°",
+        "残差 20~30° 时原 60 mm 平移测斜会滑出面（2026-11-23 19:13 实测 h1=189 → h2=373），原逻辑判无效直接跳过 → 不修"
+      ],
+      "changes": [
+        "SIDE_LOCK 测斜无效时新增『退回原点 + 20 mm 小基线重测一次』（LF_SIDE_TILT_RETRY_SHIFT_MM=20）：大残差/原点贴面边缘时 60/30 mm 会出界，20 mm 仍在面内",
+        "h2 增加 5 帧离散度门限 LF_SIDE_TILT_SPREAD_MM=12 mm（面边缘/换面时 60~160 mm 乱跳，仅看中位数会采信坏数据）",
+        "修正钳位 15°→45°、无效门限 25°→55°：任务书允许箱子与引导线 70~110°（φ 到 ±20°），AIM 又有近距偏置，20~30° 残差必须能修回来；>55° 仍判无效不转",
+        "新增 LfController.side_tilt_retry（0/1/2）与单测 probesidetiltretry；probesidetiltclamp 更新为 20° 不再被钳；probesidetiltabort 改为 60° 模型外"
+      ],
+      "host_tests": { "passed": 39, "failed": 0, "note": "新增 probesidetiltretry；原 probeside ④（窄面首面 60 mm 出界）改为断言走 20 mm 重测路径" },
+      "firmware": { "flash_bytes": 112616, "ram_bytes": 11880, "warnings": 0,
+                    "flashed": false,
+                    "flash_blocker": "2026-11-23 19:3x ST-Link 枚举正常（SN 37FF71064E57343646321443, V2J46S7, 3.29 V）但 -c port=SWD 报 Unable to get core ID / No STM32 target found（UR/HotPlug、480k/1000k 都试过）；同时 UART 命令正常应答 → 目标板在运行，疑似 SWD 排线接触/复位线问题，待检查 J_SWD 四线后重烧" },
+      "next": "烧录后先跑 faces=1 验证：PROBE_SIDE_LOCK 出现 side_tilt_retry=2、shift=20、eps≈±20 且 corr 与 eps 同号并转一次；然后 faces=4"
     }
   }
 }

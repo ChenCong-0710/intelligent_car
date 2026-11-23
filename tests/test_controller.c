@@ -30,7 +30,8 @@
  *   30. probesidetiltdead : M4e 死区：真值 5° 能测出但不许转（<7°）
  *   31. probesidetiltclamp: M4e 钳位：真值 20° → 只转一次且 ≤15°
  *   32. probemovenoturn   : M4e SIDE_MOVE 侧距单调漂移也不再转身（扫描到发射之间航向不变）
- *   33. probesidetiltabort: 真实工况保护：真值 30°（>25°）判测斜无效 → corr=0、不转、warn=9
+ *   33. probesidetiltabort: 模型外：真值 60°（>55°）判测斜无效 → corr=0、不转、warn=9（含小基线重测）
+ *   34. probesidetiltretry: 60/30 mm 平移出界（原点贴面边缘）→ 退回原点、20 mm 小基线重测 → 修 10°
  */
 
 #include "line_follower.h"
@@ -550,9 +551,11 @@ static void probeside(void) {
         side_start(&c, &in, &now, false, false, 2400U);
         side_run(&c, &in, &now, &w, false, 0.0f);
         assert(c.probe_phase == LF_PROBE_LASER);
-        /* 窄面首面：60 mm 平移把光束带出 ±25 mm 面，h2 重采不到 3 帧 →
-         * 必须走 warn=8 兜底（corr=0、沿用 h1）继续，不许卡到 SIDE_LOCK 9 s 超时 */
-        assert(c.side_lock_warn == 8U);
+        /* 窄面首面：60 mm 平移把光束带出 ±25 mm 面，h2 凑不满 3 帧 → 判无效（warn=8/9）后
+         * 自动退回原点、改用 20 mm 小基线重测；真值平行 → ε̂≈0 不转，继续扫描（不许卡到 9 s 超时）。
+         * 2026-11-23 起这是"大残差/贴面边缘"的统一兜底路径（单测 probesidetiltretry 覆盖有倾斜的情形）。 */
+        assert(c.side_tilt_retry == 2U);
+        assert(c.side_tilt_shift_mm == 20.0f);
         side_expect(&c, 0.0f, 25.0f, 5.0f, 8.0f);
     }
     /* ④b 远距离 h=300 mm + 复测：复测行程必须按 h·tanγ（≈39.5 mm）与确认距离动态算，
@@ -826,8 +829,9 @@ static void probesidetiltdead(void) {
 }
 
 /**
- * M4e 钳位：真值 20° → 只转一次、corr 被钳到 ±15°、side_tilt_iter 只能到 1。
- * 旧版没有 iter 守卫但有 15° 钳位；本轮要同时守住「每面最多一次」。
+ * 大残差修正：真值 20° → 只转一次、corr≈20°（钳位已从 15° 放宽到 45°）、side_tilt_iter 只能到 1。
+ * 背景：2026-11-23 实测 TURN_PAR 后残差可到 20~30°（AIM 近距 φ 偏 + 任务书允许箱子斜 70~110°），
+ * 15° 钳位修不回来，LEG 落点会被死算放大。
  */
 static void probesidetiltclamp(void) {
     const float d2r = 3.14159265f / 180.0f;
@@ -837,29 +841,48 @@ static void probesidetiltclamp(void) {
     side_run_lock(&c, &in, &now, &w);
     assert(c.side_tilt_eps_deg >= 17.0f && c.side_tilt_eps_deg <= 23.0f);
     assert(c.side_tilt_iter == 1U);                                  /* 每面最多 1 次 */
-    assert(fabsf(c.turn_cmd_deg - 15.0f) <= 0.5f);                   /* corr 被钳到 +15° */
-    assert(fabsf(c.turn_ach_deg - 15.0f) <= 8.0f);                   /* 实际也转到 15° 附近 */
+    assert(fabsf(c.turn_cmd_deg - 20.0f) <= 0.5f);                   /* corr≈+20°，20<45 不钳位 */
+    assert(fabsf(c.turn_ach_deg - 20.0f) <= 8.0f);                   /* 实际也转到 20° 附近 */
     assert(c.state == LF_PROBING && c.probe_phase == LF_PROBE_SIDE_SCAN); /* 转完并进侧扫，不是停机混过 */
 }
 
 /**
- * 真实工况保护：|ε̂|>25° 判为「测斜无效」——不转、corr=0、warn=9。
- * 背景（2026-11-23 实车）：任务书是「<15cm 停车、箱子与引导线 70~110°」，SIDE_LOCK 原点可能
- * 贴着面的边缘，60/30 mm 平移把波束带到相邻面/背景时，h2 仍在 [80,450] 里但 ε̂ 会到 30~50°。
- * 旧逻辑把它钳到 15° 硬转，SIDE_SCAN 与 LEG 落点被带歪（下一面 h=257，锁面自检失败）。
+ * 模型外：|ε̂|>55° 判为「测斜无效」——不转、corr=0、warn=9（60° 真值超出钳位 45°/门限 55°）。
+ * 背景：任务书是「<15cm 停车、箱子与引导线 70~110°」，SIDE_LOCK 原点可能贴着面的边缘，
+ * 60/30 mm 平移把波束带到相邻面/背景时 h2 可能仍是 [80,450] 内的合法值。
  */
 static void probesidetiltabort(void) {
     const float d2r = 3.14159265f / 180.0f;
     LfController c; LfInput in; uint32_t now;
-    SynthSide w = {0.0f, 75.0f, 180.0f, tanf(30.0f * d2r), 7.5f, 0.6f, 0.0f, 0.0f};
+    SynthSide w = {0.0f, 75.0f, 180.0f, tanf(60.0f * d2r), 7.5f, 0.6f, 0.0f, 0.0f};
     side_start(&c, &in, &now, false, false, 2400U);
     side_run_lock(&c, &in, &now, &w);
-    assert(c.side_tilt_eps_deg >= 26.0f && c.side_tilt_eps_deg <= 34.0f); /* 真值 30° 被量出 */
     assert(c.side_tilt_corr_rad == 0.0f);                                 /* 超模型：不修 */
     assert(c.side_tilt_iter == 0U);                                       /* 没有转 */
     assert(c.turn_start_ms == 0U);                                        /* 没调用 probe_turn_to */
     assert(c.state == LF_PROBING && c.probe_phase == LF_PROBE_SIDE_SCAN); /* 扫描照常进行 */
     assert(c.side_lock_warn == 9U);                                       /* 日志能看出是"无效"而不是"平行" */
+    assert(c.side_tilt_retry == 2U);                                      /* 已经试过 20 mm 小基线重测 */
+}
+
+/**
+ * 重测路径：原点贴着面边缘（面只覆盖 ±44 mm），60 mm 平移把波束带出面（背景 600 > aim_max 400）→
+ * h2 凑不满帧 → 判无效 → 退回原点、改用 20 mm 小基线重测 → 量出 10° → 修一次。
+ * 这是 2026-11-23 实车 face0（h1=189 → h2=373）失败链条的兜底。
+ */
+static void probesidetiltretry(void) {
+    const float d2r = 3.14159265f / 180.0f;
+    LfController c; LfInput in; uint32_t now;
+    SynthSide w = {0.0f, 20.0f, 180.0f, tanf(10.0f * d2r), 7.5f, 0.6f, 0.0f, 600.0f};
+    side_start(&c, &in, &now, false, false, 2400U);
+    side_run_lock(&c, &in, &now, &w);
+    assert(c.side_tilt_retry == 2U);                                  /* 已走小基线重测 */
+    assert(c.side_tilt_shift_mm == 20.0f);                            /* 重测基线 20 mm */
+    assert(c.side_shift_peak_mm >= 15.0f && c.side_shift_peak_mm <= 25.0f); /* 只走了 20 mm */
+    assert(c.side_tilt_eps_deg >= 8.0f && c.side_tilt_eps_deg <= 12.0f);    /* 真值 10° */
+    assert(c.side_tilt_iter == 1U);                                   /* 修一次 */
+    assert(fabsf(c.turn_cmd_deg - 10.0f) <= 1.5f);
+    assert(c.state == LF_PROBING && c.probe_phase == LF_PROBE_SIDE_SCAN);
 }
 
 /**
@@ -1243,6 +1266,7 @@ int main(int argc,char **argv) {
     else if(!strcmp(name,"probesidetiltdead"))probesidetiltdead();
     else if(!strcmp(name,"probesidetiltclamp"))probesidetiltclamp();
     else if(!strcmp(name,"probesidetiltabort"))probesidetiltabort();
+    else if(!strcmp(name,"probesidetiltretry"))probesidetiltretry();
     else if(!strcmp(name,"probemovenoturn"))probemovenoturn();
     else if(!strcmp(name,"probepar"))probepar();
     else if(!strcmp(name,"probeleg"))probeleg();

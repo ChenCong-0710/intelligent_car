@@ -284,16 +284,22 @@
 #define LF_SIDE_TILT_SHIFT_NARROW_MM 30.0f
 /** @brief 测斜死区 (°)：60 mm 基线 σ_ε≈1.3°，7°≈5σ；平行时一次都不该转（台架 A 组判据） */
 #define LF_SIDE_TILT_MIN_DEG 7.0f
-/** @brief 单次修正钳位 (°)：每面最多转 1 次，残余 >15° 说明 AIM 的 φ 已经错了，是异常 */
-#define LF_SIDE_TILT_MAX_DEG 15.0f
+/** @brief 单次修正钳位 (°)：每面最多转 1 次。
+ * @note  2026-11-23 现场：原地 turn 4×90° 的编码器/物理一致性已验证（几乎无误差），所以
+ *        TURN_PAR 之后的大残差不是"转不准"，而是 **AIM 在近距大面积上的 φ 估偏**（实测该报 ~0°
+ *        时报了 +21.45°，TURN_PAR 少转 21°）。任务书又允许箱子斜 70~110°（φ 天然到 ±20°），
+ *        因此把钳位从 15° 放到 45°：修正不足比修过头更伤 LEG 落点（光斑与残余偏航无关，性质①）。 */
+#define LF_SIDE_TILT_MAX_DEG 45.0f
 /** @brief 测斜有效性硬门限 (°)：|ε̂| 超过它判「本次测斜无效」（corr=0、warn=9、不转）
- * @note  任务书真实工况下（<15cm 停车、箱子斜 70~110°、50 mm 窄面），SIDE_LOCK 原点可能贴着
- *        面的边缘，60/30 mm 平移会把波束带到相邻面/背景上——此时 h2 仍是 [80,450] 内的合法值，
- *        却给出 30~50° 的假 ε̂。2026-11-23 实测 45.9°/31.7° 两例都被钳到 15° 硬转，把 SIDE_SCAN
- *        和 LEG 落点带歪（下一面 h=257 vs 预期 210，锁面自检失败）。>25° 已超出"残余偏航"模型
- *        （AIM 的 φ 错也不会有 25° 残余），按无效处理；15~25° 仍按钳位转一次（单测 probesidetiltclamp）。
- *        不转是安全的：性质①保证歪着打光斑仍然落在面中心。 */
-#define LF_SIDE_TILT_ABORT_DEG 25.0f
+ * @note  >55° 已超出"残余偏航"模型，多半是平移把波束带到了相邻面/背景（h2 仍是 [80,450] 内的
+ *        合法值，只看范围抓不到）。不转是安全的：性质①保证歪着打光斑仍然落在面中心。 */
+#define LF_SIDE_TILT_ABORT_DEG 55.0f
+/** @brief 无效测斜的重测基线 (mm)：60/30 mm 平移在"原点贴面边缘 + 大残差"时会出界，
+ *         退回原点后改用 20 mm 小基线再测一次（只重测一次，单测 probesidetiltretry）。
+ *         小基线角度噪声更大（σ_ε≈atan(1.5/20)≈4°），只用来兜住 15~45° 的大残差。 */
+#define LF_SIDE_TILT_RETRY_SHIFT_MM 20.0f
+/** @brief h2 的 5 帧离散度上限 (mm)：静止测面正常 ≤3~4 mm；面边缘/换面时 60~160 mm 乱跳，直接判无效 */
+#define LF_SIDE_TILT_SPREAD_MM 12.0f
 /** @brief h2 重采超时 (ms)：停稳后最多等这么久凑 5 帧；凑不满 3 帧说明平移把光束带出了面
  *         （50 mm 窄面或强丢回波）→ 放弃测斜（corr=0, warn=8）继续，不许把整轮卡死在 SIDE_LOCK */
 #define LF_SIDE_TILT_H2_TIMEOUT_MS 800U
@@ -765,6 +771,7 @@ typedef struct {
     float side_tilt_eps_deg;   /**< 本次两点测斜的 ε̂ (°，正 = 需左转)，供日志与诊断（M4e） */
     float side_tilt_shift_mm;  /**< 本面平移基线 (mm)：宽 60 / 窄 30（按面宽交替选择，M4e） */
     uint8_t side_tilt_iter;    /**< 本面已执行的修正转次数 0/1（每面最多一次，M4e） */
+    uint8_t side_tilt_retry;   /**< 测斜重测状态：0=未重测 / 1=待退回后用小基线重测 / 2=已重测完（不再重测） */
     float side_shift_start_mm; /**< 测斜平移起点 (mm)：SIDE_LOCK 沿面平移两点法的基准 */
     float side_shift_peak_mm;  /**< 测斜段实际走到的最大里程 (mm)：>0 才说明平移真的发生（诊断 h1==h2 是平行还是没动） */
     uint32_t side_shift_done_ms; /**< 平移结束（制动停稳）时间戳 (ms)，停稳后再测 h2 */

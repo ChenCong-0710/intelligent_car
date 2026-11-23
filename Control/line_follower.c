@@ -1499,6 +1499,7 @@ static void probe_side_lock_begin(LfController *c, uint32_t now) {
     c->side_tilt_corr_rad = 0.0f;
     c->side_tilt_eps_deg = 0.0f;
     c->side_tilt_iter = 0U;
+    c->side_tilt_retry = 0U;
     /* 本面平移基线：按面宽选。面 0 还没扫过、不知道宽窄（首面基准在 LEG 入口才锁存），按宽面 60 mm 给；
      * 若它其实是 50 mm 窄面，平移会把波束带出去 → warn=8 → 本次跳过测斜，不影响正确性。
      * 面 1~3 用首面锁存 + 面序交替（与 probe_leg_current_kind() 同一套规则）：第 i 面 = first_kind ^ (i & 1)。 */
@@ -2007,16 +2008,25 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
             if ((uint32_t)(now - c->side_shift_done_ms) < 200U) break;
             bool h2_full = probe_side_lock_sample(c, in, now);
             if (!h2_full && (uint32_t)(now - c->side_shift_done_ms) < LF_SIDE_TILT_H2_TIMEOUT_MS) break;
+            bool valid = false;
             if (c->side_ring_n >= 3U) {
                 c->side_h2 = probe_side_median(c, c->side_ring_n);
+                /* 静止测面时 5 帧离散度正常 ≤3~4 mm；面边缘/换面时会 60~160 mm 乱跳（2026-11-23 实测），
+                 * 只看中位数会把这种坏数据当有效值。离散度超限直接判无效。 */
+                float lo = c->side_ring_d[0], hi = c->side_ring_d[0];
+                for (unsigned i = 1U; i < c->side_ring_n; ++i) {
+                    if (c->side_ring_d[i] < lo) lo = c->side_ring_d[i];
+                    if (c->side_ring_d[i] > hi) hi = c->side_ring_d[i];
+                }
+                if ((hi - lo) <= LF_SIDE_TILT_SPREAD_MM &&
+                    c->side_h2 >= LF_SIDE_H_MIN_MM && c->side_h2 <= LF_SIDE_H_MAX_MM) valid = true;
             } else {
-                /* 平移把光束带出了面（50 mm 窄面/强丢回波），5 帧永远凑不满：
-                 * 沿用 h1、corr=0 继续，宁可少一次诊断也不能把 SIDE_LOCK 卡到 9 s 超时停机。 */
+                /* 平移把光束带出了面（窄面/强丢回波），5 帧凑不满：本次数据无效（走重测/放弃） */
                 c->side_h2 = c->side_h1;
-                c->side_warn = 8U; /* stage 6 会把它抄进 side_lock_warn，进 SIDE_SCAN 的清零擦不掉 */
             }
             float corr = 0.0f;
-            if (c->side_h2 >= LF_SIDE_H_MIN_MM && c->side_h2 <= LF_SIDE_H_MAX_MM) {
+            c->side_tilt_eps_deg = 0.0f;
+            if (valid) {
                 /* 沿车轴前进 Δs，h 的变化率就是车头相对箱面的残余偏航：
                  * 左面（side_left=1）h2>h1 = 车头偏离开箱面，要左转/CCW 挽回（ε̂ 取正）；
                  * 右面是镜像几何：同样的 h2>h1 要右转/CW，符号必须反过来。
@@ -2025,19 +2035,21 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
                 if (!pr->side_left) e = -e;
                 c->side_tilt_eps_deg = e * 57.2957795f;
                 /* 死区 7°：平行时一次都不转（A 组判据）。
-                 * 有效性硬门（任务书真实工况）：|ε̂|>25° 不是"残余偏航"（AIM 的 φ 再错也不会留 25° 残余），
-                 * 多半是平移把波束带到了相邻面/背景（此时 h2 仍落在 [80,450] 合法窗口里，warn=8 抓不到）。
-                 * 这时**不转**、记 warn=9：硬转 15° 会把 SIDE_SCAN 与 LEG 落点带歪
-                 * （2026-11-23 实测 45.9°、31.7° 两例，随后下一面 h=257 锁面失败）。
-                 * 15~25° 仍按 ±15° 钳位转一次（每面最多一次，单测 probesidetiltclamp）。 */
+                 * 修正钳位 ±45°：任务书允许箱子斜 70~110°（φ 到 ±20°），而 AIM 近距 φ 有偏（实测 +21°），
+                 * TURN_PAR 后残差可到 20~30°，±15° 修不回来；>55° 判无效（超出模型）。 */
                 if (fabsf(c->side_tilt_eps_deg) > LF_SIDE_TILT_ABORT_DEG) {
-                    c->side_warn = 9U;
+                    valid = false;
                 } else if (c->side_tilt_iter == 0U &&
                            fabsf(c->side_tilt_eps_deg) > LF_SIDE_TILT_MIN_DEG) {
                     corr = limit(e, -LF_SIDE_TILT_MAX_DEG * d2r, LF_SIDE_TILT_MAX_DEG * d2r);
                 }
-            } else {
+            }
+            if (!valid) {
                 c->side_tilt_eps_deg = 0.0f;
+                c->side_warn = (c->side_ring_n >= 3U) ? 9U : 8U;
+                /* 第一次测量无效（原点贴面边缘/大残差时 60/30 mm 平移正好出界）：退回原点后
+                 * 改用 20 mm 小基线重测一次（stage 4 负责识别并跳回 stage 2）。 */
+                if (c->side_tilt_retry == 0U) c->side_tilt_retry = 1U;
             }
             c->side_tilt_corr_rad = corr;
             c->turn_stage = (uint8_t)LF_TURN_IDLE;
@@ -2048,6 +2060,21 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
             float back = c->odo.distance_mm - c->side_shift_start_mm;
             if (back > 2.0f && (uint32_t)(now - c->side_shift_done_ms) < 2000U) {
                 probe_drive_signed(c, -LF_SIDE_TILT_PROBE_SPEED_MM_S, dt);
+                break;
+            }
+            /* 第一次测斜无效（大残差/原点贴面边缘时 60/30 mm 平移出了面）：退回原点后改 20 mm 小基线重测一次 */
+            if (c->side_tilt_retry == 1U) {
+                c->side_tilt_retry = 2U;
+                c->side_tilt_shift_mm = LF_SIDE_TILT_RETRY_SHIFT_MM;
+                c->side_shift_start_mm = c->odo.distance_mm;
+                c->side_shift_peak_mm = 0.0f;
+                c->side_shift_done_ms = now;
+                c->side_ring_n = 0U;
+                c->side_ping_since = now;
+                c->side_tilt_corr_rad = 0.0f;
+                c->side_warn = 0U;
+                c->turn_stage = (uint8_t)LF_TURN_IDLE;
+                c->side_lock_stage = 2U;
                 break;
             }
             /* 只在「转还没开始」那一拍清斜坡：probe_motion_reset() 会把 speed_control 每拍
