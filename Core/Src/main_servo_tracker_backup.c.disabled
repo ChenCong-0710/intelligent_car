@@ -1,0 +1,664 @@
+/* USER CODE BEGIN Header */
+/**
+  ******************************************************************************
+  * @file           : main.c
+  * @brief          : Main program body
+  ******************************************************************************
+  * @attention
+  *
+  * Copyright (c) 2026 STMicroelectronics.
+  * All rights reserved.
+  *
+  * This software is licensed under terms that can be found in the LICENSE file
+  * in the root directory of this software component.
+  * If no LICENSE file comes with this software, it is provided AS-IS.
+  *
+  ******************************************************************************
+  */
+/* USER CODE END Header */
+/* Includes ------------------------------------------------------------------*/
+#include "main.h"
+
+/* Private includes ----------------------------------------------------------*/
+/* USER CODE BEGIN Includes */
+#include "tim.h"
+#include "lcd_font.h"
+#include <math.h>
+#include <stdbool.h>
+#include <stdio.h>
+#include <string.h>
+
+/* USER CODE END Includes */
+
+/* Private typedef -----------------------------------------------------------*/
+/* USER CODE BEGIN PTD */
+
+/* USER CODE END PTD */
+
+/* Private define ------------------------------------------------------------*/
+/* USER CODE BEGIN PD */
+#define SERVO_FORWARD_US 1500U /* Adjust after mechanically aligning the sensor. */
+#define SERVO_US_PER_DEG 10U    /* Approximate SG90 scale; displayed angle is relative. */
+#define SCAN_HALF_US 600
+#define SCAN_STEP_US 75
+#define SCAN_COUNT (2U * SCAN_HALF_US / SCAN_STEP_US + 1U)
+#define TARGET_MIN_MM 100U
+#define TARGET_MAX_MM 300U
+#define PING_GAP_MS 60U
+#define SERVO_SETTLE_MS 100U
+
+/* USER CODE END PD */
+
+/* Private macro -------------------------------------------------------------*/
+/* USER CODE BEGIN PM */
+
+/* USER CODE END PM */
+
+/* Private variables ---------------------------------------------------------*/
+
+/* USER CODE BEGIN PV */
+typedef enum { SCANNING, LOCKED } TrackerState;
+static TrackerState tracker_state;
+static int16_t scan_offset_us;
+static int8_t scan_direction;
+static uint8_t lock_misses;
+static bool sweep_completed;
+static uint16_t first_mm, best_servo_us, tracked_mm;
+static uint16_t scan_ranges[SCAN_COUNT];
+static uint8_t scan_samples;
+static uint32_t servo_changed_ms, last_ping_ms, state_changed_ms, last_screen_ms;
+static TIM_HandleTypeDef htim8_echo;
+
+/* USER CODE END PV */
+
+/* Private function prototypes -----------------------------------------------*/
+void SystemClock_Config(void);
+static void MX_GPIO_Init(void);
+/* USER CODE BEGIN PFP */
+
+/* USER CODE END PFP */
+
+/* Private user code ---------------------------------------------------------*/
+/* USER CODE BEGIN 0 */
+static void Servo_SafeGPIO_Init(void)
+{
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+  __HAL_RCC_GPIOC_CLK_ENABLE();
+  __HAL_RCC_GPIOD_CLK_ENABLE();
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_7 | GPIO_PIN_8, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_2, GPIO_PIN_RESET);
+  GPIO_InitStruct.Pin = GPIO_PIN_7 | GPIO_PIN_8;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+  GPIO_InitStruct.Pin = GPIO_PIN_2;
+  HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
+}
+
+/* The motor enable pin is configured once as an output and never driven high. */
+static void delay_us(uint32_t us)
+{
+  uint32_t start = DWT->CYCCNT;
+  uint32_t ticks = us * (SystemCoreClock / 1000000U);
+  while ((uint32_t)(DWT->CYCCNT - start) < ticks) {}
+}
+
+static void Servo_Set(uint16_t pulse_us)
+{
+  if (pulse_us < 900U) pulse_us = 900U;
+  if (pulse_us > 2100U) pulse_us = 2100U;
+  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, pulse_us);
+  servo_changed_ms = HAL_GetTick();
+}
+
+static void Ultrasonic_Init(void)
+{
+  GPIO_InitTypeDef pin = {0};
+  TIM_IC_InitTypeDef capture = {0};
+  TIM_SlaveConfigTypeDef slave = {0};
+  __HAL_RCC_GPIOB_CLK_ENABLE();
+  __HAL_RCC_TIM8_CLK_ENABLE();
+
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_RESET);
+  pin.Pin = GPIO_PIN_9;
+  pin.Mode = GPIO_MODE_OUTPUT_PP;
+  pin.Pull = GPIO_NOPULL;
+  pin.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOB, &pin);
+
+  pin.Pin = GPIO_PIN_6;
+  pin.Mode = GPIO_MODE_AF_PP;
+  pin.Pull = GPIO_PULLDOWN;
+  pin.Speed = GPIO_SPEED_FREQ_LOW;
+  pin.Alternate = GPIO_AF4_TIM8;
+  HAL_GPIO_Init(GPIOC, &pin);
+
+  htim8_echo.Instance = TIM8;
+  htim8_echo.Init.Prescaler = 15U; /* HSI16 -> 1 MHz, CCR2 is microseconds. */
+  htim8_echo.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim8_echo.Init.Period = 65535U;
+  htim8_echo.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  if (HAL_TIM_IC_Init(&htim8_echo) != HAL_OK) Error_Handler();
+  capture.ICPolarity = TIM_ICPOLARITY_RISING;
+  capture.ICSelection = TIM_ICSELECTION_DIRECTTI;
+  capture.ICPrescaler = TIM_ICPSC_DIV1;
+  capture.ICFilter = 4U;
+  if (HAL_TIM_IC_ConfigChannel(&htim8_echo, &capture, TIM_CHANNEL_1) != HAL_OK) Error_Handler();
+  capture.ICPolarity = TIM_ICPOLARITY_FALLING;
+  capture.ICSelection = TIM_ICSELECTION_INDIRECTTI;
+  if (HAL_TIM_IC_ConfigChannel(&htim8_echo, &capture, TIM_CHANNEL_2) != HAL_OK) Error_Handler();
+  slave.SlaveMode = TIM_SLAVEMODE_RESET;
+  slave.InputTrigger = TIM_TS_TI1FP1;
+  slave.TriggerPolarity = TIM_INPUTCHANNELPOLARITY_RISING;
+  slave.TriggerFilter = 4U;
+  if (HAL_TIM_SlaveConfigSynchro(&htim8_echo, &slave) != HAL_OK) Error_Handler();
+  if (HAL_TIM_IC_Start(&htim8_echo, TIM_CHANNEL_1) != HAL_OK) Error_Handler();
+  if (HAL_TIM_IC_Start(&htim8_echo, TIM_CHANNEL_2) != HAL_OK) Error_Handler();
+}
+
+/* A zero result means no valid echo. The 5 ms deadline covers 10-30 cm. */
+static uint16_t Ultrasonic_ReadMm(void)
+{
+  uint32_t start, timeout_ticks = 5U * (SystemCoreClock / 1000U);
+  uint16_t pulse;
+  if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_6) == GPIO_PIN_SET) return 0U;
+  __HAL_TIM_CLEAR_FLAG(&htim8_echo, TIM_FLAG_CC1 | TIM_FLAG_CC2 | TIM_FLAG_CC1OF | TIM_FLAG_CC2OF);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_SET);
+  delay_us(12U);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_RESET);
+  start = DWT->CYCCNT;
+  while (__HAL_TIM_GET_FLAG(&htim8_echo, TIM_FLAG_CC2) == RESET)
+  {
+    if ((uint32_t)(DWT->CYCCNT - start) >= timeout_ticks) return 0U;
+  }
+  pulse = (uint16_t)HAL_TIM_ReadCapturedValue(&htim8_echo, TIM_CHANNEL_2);
+  __HAL_TIM_CLEAR_FLAG(&htim8_echo, TIM_FLAG_CC2);
+  if (pulse < 500U || pulse > 3000U) return 0U;
+  return (uint16_t)(((uint32_t)pulse * 343U + 1000U) / 2000U);
+}
+
+#define LCD_CS_LOW()    (GPIOD->BSRR = (uint32_t)GPIO_PIN_11 << 16U)
+#define LCD_CS_HIGH()   (GPIOD->BSRR = GPIO_PIN_11)
+#define LCD_DC_CMD()    (GPIOD->BSRR = (uint32_t)GPIO_PIN_12 << 16U)
+#define LCD_DC_DATA()   (GPIOD->BSRR = GPIO_PIN_12)
+#define LCD_BG 0x0821U
+#define LCD_WHITE 0xFFFFU
+#define LCD_GREEN 0x07E0U
+#define LCD_YELLOW 0xFFE0U
+
+static void lcd_spi_byte(uint8_t data)
+{
+  while ((SPI1->SR & SPI_SR_TXE) == 0U) {}
+  *(__IO uint8_t *)&SPI1->DR = data;
+}
+
+static void lcd_spi_idle(void)
+{
+  while ((SPI1->SR & SPI_SR_TXE) == 0U) {}
+  while ((SPI1->SR & SPI_SR_BSY) != 0U) {}
+}
+
+static void lcd_cmd(uint8_t cmd)
+{
+  LCD_DC_CMD(); LCD_CS_LOW();
+  lcd_spi_byte(cmd); lcd_spi_idle();
+  LCD_CS_HIGH(); LCD_DC_DATA();
+}
+
+static void lcd_data(uint8_t data)
+{
+  LCD_DC_DATA(); LCD_CS_LOW();
+  lcd_spi_byte(data); lcd_spi_idle();
+  LCD_CS_HIGH();
+}
+
+static void lcd_window(uint8_t x, uint8_t y, uint8_t w, uint8_t h)
+{
+  uint16_t x0 = (uint16_t)x + 2U, x1 = x0 + w - 1U;
+  uint16_t y0 = (uint16_t)y + 1U, y1 = y0 + h - 1U;
+  lcd_cmd(0x2AU); LCD_CS_LOW();
+  lcd_spi_byte((uint8_t)(x0 >> 8)); lcd_spi_byte((uint8_t)x0);
+  lcd_spi_byte((uint8_t)(x1 >> 8)); lcd_spi_byte((uint8_t)x1);
+  lcd_spi_idle(); LCD_CS_HIGH();
+  lcd_cmd(0x2BU); LCD_CS_LOW();
+  lcd_spi_byte((uint8_t)(y0 >> 8)); lcd_spi_byte((uint8_t)y0);
+  lcd_spi_byte((uint8_t)(y1 >> 8)); lcd_spi_byte((uint8_t)y1);
+  lcd_spi_idle(); LCD_CS_HIGH();
+  lcd_cmd(0x2CU);
+}
+
+static void lcd_fill(uint16_t color)
+{
+  lcd_window(0U, 0U, 128U, 160U);
+  LCD_CS_LOW();
+  for (uint32_t p = 0; p < 128U * 160U; ++p)
+  {
+    lcd_spi_byte((uint8_t)(color >> 8));
+    lcd_spi_byte((uint8_t)color);
+  }
+  lcd_spi_idle(); LCD_CS_HIGH();
+}
+
+static void lcd_text(uint8_t x, uint8_t y, const char *text, uint16_t color)
+{
+  for (const char *s = text; *s && x <= 122U; ++s, x = (uint8_t)(x + 6U))
+  {
+    uint8_t glyph = (*s >= ' ' && *s <= '~') ? (uint8_t)(*s - ' ') : 0U;
+    lcd_window(x, y, 6U, 12U);
+    LCD_CS_LOW();
+    for (uint8_t row = 0; row < 12U; ++row)
+    {
+      uint8_t bits = k_font_6x12[glyph][row];
+      for (uint8_t col = 0; col < 6U; ++col)
+      {
+        uint16_t pixel = (bits & (1U << col)) ? color : LCD_BG;
+        lcd_spi_byte((uint8_t)(pixel >> 8)); lcd_spi_byte((uint8_t)pixel);
+      }
+    }
+    lcd_spi_idle(); LCD_CS_HIGH();
+  }
+}
+
+static void Lcd_Init(void)
+{
+  GPIO_InitTypeDef pin = {0};
+  static const uint8_t gamma_pos[16] =
+    {0x04U,0x22U,0x07U,0x0AU,0x2EU,0x30U,0x25U,0x2AU,0x28U,0x26U,0x2EU,0x3AU,0x00U,0x01U,0x03U,0x13U};
+  static const uint8_t gamma_neg[16] =
+    {0x04U,0x16U,0x06U,0x0DU,0x2DU,0x26U,0x23U,0x27U,0x27U,0x25U,0x2DU,0x3BU,0x00U,0x01U,0x04U,0x13U};
+  __HAL_RCC_GPIOB_CLK_ENABLE();
+  __HAL_RCC_GPIOD_CLK_ENABLE();
+  __HAL_RCC_SPI1_CLK_ENABLE();
+  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_10 | GPIO_PIN_11 | GPIO_PIN_12, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13, GPIO_PIN_RESET);
+  pin.Pin = GPIO_PIN_10 | GPIO_PIN_11 | GPIO_PIN_12 | GPIO_PIN_13;
+  pin.Mode = GPIO_MODE_OUTPUT_PP;
+  pin.Pull = GPIO_NOPULL;
+  pin.Speed = GPIO_SPEED_FREQ_HIGH;
+  HAL_GPIO_Init(GPIOD, &pin);
+  pin.Pin = GPIO_PIN_3 | GPIO_PIN_5;
+  pin.Mode = GPIO_MODE_AF_PP;
+  pin.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+  pin.Alternate = GPIO_AF5_SPI1;
+  HAL_GPIO_Init(GPIOB, &pin);
+  SPI1->CR1 = 0U;
+  SPI1->CR2 = (7U << SPI_CR2_DS_Pos) | SPI_CR2_FRXTH;
+  SPI1->CR1 = SPI_CR1_BIDIMODE | SPI_CR1_BIDIOE | SPI_CR1_SSM | SPI_CR1_SSI | SPI_CR1_BR_0 | SPI_CR1_MSTR;
+  SET_BIT(SPI1->CR1, SPI_CR1_SPE);
+  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_10, GPIO_PIN_RESET);
+  HAL_Delay(60U);
+  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_10, GPIO_PIN_SET);
+  HAL_Delay(120U);
+  lcd_cmd(0x11U); HAL_Delay(120U);
+  lcd_cmd(0xB1U); lcd_data(0x05U); lcd_data(0x3CU); lcd_data(0x3CU);
+  lcd_cmd(0xB2U); lcd_data(0x05U); lcd_data(0x3CU); lcd_data(0x3CU);
+  lcd_cmd(0xB3U); lcd_data(0x05U); lcd_data(0x3CU); lcd_data(0x3CU);
+  lcd_data(0x05U); lcd_data(0x3CU); lcd_data(0x3CU);
+  lcd_cmd(0xB4U); lcd_data(0x03U);
+  lcd_cmd(0xC0U); lcd_data(0x28U); lcd_data(0x08U); lcd_data(0x04U);
+  lcd_cmd(0xC1U); lcd_data(0xC0U);
+  lcd_cmd(0xC2U); lcd_data(0x0DU); lcd_data(0x00U);
+  lcd_cmd(0xC3U); lcd_data(0x8DU); lcd_data(0x2AU);
+  lcd_cmd(0xC4U); lcd_data(0x8DU); lcd_data(0xEEU);
+  lcd_cmd(0xC5U); lcd_data(0x1AU);
+  lcd_cmd(0x36U); lcd_data(0xC0U);
+  lcd_cmd(0x3AU); lcd_data(0x05U);
+  lcd_cmd(0xE0U); for (uint8_t i = 0U; i < 16U; ++i) lcd_data(gamma_pos[i]);
+  lcd_cmd(0xE1U); for (uint8_t i = 0U; i < 16U; ++i) lcd_data(gamma_neg[i]);
+  lcd_cmd(0x29U);
+  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13, GPIO_PIN_SET);
+  lcd_fill(LCD_BG);
+  lcd_text(4U, 4U, "US TARGET TRACKER", LCD_WHITE);
+  lcd_text(4U, 137U, "MOTOR: OFF", LCD_GREEN);
+}
+
+static void Tracker_Screen(void)
+{
+  char line[22];
+  uint16_t color = tracker_state == LOCKED ? LCD_GREEN : LCD_YELLOW;
+  const char *state = tracker_state == LOCKED ? "TRACKED  " :
+                      sweep_completed ? "NO TARGET" : "SCANNING ";
+  lcd_text(4U, 30U, "STATUS:", LCD_WHITE);
+  lcd_text(4U, 45U, state, color);
+  if (tracker_state == LOCKED)
+  {
+    (void)snprintf(line, sizeof(line), "DIST: %2u.%1u cm   ",
+                   (unsigned)(tracked_mm / 10U), (unsigned)(tracked_mm % 10U));
+  }
+  else
+  {
+    (void)snprintf(line, sizeof(line), "DIST: --.- cm   ");
+  }
+  lcd_text(4U, 68U, line, color);
+  int pulse = tracker_state == LOCKED ? (int)best_servo_us :
+              (int)SERVO_FORWARD_US + (int)scan_offset_us;
+  int angle = (pulse - (int)SERVO_FORWARD_US) / (int)SERVO_US_PER_DEG;
+  (void)snprintf(line, sizeof(line), "%s: %+3d deg   ",
+                 tracker_state == LOCKED ? "ANGLE" : "HEAD ", angle);
+  lcd_text(4U, 86U, line, color);
+  (void)snprintf(line, sizeof(line), "SERVO: %4u us   ", (unsigned)pulse);
+  lcd_text(4U, 104U, line, LCD_WHITE);
+  (void)snprintf(line, sizeof(line), "FWD: %4u us   ", (unsigned)SERVO_FORWARD_US);
+  lcd_text(4U, 119U, line, LCD_WHITE);
+}
+
+/* For a flat face, 1/r = a*cos(theta) + b*sin(theta). Its normal is atan2(b,a).
+   Fit the longest contiguous return span, not a single noisy minimum echo. */
+static bool Tracker_ChooseNormal(uint16_t *pulse_us, uint16_t *distance_mm)
+{
+  unsigned run_start = 0U, run_len = 0U, best_start = 0U, best_len = 0U;
+  for (unsigned i = 0U; i <= SCAN_COUNT; ++i)
+  {
+    if (i < SCAN_COUNT && scan_ranges[i] != 0U)
+    {
+      if (run_len == 0U) run_start = i;
+      ++run_len;
+    }
+    else
+    {
+      if (run_len > best_len) { best_start = run_start; best_len = run_len; }
+      run_len = 0U;
+    }
+  }
+  if (best_len < 3U) return false;
+
+  unsigned fit_start = best_start + (best_len >= 5U ? 1U : 0U);
+  unsigned fit_end = best_start + best_len - (best_len >= 5U ? 1U : 0U);
+  float scc = 0.0f, sss = 0.0f, scs = 0.0f, scz = 0.0f, ssz = 0.0f;
+  for (unsigned i = fit_start; i < fit_end; ++i)
+  {
+    float degrees = ((int)i * SCAN_STEP_US - SCAN_HALF_US) / (float)SERVO_US_PER_DEG;
+    float radians = degrees * 0.01745329252f;
+    float co = cosf(radians), si = sinf(radians);
+    float z = 1.0f / (float)scan_ranges[i];
+    scc += co * co; sss += si * si; scs += co * si;
+    scz += co * z; ssz += si * z;
+  }
+  float det = scc * sss - scs * scs;
+  float chosen_index = -1.0f;
+  if (det > 0.0001f)
+  {
+    float a = (scz * sss - ssz * scs) / det;
+    float b = (ssz * scc - scz * scs) / det;
+    float normal_deg = atan2f(b, a) * 57.29577951f;
+    chosen_index = (normal_deg * (float)SERVO_US_PER_DEG + SCAN_HALF_US) /
+                   (float)SCAN_STEP_US;
+    float relative_error = 0.0f;
+    for (unsigned i = fit_start; i < fit_end; ++i)
+    {
+      float degrees = ((int)i * SCAN_STEP_US - SCAN_HALF_US) / (float)SERVO_US_PER_DEG;
+      float radians = degrees * 0.01745329252f;
+      float predicted = a * cosf(radians) + b * sinf(radians);
+      float measured = 1.0f / (float)scan_ranges[i];
+      relative_error += fabsf(predicted - measured) / measured;
+    }
+    relative_error /= (float)(fit_end - fit_start);
+    if (relative_error > 0.12f ||
+        chosen_index < (float)best_start ||
+        chosen_index > (float)(best_start + best_len - 1U))
+      chosen_index = -1.0f;
+  }
+  if (chosen_index < 0.0f)
+  {
+    /* Curved objects or noisy echoes: use a three-point-smoothed minimum. */
+    uint32_t smallest_sum = UINT32_MAX;
+    unsigned fallback = best_start + best_len / 2U;
+    for (unsigned i = best_start + 1U; i + 1U < best_start + best_len; ++i)
+    {
+      uint32_t sum = (uint32_t)scan_ranges[i-1U] + scan_ranges[i] + scan_ranges[i+1U];
+      if (sum < smallest_sum) { smallest_sum = sum; fallback = i; }
+    }
+    chosen_index = (float)fallback;
+  }
+  unsigned nearest = (unsigned)(chosen_index + 0.5f);
+  if (nearest < best_start) nearest = best_start;
+  if (nearest >= best_start + best_len) nearest = best_start + best_len - 1U;
+  int offset = (int)(chosen_index * SCAN_STEP_US + 0.5f) - SCAN_HALF_US;
+  *pulse_us = (uint16_t)((int)SERVO_FORWARD_US + offset);
+  *distance_mm = scan_ranges[nearest];
+  return true;
+}
+
+static void Tracker_StartScan(uint32_t now)
+{
+  tracker_state = SCANNING;
+  scan_offset_us = -SCAN_HALF_US;
+  scan_direction = 1;
+  scan_samples = 0U;
+  lock_misses = 0U;
+  sweep_completed = false;
+  memset(scan_ranges, 0, sizeof(scan_ranges));
+  best_servo_us = SERVO_FORWARD_US;
+  Servo_Set((uint16_t)((int)SERVO_FORWARD_US + scan_offset_us));
+  state_changed_ms = now;
+}
+
+static void Tracker_Service(uint32_t now)
+{
+  if (tracker_state != SCANNING)
+  {
+    if ((uint32_t)(now - servo_changed_ms) < SERVO_SETTLE_MS ||
+        (uint32_t)(now - last_ping_ms) < PING_GAP_MS) return;
+    last_ping_ms = now;
+    uint16_t mm = Ultrasonic_ReadMm();
+    if (mm >= TARGET_MIN_MM && mm <= TARGET_MAX_MM)
+    {
+      tracked_mm = mm;
+      lock_misses = 0U;
+    }
+    else if (++lock_misses >= 2U)
+    {
+      Tracker_StartScan(now);
+    }
+    return;
+  }
+  if ((uint32_t)(now - servo_changed_ms) < SERVO_SETTLE_MS ||
+      (uint32_t)(now - last_ping_ms) < PING_GAP_MS) return;
+  last_ping_ms = now;
+  uint16_t mm = Ultrasonic_ReadMm();
+  if (scan_samples == 0U)
+  {
+    first_mm = mm;
+    scan_samples = 1U;
+    return;
+  }
+  if (first_mm >= TARGET_MIN_MM && first_mm <= TARGET_MAX_MM &&
+      mm >= TARGET_MIN_MM && mm <= TARGET_MAX_MM)
+  {
+    uint16_t average = (uint16_t)(((uint32_t)first_mm + mm) / 2U);
+    unsigned index = (unsigned)((scan_offset_us + SCAN_HALF_US) / SCAN_STEP_US);
+    scan_ranges[index] = average;
+  }
+  scan_samples = 0U;
+  if ((scan_direction > 0 && scan_offset_us < SCAN_HALF_US) ||
+      (scan_direction < 0 && scan_offset_us > -SCAN_HALF_US))
+  {
+    scan_offset_us = (int16_t)(scan_offset_us + scan_direction * SCAN_STEP_US);
+    Servo_Set((uint16_t)((int)SERVO_FORWARD_US + scan_offset_us));
+  }
+  else
+  {
+    sweep_completed = true;
+    uint16_t chosen_us = SERVO_FORWARD_US, chosen_mm = 0U;
+    if (Tracker_ChooseNormal(&chosen_us, &chosen_mm))
+    {
+      best_servo_us = chosen_us;
+      tracked_mm = chosen_mm;
+      tracker_state = LOCKED;
+      Servo_Set(best_servo_us);
+      state_changed_ms = now;
+    }
+    else
+    {
+      memset(scan_ranges, 0, sizeof(scan_ranges));
+      scan_direction = (int8_t)-scan_direction;
+      scan_offset_us = (int16_t)(scan_offset_us + scan_direction * SCAN_STEP_US);
+      Servo_Set((uint16_t)((int)SERVO_FORWARD_US + scan_offset_us));
+    }
+  }
+}
+
+/* USER CODE END 0 */
+
+/**
+  * @brief  The application entry point.
+  * @retval int
+  */
+int main(void)
+{
+
+  /* USER CODE BEGIN 1 */
+
+  /* USER CODE END 1 */
+
+  /* MCU Configuration--------------------------------------------------------*/
+
+  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
+  HAL_Init();
+
+  /* USER CODE BEGIN Init */
+
+  /* USER CODE END Init */
+
+  /* Configure the system clock */
+  SystemClock_Config();
+
+  /* USER CODE BEGIN SysInit */
+
+  /* USER CODE END SysInit */
+
+  /* Initialize all configured peripherals */
+  MX_GPIO_Init();
+  MX_TIM2_Init();
+  /* USER CODE BEGIN 2 */
+  Servo_SafeGPIO_Init();
+  /* Only the sensor head moves. Never enable the motor driver or laser. */
+  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_2, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_8, GPIO_PIN_RESET);
+  CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+  DWT->CYCCNT = 0U;
+  DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+  Ultrasonic_Init();
+  Lcd_Init();
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_7, GPIO_PIN_SET);
+  HAL_Delay(20); /* Let the separate 5 V servo rail settle. */
+  Servo_Set(SERVO_FORWARD_US);
+  if (HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1) != HAL_OK) Error_Handler();
+  last_ping_ms = HAL_GetTick();
+  Tracker_StartScan(HAL_GetTick());
+  /* USER CODE END 2 */
+
+  /* Infinite loop */
+  /* USER CODE BEGIN WHILE */
+  while (1)
+  {
+    /* USER CODE END WHILE */
+
+    /* USER CODE BEGIN 3 */
+    uint32_t now = HAL_GetTick();
+    HAL_GPIO_WritePin(GPIOD, GPIO_PIN_2, GPIO_PIN_RESET);
+    Tracker_Service(now);
+    if ((uint32_t)(now - last_screen_ms) >= 200U)
+    {
+      last_screen_ms = now;
+      Tracker_Screen();
+    }
+  }
+  /* USER CODE END 3 */
+}
+
+/**
+  * @brief System Clock Configuration
+  * @retval None
+  */
+void SystemClock_Config(void)
+{
+  RCC_OscInitTypeDef RCC_OscInitStruct = {0};
+  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+
+  /** Configure the main internal regulator output voltage
+  */
+  HAL_PWREx_ControlVoltageScaling(PWR_REGULATOR_VOLTAGE_SCALE1);
+
+  /** Initializes the RCC Oscillators according to the specified parameters
+  * in the RCC_OscInitTypeDef structure.
+  */
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
+  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_NONE;
+  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Initializes the CPU, AHB and APB buses clocks
+  */
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
+                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_HSI;
+  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
+  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
+
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_0) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
+
+/**
+  * @brief GPIO Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_GPIO_Init(void)
+{
+  /* USER CODE BEGIN MX_GPIO_Init_1 */
+
+  /* USER CODE END MX_GPIO_Init_1 */
+
+  /* GPIO Ports Clock Enable */
+  __HAL_RCC_GPIOA_CLK_ENABLE();
+  __HAL_RCC_GPIOC_CLK_ENABLE();
+  __HAL_RCC_GPIOD_CLK_ENABLE();
+
+  /* USER CODE BEGIN MX_GPIO_Init_2 */
+  /* USER CODE END MX_GPIO_Init_2 */
+}
+
+/* USER CODE BEGIN 4 */
+
+/* USER CODE END 4 */
+
+/**
+  * @brief  This function is executed in case of error occurrence.
+  * @retval None
+  */
+void Error_Handler(void)
+{
+  /* USER CODE BEGIN Error_Handler_Debug */
+  /* User can add his own implementation to report the HAL error return state */
+  __disable_irq();
+  while (1)
+  {
+  }
+  /* USER CODE END Error_Handler_Debug */
+}
+#ifdef USE_FULL_ASSERT
+/**
+  * @brief  Reports the name of the source file and the source line number
+  *         where the assert_param error has occurred.
+  * @param  file: pointer to the source file name
+  * @param  line: assert_param error line source number
+  * @retval None
+  */
+void assert_failed(uint8_t *file, uint32_t line)
+{
+  /* USER CODE BEGIN 6 */
+  /* User can add his own implementation to report the file name and line number,
+     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
+  /* USER CODE END 6 */
+}
+#endif /* USE_FULL_ASSERT */
