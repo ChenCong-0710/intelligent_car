@@ -1,80 +1,45 @@
 #include "main.h"
 #include "lcd_font.h"
+#include "initial_align.h"
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
-
-#define CONTROL_MS 50U
-#define SCREEN_MS 250U
+#include <math.h>
+#define CONTROL_MS 10U
 #define COUNTS_PER_REV 840.0f
-#define PWM_PERIOD 799U /* HSI16 / 800 = 20 kHz */
-#define MAX_DUTY 0.95f
-#define KP 0.0030f          /* duty / rpm */
-#define KI 0.0120f          /* duty / rpm / s */
-#define KD 0.0f            /* noisy encoder derivative is disabled initially */
+#define WHEEL_MM 43.0f
+/* Effective left/right contact spacing: inherited project value, calibrate on floor. */
+#define TRACK_MM 130.0f
+#define PWM_PERIOD 799U
+#define MAX_DUTY 0.75f
+#define KP 0.0030f
+#define KI 0.0120f
 #define I_LIMIT 0.60f
-#define ENCODER_SIGN_L 1
-#define ENCODER_SIGN_R 1
 #define MOTOR_SIGN_L 1
 #define MOTOR_SIGN_R 1
-
-typedef enum { TEST_AIR, TEST_GROUND } TestMode;
-typedef enum { MOTOR_STOPPED, MOTOR_RUNNING, MOTOR_FAULT } MotorState;
-typedef struct {
-  float rpm;
-  float duty;
-  float integral;
-  float previous_rpm;
-  uint16_t previous_count;
-  uint16_t wrong_ms;
-  uint16_t stall_ms;
-} Wheel;
-typedef struct {
-  bool raw;
-  bool stable;
-  uint32_t changed_ms;
-} Key;
-
-static TIM_HandleTypeDef motor_pwm;
-static TIM_HandleTypeDef enc_left, enc_right;
+#define PI 3.14159265359f
+typedef struct { float rpm,duty,integral,previous_rpm; uint16_t previous_count; } Wheel;
+static TIM_HandleTypeDef motor_pwm,enc_left,enc_right,us_trig_timer,us_echo_timer;
 static Wheel wheels[2];
-static Key keys[3];
-static TestMode test_mode = TEST_AIR;
-static MotorState motor_state = MOTOR_STOPPED;
-static const uint16_t targets_rpm[] = {40U, 60U, 80U, 100U};
-static uint8_t target_index = 1U;
-static uint32_t last_control_ms;
-static uint32_t last_screen_ms;
-static bool screen_dirty = true;
-
+/* Visible in debugger; left-positive angles, physical left/centre/right servo mapping. */
+InitialAlign g_align;
+static uint32_t last_control_ms,us_trigger_ms,us_echo_ms,us_seq,last_step;
+static uint16_t us_mm;
+static bool us_valid,us_pending;
+static float heading_rad,command_rpm[2];
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
-
-static float clampf(float x, float lo, float hi)
-{
-  return x < lo ? lo : (x > hi ? hi : x);
+static float clampf(float x,float lo,float hi) {return x<lo?lo:(x>hi?hi:x);}
+static void motor_off(void) {
+    HAL_GPIO_WritePin(GPIOD,GPIO_PIN_2,GPIO_PIN_RESET);
+    TIM1->CCR1=TIM1->CCR2=TIM1->CCR3=TIM1->CCR4=0;
+    for(unsigned i=0;i<2;++i) {wheels[i].duty=wheels[i].integral=command_rpm[i]=0;}
 }
-
-static void motor_off(void)
-{
-  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_2, GPIO_PIN_RESET);
-  if (motor_pwm.Instance == TIM1) {
-    TIM1->CCR1 = TIM1->CCR2 = TIM1->CCR3 = TIM1->CCR4 = 0U;
-  }
-  for (unsigned i = 0U; i < 2U; ++i) {
-    wheels[i].duty = 0.0f;
-    wheels[i].integral = 0.0f;
-    wheels[i].wrong_ms = wheels[i].stall_ms = 0U;
-  }
+static void gpio(GPIO_TypeDef *port,uint32_t pin,uint32_t mode,uint32_t pull,uint32_t af) {
+    GPIO_InitTypeDef g={0};g.Pin=pin;g.Mode=mode;g.Pull=pull;
+    g.Speed=GPIO_SPEED_FREQ_HIGH;g.Alternate=af;HAL_GPIO_Init(port,&g);
 }
-
-static void motor_fault(void)
-{
-  motor_off();
-  motor_state = MOTOR_FAULT;
-  screen_dirty = true;
-}
-
+static void require_ok(HAL_StatusTypeDef r) {if(r!=HAL_OK) Error_Handler();}
 static void motor_hardware_init(void)
 {
   GPIO_InitTypeDef gpio = {0};
@@ -183,90 +148,117 @@ static void apply_pwm(float left, float right)
   HAL_GPIO_WritePin(GPIOD, GPIO_PIN_2, GPIO_PIN_SET);
 }
 
-static void speed_control(uint32_t now)
-{
-  uint32_t elapsed = now - last_control_ms;
-  if (elapsed < CONTROL_MS) return;
-  last_control_ms = now;
-  if (elapsed > 200U) {
-    if (motor_state == MOTOR_RUNNING) motor_fault();
-    return;
-  }
-  float dt = (float)elapsed * 0.001f;
-  uint16_t counts[2] = {(uint16_t)TIM4->CNT, (uint16_t)TIM3->CNT};
-  const int signs[2] = {ENCODER_SIGN_L, ENCODER_SIGN_R};
-  for (unsigned i = 0U; i < 2U; ++i) {
-    int16_t delta = (int16_t)(counts[i] - wheels[i].previous_count);
-    wheels[i].previous_count = counts[i];
-    float measured = (float)(delta * signs[i]) * 60.0f / (COUNTS_PER_REV * dt);
-    wheels[i].rpm += 0.4f * (measured - wheels[i].rpm);
-  }
-  if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_4) == GPIO_PIN_RESET) {
-    motor_fault();
-    return;
-  }
-  if (motor_state != MOTOR_RUNNING) return;
-  for (unsigned i = 0U; i < 2U; ++i) {
-    Wheel *w = &wheels[i];
-    float target = (float)targets_rpm[target_index];
-    float error = target - w->rpm;
-    float feedforward = 0.14f + target * 0.0040f;
-    float candidate_i = clampf(w->integral + KI * error * dt, -I_LIMIT, I_LIMIT);
-    float derivative = -(w->rpm - w->previous_rpm) / dt;
-    float unsaturated = feedforward + KP * error + candidate_i + KD * derivative;
-    float saturated = clampf(unsaturated, 0.0f, MAX_DUTY);
-    if ((unsaturated - saturated) * error <= 0.0f) w->integral = candidate_i;
-    w->duty = clampf(feedforward + KP * error + w->integral + KD * derivative,
-                     0.0f, MAX_DUTY);
-    w->previous_rpm = w->rpm;
-    w->wrong_ms = w->rpm < -5.0f ? (uint16_t)(w->wrong_ms + elapsed) : 0U;
-    w->stall_ms = (w->duty > 0.35f && w->rpm < 4.0f)
-                    ? (uint16_t)(w->stall_ms + elapsed) : 0U;
-    if (w->wrong_ms >= 150U || w->stall_ms >= 800U) {
-      motor_fault();
-      return;
-    }
-  }
-  apply_pwm(wheels[0].duty, wheels[1].duty);
+static void ultrasonic_init(void) {
+    /* 1. PB9 -> TIM17_CH1 (AF1) 硬件 45 us 单脉冲触发器 */
+    __HAL_RCC_TIM17_CLK_ENABLE();
+    us_trig_timer.Instance = TIM17;
+    us_trig_timer.Init.Prescaler = 15; /* 1 MHz (1 us) */
+    us_trig_timer.Init.CounterMode = TIM_COUNTERMODE_UP;
+    us_trig_timer.Init.Period = 49; /* 5 us 准备 + 45 us 高电平脉冲 */
+    us_trig_timer.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+    us_trig_timer.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+    require_ok(HAL_TIM_PWM_Init(&us_trig_timer));
+    require_ok(HAL_TIM_OnePulse_Init(&us_trig_timer, TIM_OPMODE_SINGLE));
+    TIM_OC_InitTypeDef oc = {0};
+    oc.OCMode = TIM_OCMODE_PWM2;
+    oc.Pulse = 5;
+    oc.OCPolarity = TIM_OCPOLARITY_HIGH;
+    oc.OCNPolarity = TIM_OCNPOLARITY_HIGH;
+    oc.OCIdleState = TIM_OCIDLESTATE_RESET;
+    oc.OCNIdleState = TIM_OCNIDLESTATE_RESET;
+    require_ok(HAL_TIM_PWM_ConfigChannel(&us_trig_timer, &oc, TIM_CHANNEL_1));
+    gpio(GPIOB, GPIO_PIN_9, GPIO_MODE_AF_PP, GPIO_NOPULL, GPIO_AF1_TIM17);
+    SET_BIT(TIM17->CCER, TIM_CCER_CC1E);
+    SET_BIT(TIM17->BDTR, TIM_BDTR_MOE);
+
+    /* 2. PC6 -> TIM8_CH1 (AF4) 硬件双边沿 PWM 输入捕获 */
+    __HAL_RCC_TIM8_CLK_ENABLE();
+    gpio(GPIOC, GPIO_PIN_6, GPIO_MODE_AF_PP, GPIO_PULLDOWN, GPIO_AF4_TIM8);
+    us_echo_timer.Instance = TIM8;
+    us_echo_timer.Init.Prescaler = 15; /* 1 MHz (1 us) */
+    us_echo_timer.Init.CounterMode = TIM_COUNTERMODE_UP;
+    us_echo_timer.Init.Period = 65535;
+    us_echo_timer.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+    require_ok(HAL_TIM_IC_Init(&us_echo_timer));
+    TIM_IC_InitTypeDef ic = {0};
+    ic.ICPolarity = TIM_ICPOLARITY_RISING;
+    ic.ICSelection = TIM_ICSELECTION_DIRECTTI;
+    ic.ICPrescaler = TIM_ICPSC_DIV1;
+    ic.ICFilter = 4;
+    require_ok(HAL_TIM_IC_ConfigChannel(&us_echo_timer, &ic, TIM_CHANNEL_1));
+    ic.ICPolarity = TIM_ICPOLARITY_FALLING;
+    ic.ICSelection = TIM_ICSELECTION_INDIRECTTI;
+    require_ok(HAL_TIM_IC_ConfigChannel(&us_echo_timer, &ic, TIM_CHANNEL_2));
+    TIM_SlaveConfigTypeDef slave = {0};
+    slave.SlaveMode = TIM_SLAVEMODE_RESET;
+    slave.InputTrigger = TIM_TS_TI1FP1;
+    slave.TriggerPolarity = TIM_INPUTCHANNELPOLARITY_RISING;
+    slave.TriggerFilter = 4;
+    require_ok(HAL_TIM_SlaveConfigSynchro(&us_echo_timer, &slave));
+    require_ok(HAL_TIM_IC_Start(&us_echo_timer, TIM_CHANNEL_1));
+    require_ok(HAL_TIM_IC_Start(&us_echo_timer, TIM_CHANNEL_2));
 }
 
-static void buttons_service(uint32_t now)
-{
-  const GPIO_PinState values[3] = {
-    HAL_GPIO_ReadPin(GPIOD, GPIO_PIN_0),
-    HAL_GPIO_ReadPin(GPIOD, GPIO_PIN_1),
-    HAL_GPIO_ReadPin(GPIOD, GPIO_PIN_15)
-  };
-  for (unsigned i = 0U; i < 3U; ++i) {
-    bool pressed = values[i] == GPIO_PIN_RESET;
-    if (pressed != keys[i].raw) {
-      keys[i].raw = pressed;
-      keys[i].changed_ms = now;
-    }
-    if (keys[i].stable == keys[i].raw || now - keys[i].changed_ms < 30U) continue;
-    keys[i].stable = keys[i].raw;
-    if (!keys[i].stable) continue;
-    if (i == 0U) {
-      if (motor_state == MOTOR_RUNNING) {
-        motor_off(); motor_state = MOTOR_STOPPED;
-      } else if (motor_state == MOTOR_FAULT) {
-        motor_state = MOTOR_STOPPED;
-      } else if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_4) == GPIO_PIN_SET) {
-        wheels[0].integral = wheels[1].integral = 0.0f;
-        wheels[0].wrong_ms = wheels[1].wrong_ms = 0U;
-        wheels[0].stall_ms = wheels[1].stall_ms = 0U;
-        motor_state = MOTOR_RUNNING;
-        last_control_ms = now;
-      } else motor_fault();
-    } else if (i == 1U && motor_state != MOTOR_RUNNING) {
-      target_index = (uint8_t)((target_index + 1U) % 4U);
-    } else if (i == 2U && motor_state != MOTOR_RUNNING) {
-      test_mode = test_mode == TEST_AIR ? TEST_GROUND : TEST_AIR;
-    }
-    screen_dirty = true;
-  }
+static void servo_init(void) {
+    __HAL_RCC_TIM2_CLK_ENABLE();
+    gpio(GPIOC,GPIO_PIN_7,GPIO_MODE_OUTPUT_PP,GPIO_NOPULL,0);
+    HAL_GPIO_WritePin(GPIOC,GPIO_PIN_7,GPIO_PIN_RESET);
+    gpio(GPIOA,GPIO_PIN_15,GPIO_MODE_AF_PP,GPIO_NOPULL,GPIO_AF1_TIM2);
+    TIM2->PSC=15;TIM2->ARR=19999;TIM2->CCR1=0;
+    TIM2->CCMR1=TIM_CCMR1_OC1M_1|TIM_CCMR1_OC1M_2|TIM_CCMR1_OC1PE;
+    TIM2->CCER=TIM_CCER_CC1E;TIM2->EGR=TIM_EGR_UG;TIM2->CR1=TIM_CR1_CEN;
+    HAL_GPIO_WritePin(GPIOC,GPIO_PIN_7,GPIO_PIN_SET);
 }
-
+static void ultrasound(uint32_t now) {
+    if(TIM8->SR&TIM_SR_CC2IF) {
+        uint32_t sr=TIM8->SR;uint16_t pulse=(uint16_t)TIM8->CCR2;
+        TIM8->SR=~(TIM_SR_CC2IF|TIM_SR_CC2OF);
+        if(us_pending && now-us_trigger_ms<=25U && !(sr&TIM_SR_CC2OF)) {
+            ++us_seq;us_echo_ms=now;us_pending=false;
+            us_valid=pulse>=234U && pulse<=2333U; /* 40..400 mm */
+            us_mm=(uint16_t)(((uint32_t)pulse*343U+1000U)/2000U);
+        }
+    }
+    if(us_pending && now-us_trigger_ms>25U) {us_pending=false;us_valid=false;}
+    if(now-us_trigger_ms>=60U) {
+        us_trigger_ms=now;us_pending=true;us_valid=false;
+        TIM8->SR=~(TIM_SR_CC2IF|TIM_SR_CC2OF);
+        TIM17->CNT=0;SET_BIT(TIM17->CR1,TIM_CR1_CEN);
+    }
+}
+static void speed_control(uint32_t now) {
+    uint32_t elapsed=now-last_control_ms;if(elapsed<CONTROL_MS)return;
+    last_control_ms=now;float dt=elapsed*0.001f;
+    if(elapsed>50U) {motor_off();g_align.phase=ALIGN_FAILED;g_align.error=ALIGN_HARDWARE;return;}
+    uint16_t counts[2]={(uint16_t)TIM4->CNT,(uint16_t)TIM3->CNT};
+    float step[2];
+    for(unsigned i=0;i<2;++i) {
+        int16_t delta=(int16_t)(counts[i]-wheels[i].previous_count);
+        wheels[i].previous_count=counts[i];
+        step[i]=(float)delta*PI*WHEEL_MM/COUNTS_PER_REV;
+        float rpm=(float)delta*60.0f/(COUNTS_PER_REV*dt);
+        wheels[i].rpm+=0.4f*(rpm-wheels[i].rpm);
+    }
+    heading_rad+=(step[1]-step[0])/TRACK_MM;
+    if(HAL_GPIO_ReadPin(GPIOC,GPIO_PIN_4)==GPIO_PIN_RESET) {
+        motor_off();g_align.phase=ALIGN_FAILED;g_align.error=ALIGN_HARDWARE;return;
+    }
+    if(g_align.phase!=ALIGN_TURN) {motor_off();return;}
+    for(unsigned i=0;i<2;++i) {
+        float requested=g_align.speed[i]*60.0f/(PI*WHEEL_MM);
+        command_rpm[i]+=clampf(requested-command_rpm[i],-200*dt,200*dt);
+        float target=command_rpm[i],error=target-wheels[i].rpm;
+        if(fabsf(target)<0.5f) {wheels[i].integral=wheels[i].duty=0;continue;}
+        float ff=copysignf(0.14f+fabsf(target)*0.0040f,target);
+        float ci=clampf(wheels[i].integral+KI*error*dt,-I_LIMIT,I_LIMIT);
+        float u=ff+KP*error+ci,limited=clampf(u,-MAX_DUTY,MAX_DUTY);
+        if((u-limited)*error<=0)wheels[i].integral=ci;
+        wheels[i].duty=clampf(ff+KP*error+wheels[i].integral,-MAX_DUTY,MAX_DUTY);
+        /* Never drive a wheel in the opposite direction to its turn target. */
+        if(wheels[i].duty*target<0)wheels[i].duty=0;
+    }
+    apply_pwm(wheels[0].duty,wheels[1].duty);
+}
 #define LCD_CS_LOW()    (GPIOD->BSRR = (uint32_t)GPIO_PIN_11 << 16U)
 #define LCD_CS_HIGH()   (GPIOD->BSRR = GPIO_PIN_11)
 #define LCD_DC_CMD()    (GPIOD->BSRR = (uint32_t)GPIO_PIN_12 << 16U)
@@ -424,63 +416,69 @@ static void Lcd_Init(void)
   lcd_cmd(0x29U); HAL_Delay(20U); /* display on */
   HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13, GPIO_PIN_SET);
   lcd_fill(LCD_BG);
-  lcd_text2(20U, 18U, "WHEEL SPEED PID", LCD_WHITE);
-  lcd_text(20U, 248U, "PD0 RUN/STOP  PD1 RPM  PD15 MODE", LCD_GREEN);
+  lcd_text2(12U, 10U, "INITIAL ALIGN", LCD_WHITE);
+  lcd_text(12U, 262U, "PD0 STOP   RESET SCAN", LCD_GREEN);
 }
 
-static void motor_screen(void)
-{
-  char line[22];
-  const char *state = motor_state == MOTOR_RUNNING ? "RUN" :
-                      motor_state == MOTOR_FAULT ? "FAULT" : "STOP";
-  uint16_t state_color = motor_state == MOTOR_RUNNING ? LCD_GREEN :
-                         motor_state == MOTOR_FAULT ? LCD_RED : LCD_YELLOW;
-  (void)snprintf(line, sizeof(line), "MODE: %-6s ", test_mode == TEST_AIR ? "AIR" : "GROUND");
-  lcd_text2(20U, 50U, line, LCD_WHITE);
-  (void)snprintf(line, sizeof(line), "STATE: %-6s", state);
-  lcd_text2(20U, 78U, line, state_color);
-  (void)snprintf(line, sizeof(line), "SET: %3u RPM  ", (unsigned)targets_rpm[target_index]);
-  lcd_text2(20U, 106U, line, LCD_WHITE);
-  (void)snprintf(line, sizeof(line), "L: %4d RPM   ",
-                 (int)(wheels[0].rpm + (wheels[0].rpm >= 0 ? 0.5f : -0.5f)));
-  lcd_text2(20U, 135U, line, LCD_GREEN);
-  (void)snprintf(line, sizeof(line), "PWM: %2u%% %s  ",
-                 (unsigned)(wheels[0].duty * 100.0f + 0.5f),
-                 motor_state == MOTOR_RUNNING && wheels[0].duty >= MAX_DUTY - 0.01f &&
-                 wheels[0].rpm < (float)targets_rpm[target_index] - 5.0f ? "MAX" : "   ");
-  lcd_text2(20U, 162U, line, LCD_WHITE);
-  (void)snprintf(line, sizeof(line), "R: %4d RPM   ",
-                 (int)(wheels[1].rpm + (wheels[1].rpm >= 0 ? 0.5f : -0.5f)));
-  lcd_text2(20U, 190U, line, LCD_GREEN);
-  (void)snprintf(line, sizeof(line), "PWM: %2u%% %s  ",
-                 (unsigned)(wheels[1].duty * 100.0f + 0.5f),
-                 motor_state == MOTOR_RUNNING && wheels[1].duty >= MAX_DUTY - 0.01f &&
-                 wheels[1].rpm < (float)targets_rpm[target_index] - 5.0f ? "MAX" : "   ");
-  lcd_text2(20U, 217U, line, LCD_WHITE);
-}
 
-int main(void)
-{
-  HAL_Init();
-  SystemClock_Config();
-  MX_GPIO_Init();
-  motor_hardware_init();
-  Lcd_Init();
-  last_control_ms = HAL_GetTick();
-  last_screen_ms = last_control_ms;
-  motor_screen();
-  for (;;) {
-    uint32_t now = HAL_GetTick();
-    buttons_service(now);
-    speed_control(now);
-    if (screen_dirty || now - last_screen_ms >= SCREEN_MS) {
-      last_screen_ms = now;
-      screen_dirty = false;
-      motor_screen();
+static void screen_service(uint32_t now) {
+    static char lines[12][37];static uint8_t row,col;static uint32_t updated;
+    if(row==0 && col==0) {
+        if(now-updated<250U)return;
+        updated=now;
+        snprintf(lines[0],37,"%-35s",align_phase_name(g_align.phase));
+        snprintf(lines[1],37,"SCAN %2u/37  SERVO %4u us",g_align.index,g_align.servo_us);
+        snprintf(lines[2],37,"RANGE %3u mm VALID %u",us_mm,(unsigned)us_valid);
+        snprintf(lines[3],37,"NORMAL %+4d deg",(int)g_align.normal_deg);
+        snprintf(lines[4],37,"SIDE %s",g_align.side_left?"LEFT":"RIGHT");
+        snprintf(lines[5],37,"TARGET %+4d  ACTUAL %+4d deg",(int)g_align.target_deg,(int)g_align.actual_deg);
+        snprintf(lines[6],37,"FIT %u pts RMS %u/10 mm",g_align.fit_last-g_align.fit_first+1,(unsigned)(g_align.rms_mm*10));
+        snprintf(lines[7],37,"L %+4d   R %+4d mm/s",(int)(wheels[0].rpm*PI*WHEEL_MM/60),(int)(wheels[1].rpm*PI*WHEEL_MM/60));
+        snprintf(lines[8],37,"EDGES L%u R%u",g_align.edge_left_seen,g_align.edge_right_seen);
+        snprintf(lines[9],37,"SIDE DIST %3u mm",g_align.side_mm);
+        snprintf(lines[10],37,"RESULT %s",align_error_name(g_align.error));
+        snprintf(lines[11],37,"STEP1 ONLY - NO LASER");
+        for(unsigned r=0;r<12;++r) {size_t n=0;while(n<36&&lines[r][n])++n;while(n<36)lines[r][n++]=' ';lines[r][36]=0;}
     }
-  }
+    char ch[2]={lines[row][col],0};
+    lcd_text((uint16_t)(12+col*6),(uint16_t)(48+row*17),ch,g_align.error?LCD_RED:LCD_WHITE);
+    if(++col==36){col=0;if(++row==12)row=0;}
 }
-
+int main(void) {
+    HAL_Init();SystemClock_Config();MX_GPIO_Init();motor_hardware_init();
+    /* Laser/buzzer/park outputs start low and are not used by this test. */
+    gpio(GPIOC,GPIO_PIN_8|GPIO_PIN_9,GPIO_MODE_OUTPUT_PP,GPIO_NOPULL,0);
+    HAL_GPIO_WritePin(GPIOC,GPIO_PIN_8|GPIO_PIN_9,GPIO_PIN_RESET);
+    gpio(GPIOD,GPIO_PIN_8,GPIO_MODE_OUTPUT_PP,GPIO_NOPULL,0);
+    HAL_GPIO_WritePin(GPIOD,GPIO_PIN_8,GPIO_PIN_SET);
+    ultrasonic_init();Lcd_Init();servo_init();
+    last_control_ms=HAL_GetTick();align_start(&g_align,last_control_ms);
+    /* Independent watchdog: fail stopped if the main loop locks. */
+    IWDG->KR=0x5555;IWDG->PR=4;IWDG->RLR=1250;IWDG->KR=0xCCCC;IWDG->KR=0xAAAA;
+    for(;;) {
+        uint32_t now=HAL_GetTick();ultrasound(now);speed_control(now);
+        if(now-last_step>=5U) {
+            last_step=now;
+            float measured[2]={wheels[0].rpm*PI*WHEEL_MM/60,wheels[1].rpm*PI*WHEEL_MM/60};
+            AlignPhase before=g_align.phase;
+            align_step(&g_align,now,us_seq,us_trigger_ms,us_echo_ms,us_valid,us_mm,heading_rad,measured);
+            if(before==ALIGN_FIT) {last_control_ms=HAL_GetTick();last_step=last_control_ms;}
+            if(HAL_GPIO_ReadPin(GPIOD,GPIO_PIN_0)==GPIO_PIN_RESET) {
+                g_align.phase=ALIGN_CANCELLED;motor_off();
+            }
+            if(g_align.phase!=ALIGN_TURN) {
+                motor_off();
+                if(g_align.phase==ALIGN_BRAKE) {
+                    TIM1->CCR1=TIM1->CCR2=TIM1->CCR3=TIM1->CCR4=PWM_PERIOD+1U;
+                    HAL_GPIO_WritePin(GPIOD,GPIO_PIN_2,GPIO_PIN_SET);
+                }
+            }
+            TIM2->CCR1=now-g_align.started>=10U?g_align.servo_us:0;
+            HAL_GPIO_WritePin(GPIOD,GPIO_PIN_8,g_align.phase==ALIGN_TURN?GPIO_PIN_RESET:GPIO_PIN_SET);
+        }
+        screen_service(now);IWDG->KR=0xAAAA;
+    }
+}
 void SystemClock_Config(void)
 {
   RCC_OscInitTypeDef RCC_OscInitStruct = {0};
@@ -549,6 +547,7 @@ void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
   /* User can add his own implementation to report the HAL error return state */
+  motor_off();
   __disable_irq();
   while (1)
   {
