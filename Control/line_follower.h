@@ -30,7 +30,7 @@
 #define LF_MCAL_STEPS 15U
 
 /** @brief 云台步进扫掠寻找障碍物平面法线(垂直位置)时允许的最大离散采样点数 */
-#define LF_PROBE_SCAN_POINTS 41U
+#define LF_PROBE_SCAN_POINTS 64U
 
 /** @brief 云台舵机 1° 对应的近似脉宽 (us/deg，SG90 类舵机约 10 us/deg)，用于把扫掠脉宽换算成平面法线的几何角度 */
 #define LF_PROBE_SCAN_US_PER_DEG 10.0f
@@ -137,8 +137,8 @@
  *  @note  性质①（扫描↔发射同轴）本来就保证残余偏航在光斑处抵消，不需要为它转车；
  *        而实测每次它都把 w 弄差（152.9→140.3、64.2→74.3），22:33 那次更用一条 16 mm 的
  *        假边算出 −18.4°，把车转飞、整面丢失。关掉后每面只剩「锁距→扫一次→开到中点→复测」。 */
-#define LF_SIDE_YAW_ENABLE 0
-#define LF_SIDE_YAW_DEADBAND_DEG 4.0f    /**< 死区 (°)：约 6σ，好工况（残余 2~3°）一次都不转 */
+#define LF_SIDE_YAW_ENABLE 1
+#define LF_SIDE_YAW_DEADBAND_DEG 1.0f    /**< 死区 (°)：2026-11-24 按现场要求从 4° 收紧到 1°（约 1.7σ） */
 #define LF_SIDE_YAW_MAX_DEG 20.0f        /**< 上限 (°)：超过它说明扫描本身有问题，不转（任务书箱子最多斜 ±20°） */
 
 #define LF_SIDE_LOCK_WAIT_MS 400U
@@ -757,6 +757,13 @@ typedef struct {
     float phase_start_y_mm;  /**< 当前打靶子阶段起始时的世界系 y (mm) */
     LfFace face;             /**< 当前障碍物平面模型（M1 起由 probe_fit_normal 填充） */
     uint16_t best_servo_us;  /**< 云台扫掠寻优找到的正对平面中心舵机脉宽 (us) */
+    /* M4f（2026-11-24）：AIM 改 0~180° 全行程扫掠，φ/ρ 由**两条棱边**（角域边界法）决定。
+     * 这四个字段只做日志与单测用；判据本身在 probe_boundary_normal() 里。 */
+    uint8_t aim_bw_ok;       /**< 1 = 本遍 AIM 的 φ 来自角域边界法（0 = 退回平面拟合） */
+    float aim_bw_w_mm;       /**< 两条棱边之间的宽度 (mm) */
+    float aim_bw_aim_deg;    /**< 两条棱边中点的方位角 (°，相对车头正前，向左为正) */
+    float aim_bw_th_l_deg;   /**< −侧棱边方位角 (°) */
+    float aim_bw_th_r_deg;   /**< +侧棱边方位角 (°) */
     uint16_t best_obstacle_mm; /**< 云台扫掠寻优记录的最小垂直距离 (mm) */
     uint8_t probe_face;      /**< 当前正在探测的障碍物平面序号 (0 ~ 3 对应第 1 ~ 4 面) */
     uint8_t obstacle_hits;   /**< 连续检测到 <15cm 障碍物的次数（用于消抖） */

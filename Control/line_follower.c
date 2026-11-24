@@ -142,7 +142,7 @@ LfConfig lf_default_config(void) {
             /* aim_ms 2000→3000（2026-11-23）：第二段改成同幅独立复测后点数受驻留时长限制
              * （max_n = sweep_ms/180）；3000 ms 让第二段拿到 15 点、第一段 11 点。
              * 全流程只发生一次 AIM，多花 1 s 可以接受。 */
-            .aim_ms = 3000U, .sweep_us = 300U, .scan_step_us = 60U, .laser_ms = 10000U,
+            .aim_ms = 5000U, .sweep_us = 900U, .scan_step_us = 30U, .laser_ms = 10000U,
             .aim_min_mm = 40U, .aim_max_mm = 400U, .phase_timeout_ms = 4500U,
             .turn_speed_mm_s = 90.0f, .drive_speed_mm_s = 120.0f, .approach_speed_mm_s = 85.0f,
             .turn_deg = 90.0f, .edge1_mm = 220.0f, .edge2_mm = 220.0f, .approach_max_mm = 260.0f,
@@ -282,7 +282,7 @@ bool lf_config_valid(const LfConfig *p) {
         if (!isfinite(pr_vals[i]) || pr_vals[i] <= 0.0f) return false;
     if (pr->faces < 1U || pr->faces > 4U ||
         pr->aim_ms < 200U || pr->aim_ms > 5000U ||
-        pr->sweep_us < 20U || pr->sweep_us > 600U ||
+        pr->sweep_us < 20U || pr->sweep_us > 900U ||   /* 900 = 0~180° 全行程（600..2400us） */
         pr->scan_step_us < 20U || pr->scan_step_us > 200U ||
         pr->laser_ms < 200U || pr->laser_ms > 30000U ||
         pr->aim_min_mm < 20U || pr->aim_max_mm <= pr->aim_min_mm || pr->aim_max_mm > 2000U ||
@@ -376,6 +376,7 @@ bool lf_start_probe(LfController *c, uint32_t now) {
     reset_loops(c);
     lf_odometry_reset(c);
     c->probe_face = 0;
+    c->h_ref_mm = 0.0f;   /* 新一轮重新锁存首面站距：按键可连续跑多轮，不能沿用上一轮的 h_ref */
     c->best_servo_us = c->cfg.servo_center_us;
     c->best_obstacle_mm = UINT16_MAX;
     /* M2：清掉上一轮侧扫的全部状态，避免残留 h / 原点 / 复测标志污染新一轮 */
@@ -946,13 +947,13 @@ static bool morse_2short_1long(uint32_t elapsed_ms) {
  * @note  60 ms 覆盖一次硬件超声触发周期，另 60 ms 用于等舵机走完这一步（SG90 约 10 ms/deg，
  *        7.5° 一步约 75 ms）。驻留不足会让采样点混入上一角度的旧回波，使法线出现 1~2° 系统偏置。
  */
-#define LF_PROBE_SCAN_MIN_DWELL_MS 180U
+#define LF_PROBE_SCAN_MIN_DWELL_MS 120U
 
 /** @brief 每步进之后丢弃的最初时长 (ms)：这段时间内的回波可能还是上一个角度触发的 */
-#define LF_PROBE_SCAN_SKIP_MS 120U
+#define LF_PROBE_SCAN_SKIP_MS 60U
 
 /** @brief 瞄准阶段开始前让舵机在首点稳定下来的时间上限 (ms) */
-#define LF_PROBE_AIM_SETTLE_MS 150U
+#define LF_PROBE_AIM_SETTLE_MS 400U   /* 2026-11-24：全行程扫掠首点可能要跑 90°，150 ms 不够舵机走到位 */
 
 /** @brief 第 index 个离散采样点对应的舵机脉宽 (us，按 ±sweep_us 线性分布并限幅到 600..2400 全行程) */
 static uint16_t probe_scan_pulse(const LfController *c, uint16_t index) {
@@ -1036,6 +1037,98 @@ static bool probe_inlier(float rho, float phi, float th, uint16_t d, float band)
     float pred = rho / cosf(th - phi);
     if (!(pred > 40.0f) || !(pred < 400.0f)) return false;
     return fabsf((float)d - pred) <= band;
+}
+
+/**
+ * @brief 角域边界法：用最近连续段的两条**棱边**求面法线 / 垂直距离 / 宽度（2026-11-24）
+ *
+ * 为什么不再只靠平面拟合：sweep_us 放到 900（0~180° 全行程）后，150 mm 的面在 163 mm 处只张开
+ * ±24.7°，端点必然落在面外，回波被背景墙（500~900）拉长，最小二乘的斜率被带偏 —— 实测 φ 偏 4~18°，
+ * 直接导致 TURN_PAR 后车头与面不平行、侧扫 h 沿面漂 40 mm。
+ * 角域里波束宽度是**对称**的：跳变带宽度 = 2γ ≈ 15°（实测 49 mm / 190 mm = 14.8°），带的中点就是
+ * 棱边的真实方向，与波束多宽无关。两条棱边的连线直接给切线；法线是其垂线。
+ *
+ * @param start 最近连续段的起始序号
+ * @param len   该段采样点数
+ * @param[out] phi   法线方位角 (rad，相对车头正前，向左为正；与平面拟合同一约定)
+ * @param[out] rho   云台轴到面的垂直距离 (mm)
+ * @param[out] rms   面内样本到连线的 RMS (mm)
+ * @param[out] width 两条棱边之间的宽度 (mm)
+ * @return true = 两条边都在扫掠行程内且几何自洽
+ * @note  失败（只有一条边可见 / 宽度离谱 / 回波散得太开）时调用方退回平面拟合，行为与旧版一致。
+ */
+static bool probe_boundary_normal(LfController *c, unsigned start, unsigned len,
+                                  float *phi, float *rho, float *rms, float *width) {
+    const unsigned n = c->scan_points;
+    if (len < 4U || start == 0U || start + len >= n) return false; /* 有一条边在行程外 */
+    const unsigned e = start + len - 1U;
+    /* 边界位置 = 最后一个面内采样与第一个面外采样的中点（与侧扫同一条判据，波束足印对称抵消） */
+    float th_a = 0.5f * (probe_scan_angle(c, start - 1U) + probe_scan_angle(c, start));
+    float th_b = 0.5f * (probe_scan_angle(c, e) + probe_scan_angle(c, e + 1U));
+    /* 波束外扩补偿（与侧扫的 reach=h·tanγ 同一个物理量）：回波是在**波束边缘**碰到棱边时才消失的，
+     * 所以跳变带中点比真实棱边**向外偏了一个半波束角 γ**（实测 49 mm / 190 mm = 14.8° ≈ 2γ，γ=7.5°）。
+     * 两条边同向内收 γ 后，交点就是真实棱边；中点不受影响（对称）。 */
+    {
+        float g = c->cfg.probe.beam_half_deg * 0.01745329252f;
+        float mid = 0.5f * (th_a + th_b);
+        if (th_a < mid) th_a += g; else th_a -= g;
+        if (th_b > mid) th_b -= g; else th_b += g;
+    }
+    /* 面内点（首尾各让一个：擦边区回波被拉长，会系统性外扩） */
+    unsigned i0 = start + 1U, i1 = e - 1U;
+    if (i1 < i0 + 2U) return false;
+    float mx = 0.0f, my = 0.0f;
+    unsigned m = 0U;
+    for (unsigned i = i0; i <= i1; ++i) {
+        float th = probe_scan_angle(c, i);
+        mx += (float)c->scan_range_mm[i] * cosf(th);
+        my += (float)c->scan_range_mm[i] * sinf(th);
+        ++m;
+    }
+    mx /= (float)m; my /= (float)m;
+    /* 笛卡尔空间主轴拟合（TLS）：θ 是精确量，只有 r 有噪声，所以法线精度只受测距噪声支配。
+     * 这条是本次改动真正的收益来源：以前拟合在 1/r(θ) 空间、端点被背景拉长，斜率被带偏 4~18°。 */
+    float sxx = 0.0f, syy = 0.0f, sxy = 0.0f, e2 = 0.0f;
+    for (unsigned i = i0; i <= i1; ++i) {
+        float th = probe_scan_angle(c, i);
+        float px = (float)c->scan_range_mm[i] * cosf(th) - mx;
+        float py = (float)c->scan_range_mm[i] * sinf(th) - my;
+        sxx += px * px; syy += py * py; sxy += px * py;
+    }
+    float dir = 0.5f * atan2f(2.0f * sxy, sxx - syy);
+    float dx = cosf(dir), dy = sinf(dir);
+    /* 面直线的方程 X·n = s（n=(dy,-dx) 是单位法线），原点到它的垂足 F = s·n */
+    float sdist = dy * mx - dx * my;
+    float fx = sdist * dy, fy = -sdist * dx;
+    float fr = fabsf(sdist);
+    if (!(fr > 50.0f) || fr > 400.0f) return false; /* 站距合理区间 */
+    /* 两条棱边 = 边界射线与面直线的交点：t·(u·n) = s（不是「拿某个面内点的 r 当边界 r」）*/
+    float uax = cosf(th_a), uay = sinf(th_a);
+    float ubx = cosf(th_b), uby = sinf(th_b);
+    float da = uax * dy - uay * dx;
+    float db = ubx * dy - uby * dx;
+    if (fabsf(da) < 0.15f || fabsf(db) < 0.15f) return false; /* 边界射线几乎平行于面 */
+    float ta = sdist / da, tb = sdist / db;
+    if (!(ta > 20.0f) || !(tb > 20.0f) || ta > 900.0f || tb > 900.0f) return false;
+    float ax = ta * uax, ay = ta * uay;
+    float bx = tb * ubx, by = tb * uby;
+    float w = sqrtf((bx - ax) * (bx - ax) + (by - ay) * (by - ay));
+    if (!(w > 25.0f) || w > 200.0f) return false;   /* 50/150 两种面宽的合理区间 */
+    for (unsigned i = i0; i <= i1; ++i) {
+        float th = probe_scan_angle(c, i);
+        float px = (float)c->scan_range_mm[i] * cosf(th) - mx;
+        float py = (float)c->scan_range_mm[i] * sinf(th) - my;
+        float d = dx * py - dy * px;
+        e2 += d * d;
+    }
+    c->aim_bw_th_l_deg = fminf(th_a, th_b) * 57.2957795f;
+    c->aim_bw_th_r_deg = fmaxf(th_a, th_b) * 57.2957795f;
+    c->aim_bw_aim_deg = atan2f(0.5f * (ay + by), 0.5f * (ax + bx)) * 57.2957795f;
+    *phi = atan2f(fy, fx);
+    *rho = fr;
+    *rms = sqrtf(e2 / (float)m);
+    *width = w;
+    return true;
 }
 
 /**
@@ -1165,9 +1258,23 @@ static bool probe_fit_normal(LfController *c, uint16_t *pulse_us, uint16_t *dist
     *pulse_us = (uint16_t)(us + 0.5f);
     *distance_mm = c->scan_range_mm[nearest];
 
-    /* --- M1：把平面模型交给上层（phi/rho/rms/hits），供 PROBE_FACE 日志与 M2 侧视横扫复用 --- */
+    /* --- M4f（2026-11-24）：角域边界法优先 --------------------------------------------
+     * AIM 改成 0~180° 全行程扫掠后，平面拟合的端点会落在面外、被背景墙拉偏；而两条棱边是
+     * 角域里最稳的特征（跳变带中点 = 棱边真实方向）。边界法成功就用它给 phi/rho/宽度，
+     * 失败（只有一条边在行程内 / 宽度离谱 / 面内散得太开）退回原来的平面拟合，行为与旧版一致。 */
+    float bw_phi = 0.0f, bw_rho = 0.0f, bw_rms = 99.0f, bw_w = 0.0f;
     memset(&c->face, 0, sizeof(c->face));
-    if (model_ok) {
+    c->aim_bw_ok = 0U;
+    if (probe_boundary_normal(c, best_start, best_len, &bw_phi, &bw_rho, &bw_rms, &bw_w)) {
+        c->aim_bw_ok = 1U;
+        c->aim_bw_w_mm = bw_w;
+        c->face.phi = bw_phi;
+        c->face.rho = bw_rho;
+        c->face.rms = bw_rms;
+        c->face.hits = (uint8_t)(best_len > 255U ? 255U : best_len);
+        c->face.valid = (bw_rms < c->cfg.probe.fit_rms_mm) &&
+                        (bw_rho > 60.0f) && (bw_rho < 400.0f);
+    } else if (model_ok) {
         float phi = atan2f(plane_b, plane_a);
         float rho = 1.0f / sqrtf(plane_a * plane_a + plane_b * plane_b);
         if (isfinite(phi) && isfinite(rho) && rho > 1.0f) {

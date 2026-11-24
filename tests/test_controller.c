@@ -199,7 +199,7 @@ static void probe(void) {
     for(unsigned face=0;face<4;++face){
         /* 两段式 aim 扫掠：粗扫 aim_ms + 同幅独立复测 aim_ms（aim_ms 可调，按相位退出，别写死 tick 数） */
         in.obstacle_mm=125;
-        for(unsigned k=0;k<2000 && c.probe_phase==LF_PROBE_AIM;++k) tick(&c,&in,&now,1);
+        for(unsigned k=0;k<4000 && c.probe_phase==LF_PROBE_AIM;++k) tick(&c,&in,&now,1);
         tick(&c,&in,&now,2); /* 换相位那一拍只做相位切换，输出在下一拍才落到 out 上 */
         assert(c.probe_phase==LF_PROBE_LASER && c.out.laser && c.out.buzzer && c.out.park_lamp);
         tick(&c,&in,&now,2000); /* 10 s laser + synchronous buzzer */
@@ -255,7 +255,7 @@ static void probeaim(void) {
     assert(lf_start_probe(&c,now));
     const float normal_deg=20.0f, plane_mm=150.0f;
     unsigned guard=0, ping_ticks=0;
-    while(c.probe_phase==LF_PROBE_AIM && ++guard<2000){
+    while(c.probe_phase==LF_PROBE_AIM && ++guard<4000){
         /* 真实硬件上 TIM17 每 60 ms 才触发一次超声，回波值在两次触发之间保持不变 */
         if(++ping_ticks>=12U){
             ping_ticks=0U;
@@ -785,21 +785,30 @@ static void probesidetiltoff(void) {
  */
 static void probesideyawfix(void) {
     const float d2r = 3.14159265f / 180.0f;
-    /* 二次微调已整段关闭（LF_SIDE_YAW_ENABLE=0，2026-11-23 22:40）：10° 与 2° 都**不许转**。
-     * 依据：性质①（扫描↔发射同轴）已让残余偏航在光斑处抵消；实测每次它都把 w 弄差
-     * （152.9→140.3、64.2→74.3），22:33 更用 16 mm 的假边算出 −18.4° 把车转飞、整面丢失。
-     * 保留本用例是守住"扫描→发射之间一个角都不许动"这条硬规则。 */
-    for (unsigned k = 0U; k < 2U; ++k) {
-        float tilt_deg = (k == 0U) ? 10.0f : 2.0f;
+    /* 2026-11-24 起二次微调重新启用（LF_SIDE_YAW_ENABLE=1），死区按现场要求收到 ±1°：
+     *   ① 面斜 10°（>> 1°）：必须触发转正 → 退回原扫描原点重扫 → 仍正常走到 LASER；
+     *   ② 面斜 0.4°（< 1°）：一次都不许转（好工况零打扰）。
+     * 硬规则不变：要动角就必须紧接着重扫（verify=1 下性质①才成立）。 */
+    {
         LfController c; LfInput in; uint32_t now;
-        SynthSide w = {0.0f, 75.0f, 180.0f, tanf(tilt_deg * d2r), 7.5f, 2.0f, 0.10f, 0.0f};
+        SynthSide w = {0.0f, 75.0f, 180.0f, tanf(10.0f * d2r), 7.5f, 2.0f, 0.10f, 0.0f};
         side_start(&c, &in, &now, true, false, 2400U);
         side_run(&c, &in, &now, &w, false, 0.0f);
         assert(c.probe_phase == LF_PROBE_LASER);
-        assert(c.side_yaw_fix == 0U);                     /* 一次都不转 */
-        assert(c.turn_start_ms == 0U);                    /* 没调用 probe_turn_to */
-        if (k == 0U) side_expect(&c, 0.0f, 75.0f, 8.0f, 20.0f);
-        else         side_expect(&c, 0.0f, 75.0f, 5.0f, 8.0f);
+        assert(c.side_yaw_fix >= 1U);      /* 10° 必须转正 */
+        assert(c.turn_start_ms != 0U);     /* probe_turn_to 被调用过 */
+        assert(fabsf(c.side_yaw_deg) > 1.0f);
+    }
+    {
+        LfController c; LfInput in; uint32_t now;
+        SynthSide w = {0.0f, 75.0f, 180.0f, tanf(0.4f * d2r), 7.5f, 0.0f, 0.0f, 0.0f};
+        side_start(&c, &in, &now, true, false, 2400U);
+        side_run(&c, &in, &now, &w, false, 0.0f);
+        assert(c.probe_phase == LF_PROBE_LASER);
+        assert(c.side_yaw_fix == 0U);      /* 死区内不许转 */
+        assert(c.turn_start_ms == 0U);
+        assert(fabsf(c.side_yaw_deg) < LF_SIDE_YAW_DEADBAND_DEG);
+        side_expect(&c, 0.0f, 75.0f, 5.0f, 8.0f);
     }
 }
 

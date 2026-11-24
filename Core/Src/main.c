@@ -898,7 +898,11 @@ static void buttons(uint32_t now) {
                 b->pressed = now; b->long_done = false;
                 if (i == 0 && (g_lf.state == LF_STOPPED || g_lf.state == LF_OBSTACLE_STOP) && !bench_active) {
                     start(now);
-                } else if (i == 1 && g_lf.state == LF_OBSTACLE_STOP && !bench_active) {
+                } else if (i == 1 && (g_lf.state == LF_OBSTACLE_STOP || g_lf.state == LF_STOPPED) &&
+                           !bench_active) {
+                    /* 探测键（PD1）也能从 STOPPED 直接开跑：人工把车摆到箱子任意宽面前，按一下就走完
+                     * AIM → 四面 × 10 s 激光 → COMPLETE_BEEPS，不再依赖上位机发 probe。
+                     * 参数用当前配置（默认 scan_mode=1 / faces=4 / laser_ms=10000 / verify=1 / aim_ms=5000 / sweep_us=900）。 */
                     start_probe(now);
                 } else {
                     stop(now);
@@ -937,6 +941,19 @@ static void snapshot(uint32_t now, const LfInput *sample) {
 
 int main(void) {
     lf_init(&g_lf); board_init();
+
+    {
+        uint32_t csr = RCC->CSR;
+        board_log("BOOT_RST,pin=%u,bor=%u,sft=%u,iwdg=%u,wwdg=%u,lpwr=%u,obl=%u\r\n",
+                  (unsigned)((csr & RCC_CSR_PINRSTF) ? 1U : 0U),
+                  (unsigned)((csr & RCC_CSR_BORRSTF) ? 1U : 0U),
+                  (unsigned)((csr & RCC_CSR_SFTRSTF) ? 1U : 0U),
+                  (unsigned)((csr & RCC_CSR_IWDGRSTF) ? 1U : 0U),
+                  (unsigned)((csr & RCC_CSR_WWDGRSTF) ? 1U : 0U),
+                  (unsigned)((csr & RCC_CSR_LPWRRSTF) ? 1U : 0U),
+                  (unsigned)((csr & RCC_CSR_OBLRSTF) ? 1U : 0U));
+        RCC->CSR |= RCC_CSR_RMVF;
+    }
     /* 上电先尝试恢复上次 save 到片内 Flash 的红外标定与全部参数，保证“上电后按键即可发车” */
     bool cfg_loaded = board_flash_load(&g_lf.cal, &g_lf.cfg);
     g_lf.cfg.hw.adc_vref_v = board_adc_vref_v();
@@ -1281,6 +1298,14 @@ int main(void) {
                     board_log("PROBE_FACE,phi=%.2f,rho=%.1f,rms=%.1f,hits=%u,valid=%u\r\n",
                         (double)(g_lf.face.phi * 57.2957795f), (double)g_lf.face.rho,
                         (double)g_lf.face.rms, (unsigned)g_lf.face.hits, (unsigned)g_lf.face.valid);
+                    /* M4f：AIM 改 0~180° 全行程 + 角域边界法后的自检行。
+                     * bw=1 表示 φ 来自两条棱边（角域边界法），bw=0 表示退回了平面拟合。
+                     * th_l/th_r 是两条棱边的方位角，w 是它们之间的宽度（宽面 ≈150、窄面 ≈50），
+                     * aim 是两条棱边中点方向 —— 偏心时它与 phi 会差 1~2°，正面打靶该瞄 aim。 */
+                    board_log("PROBE_AIM_BW,bw=%u,th_l=%.1f,th_r=%.1f,w=%.1f,aim=%.1f,phi=%.1f\r\n",
+                        (unsigned)g_lf.aim_bw_ok, (double)g_lf.aim_bw_th_l_deg,
+                        (double)g_lf.aim_bw_th_r_deg, (double)g_lf.aim_bw_w_mm,
+                        (double)g_lf.aim_bw_aim_deg, (double)(g_lf.face.phi * 57.2957795f));
                     /* 本轮扫掠找到障碍物平面的垂直(法线)方向：打印瞄准结果，便于现场核对偏转角 */
                     float angle_deg = ((float)g_lf.best_servo_us - (float)g_lf.cfg.servo_center_us) /
                                       LF_PROBE_SCAN_US_PER_DEG;

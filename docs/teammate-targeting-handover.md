@@ -16,7 +16,14 @@
 | M2 | ✅ 已烧录 + 4 次台架全流程验证 | 侧视横扫 `SIDE_LOCK → SIDE_SCAN → SIDE_MOVE(+VERIFY) → LASER`；台架命令 `side` / `side push`；11 个 `probe_side_*` 参数；**M2 阶段自动流程保持 M1**（AIM→正面 LASER），**M3 已接入** `AIM→TURN_PAR→SIDE_LOCK` |
 | M3 | ✅ 代码+单测，宽→窄台架通过；⏳ Gate 0 | `TURN_PAR` 接在 AIM 后；`LEG` = DRIVE1→TURN→DRIVE2（**无 ALIGN**），宽→窄下一面 `h=215 ok=1`、`w=43.6 NARROW`、`TURN 90/91` 实车左转；`BOARD_SWAP_LR=0`、`track_mm=112.5`。**2026-11-23 实车通过 G0-2（TURN_PAR `-90.4/-91.0`）与 G0-4（faces=2 自动，面2 `w=65.9 NARROW`）**；G0-3 窄→宽待跑。详见 **[M3-task-handover.md](M3-task-handover.md)** |
 | M4 | 🚧 Gate 0 进行中（G0-2/G0-4 已过，G0-3 待跑） | 已落地：LEG 侧距连续采样、沿面 60 mm 平移测斜、`seg=BACKUP`、宽窄判据 100、锁定容差 70；计划：四面循环、回 AIM 重试、h_pred/pred 跨面、`probetour`、参数/Flash 8。见 [M4计划_评审与修订.md](../../M4计划_评审与修订.md) 与 [M4-gate0-20261123.md](M4-gate0-20261123.md) |
+| M4f | ✅ 已烧录（2026-11-24 20:31） | AIM 改 **0~180° 全行程 + 角域边界法**（φ/宽度由两条棱边决定，TLS 主轴 + γ 补偿）；**二次微调重新启用、死区 1°**；**打靶精度仍未解决** → 见下方 ⚠ 与 [M4f-aim-boundary-20261124.md](M4f-aim-boundary-20261124.md) |
 | M5 | ⏳ | 参数冻结、`probe_dry_run`、报告与日志归档 |
+
+> ⚠ **当前未解决（2026-11-24 交接重点）**：四面全流程能跑通（145.7 s、四面 `SIDE_LOCK ok=1 warn=0`），
+> 但**光斑稳定偏向小车后方**，宽面五等分（30 mm/带，2/4/6/4/2）时得分只有 **2~4 分**。
+> 已排除：e≈0（激光与超声装在一起）、中点算错（两遍独立扫描只差 9.1 mm）、停车不可复现（±10 mm）、点数太少。
+> 唯一剩下的候选：**激光与声波轴线有固定夹角 α**（光斑偏移 = `h·tanα`，h 四面相近 → 表现为常数、同侧）。
+> 判定方法（10 分钟、不驱动电机）与一行修法见 [M4f-aim-boundary-20261124.md](M4f-aim-boundary-20261124.md) §6。
 
 ### 新增 / 变更的命令
 

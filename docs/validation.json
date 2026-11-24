@@ -729,6 +729,56 @@
    "parsers": "_dsh_nt/m4e_full_run.py 与 m4e_abc_run.py 已改为兼容两版（旧日志仍可解析）",
    "flashed": false,
    "note": "与 pending_next_flash 的 1 行认面窗口修正一起，等下次烧录批次带上"
+  },
+  "aim_boundary_20261124": {
+   "date": "2026-11-24 20:31（烧录）",
+   "what": "AIM 改 0~180° 全行程扫掠 + 角域边界法（φ / 宽度由两条棱边决定）；扫描后二次微调重新启用、死区 1°",
+   "why": "AIM 的 φ 实测偏 4~18°（由侧扫长基线反推，σ=0.6°），TURN_PAR 后车头与面不平行 → 侧扫 h 沿面漂 40 mm、w 不稳；且旧 ±30° 扫掠本就超出 150 mm 面在 163 mm 处的 ±24.7°，端点被背景墙拉偏",
+   "method": "① 边界角 = 最后面内帧与第一面外帧的中点；② 减半个波束角 γ（实测渐变带 49mm/190mm=14.8°≈2γ）；③ 面内点做笛卡尔主轴 TLS 拟合得面直线；④ 边界射线 × 面直线 = 棱边点 → 切线/法线/宽度/中心；⑤ 兜底退回原 1/r 平面拟合",
+   "params": {
+    "sweep_us": "300 → 900（600..2400us = 0~180°）",
+    "aim_ms": "3000 → 5000（每段）",
+    "step_us": "60 → 30",
+    "scan_points": "41 → 64",
+    "min_dwell_ms": "180 → 120",
+    "skip_ms": "120 → 60",
+    "aim_settle_ms": "150 → 400",
+    "yaw_enable": "0 → 1",
+    "yaw_deadband_deg": "4.0 → 1.0"
+   },
+   "tests": {
+    "host": "38/38",
+    "probefit": "宽面 0° 无噪声：bw=1 th=-26.6/26.6 w=149.9 phi=0.00 rho=149.9 rms=0.2；窄面 w=50.6；-12°+3mm 噪声+10% 丢帧 phi 误差 <1.5°",
+    "probesideyawfix": "面斜 10° 必须转正；面斜 0.4° 一次都不转",
+    "probeaim_probetour": "tick 预算按 10 s AIM 放宽到 20 s"
+   },
+   "sizes": {
+    "debug": 114192,
+    "release": 107064,
+    "warnings": 0
+   },
+   "flashed": true,
+   "flash_cmd": "STM32_Programmer_CLI -c port=SWD freq=1000 mode=UR reset=HWrst -w build/Debug-make/line-following.elf -v -rst（ATTEMPT=1 EXIT=0）",
+   "post_flash": "python tools/host_station.py push --port COM3 --mode GROUND → MCAL=1(GROUND gnd=1)；PROBE_CFG 已确认 aim_ms=5000 sweep_us=900",
+   "new_log": "PROBE_AIM_BW,bw=1,th_l=-26.6,th_r=26.6,w=149.9,aim=0.0,phi=0.0",
+   "time_cost": {
+    "aim_s": "6.0 → 10.4（一次性）",
+    "yaw_fix_s": "每次触发 +10~11（转身+退回原点重扫，实测 22:35 face0 33.8 s vs 22:46 22.9 s）",
+    "risk": "四面都触发 → 约 190 s > 180 s 上限；先跑一面看触发率，超时把死区改回 2~3°"
+   },
+   "open_issue": {
+    "title": "打靶仍然不精准（光斑稳定偏向小车后方）",
+    "symptom": "四面全流程能跑通，但宽面五等分（30 mm/带，2/4/6/4/2）只拿 2~4 分；6 分要求离面中心 ≤15 mm，2 分 = 45~75 mm",
+    "excluded": {
+     "e_offset": "≈0（激光与超声装在一起，现场确认）",
+     "midpoint": "两遍独立扫描中点只差 9.1 mm、w=145.5（真值 150）→ 中点与停车都可复现到 ~10 mm",
+     "sampling": "3 mm/帧、65 点；渐变带里已有 16 点，加点数无效"
+    },
+    "candidate": "激光与声波轴线的固定夹角 α：光斑偏移 = h·tanα（h=176~192 四面相近 → 表现为常数、永远同一侧）；45mm→13.4°、60mm→17.6°",
+    "next_step": "同一面两个站距（h≈190 / 120）各静态打一次，量光斑到边沿距离：随 h 成比例缩 = 角度 α（发激光时舵机加 10·α µs，扫描仍用 2400）；不变 = 位置（靶纸偏心 / 装配间距）",
+    "static_cmd": "outtest servo 2400 30000 + outtest laser 1 10000（不驱动电机，车不动）",
+    "doc": "docs/M4f-aim-boundary-20261124.md §6"
+   }
   }
  }
 }
