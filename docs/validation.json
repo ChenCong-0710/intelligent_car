@@ -720,6 +720,15 @@
    "code_map": "docs/codebase-guide.md 模块 8b/8c/8d（已按最终实现更新）",
    "interface_contract": "接口契约_M1.md（新增 h_ref_mm / side_pred_mm / side_seek_* / leg_face_* / leg_stop_reason 与 warn=10~13）",
    "design_deviations": "方案_四面靶心定位与绕行.md 末尾「实施偏差记录（2026-11-23）」"
+  },
+  "log_slim_20261124": {
+   "what": "PROBE_SIDE_LOCK 行删掉 5 个恒为定值的字段（h2/h3/corr/ds/eps/shift），只保留 h,pred,us,ok,h1,warn",
+   "why": "它们会骗人：h2 恒 0（测斜段删除后从未采样）、h3≡h1、corr/ds/eps 恒 0、shift 只剩面宽给的 60/30（没有任何平移发生）。2026-11-24 排故时曾把 h2=0 误读成「换角重测丢回波」",
+   "new_format": "PROBE_SIDE_LOCK,h=176.0,pred=177.8,us=2400,ok=1,h1=176.0,warn=0",
+   "firmware": "Debug 112920 B（原 113088 B，-168 B），0 告警，主机单测 38/38",
+   "parsers": "_dsh_nt/m4e_full_run.py 与 m4e_abc_run.py 已改为兼容两版（旧日志仍可解析）",
+   "flashed": false,
+   "note": "与 pending_next_flash 的 1 行认面窗口修正一起，等下次烧录批次带上"
   }
  }
 }

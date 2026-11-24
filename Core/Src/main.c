@@ -1293,15 +1293,16 @@ int main(void) {
                 /* 侧视锁定自检结果：h 与 rho + pan_x 的差就是「转角不对/认错面」的唯一报警 */
                 if (previous_probe_phase == LF_PROBE_SIDE_LOCK) {
                     const LfProbeConfig *lp = &g_lf.cfg.probe;
-                    /* pred 必须读控制器实际用的那个值（面 1~3 是 h_leg+margin，不是 rho+pan_x） */
+                    /* pred 必须读控制器实际用的那个值（面 1~3 = h_ref，不是 rho+pan_x）。
+                     * 2026-11-24：删掉 5 个恒为定值的死字段，它们会骗人 ——
+                     *   h2 恒 0（测斜删后从未采样）、h3 恒等于 h1、corr/ds/eps 恒 0（测斜遗留）、
+                     *   shift 只剩面宽给的 60/30（并没有任何平移发生）。
+                     * 现在这一行只描述"实际发生了什么"：一次 5 帧中位数 = h1，写进 side_h 就是 h。 */
                     float pred = g_lf.side_pred_mm;
-                    board_log("PROBE_SIDE_LOCK,h=%.1f,pred=%.1f,us=%u,ok=%u,h1=%.1f,h2=%.1f,h3=%.1f,corr=%.1f,warn=%u,ds=%.0f,eps=%.1f,shift=%.0f\r\n",
+                    board_log("PROBE_SIDE_LOCK,h=%.1f,pred=%.1f,us=%u,ok=%u,h1=%.1f,warn=%u\r\n",
                               (double)g_lf.side_h, (double)pred, (unsigned)lp->side_us,
                               (unsigned)(g_lf.probe_phase == LF_PROBE_SIDE_SCAN ? 1U : 0U),
-                              (double)g_lf.side_h1, (double)g_lf.side_h2, (double)g_lf.side_h3,
-                              (double)(g_lf.side_tilt_corr_rad * 57.2957795f), (unsigned)g_lf.side_lock_warn,
-                              (double)g_lf.side_shift_peak_mm, (double)g_lf.side_tilt_eps_deg,
-                              (double)g_lf.side_tilt_shift_mm);
+                              (double)g_lf.side_h1, (unsigned)g_lf.side_lock_warn);
                 }
                 if (previous_probe_phase == LF_PROBE_TURN_PAR) {
                     /* TURN_PAR 结束（成功进 SIDE_LOCK 或失败停机都打）：cmd/ach 是停稳后的值。
