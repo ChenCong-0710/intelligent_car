@@ -1,0 +1,31 @@
+{
+  "firmware": "A50_SYNC_V3",
+  "file": "Debug/a50_sync/a50_sync_2000.hex",
+  "status": "ST-LINK write verified successfully, reset; received correct IDLE error=OK on COM4",
+  "source": "Core/Src/motion_pd.c",
+  "change": "Count difference L-R drives differential target references. Old direct duty count correction removed. Inner positional speed PD retained without I.",
+  "outer_gains": {
+    "count_Kp": 0.25,
+    "filtered_speed_difference_Kd": 0.4,
+    "speed_filter_alpha": 0.4,
+    "count_deadband": 2,
+    "max_reference_correction": 12,
+    "max_correction_change_per_50ms": 2
+  },
+  "reference": "Common50/50ms; L=common-correction R=common+correction; startup ramps both; when one wheel brakes disable sync and remaining wheel targets common.",
+  "endpoints": "Forward once, each wheel brakes at2000 raw A edges, no reverse correction or automatic restart. Actual coast counts preserved.",
+  "display": "Raw A edges/50ms, PWM%, cumulative A edges, unchanged large font",
+  "telemetry": "diff count difference; sync100 differential-reference correction x100; log work/a50_sync_20261125_155229.*",
+  "software_validation": {
+    "asymmetric_model_sync_off": {
+      "peak_count_diff": 340,
+      "mean_count_diff": 154.931
+    },
+    "asymmetric_model_sync_on": {
+      "peak_count_diff": 12,
+      "mean_count_diff": 8.865
+    },
+    "warning": "Model only, not real-car validation or direct old-firmware comparison."
+  },
+  "hardware_validation": "Awaiting test, do not claim heading/path solved."
+}

@@ -1,0 +1,25 @@
+{
+  "firmware": "A50_SYNC_V4",
+  "observed_v3": {
+    "samples": 314,
+    "mean_signed_count_difference": 7.531847133757962,
+    "peak_absolute_count_difference": 13,
+    "note": "Telemetry sample statistics, excludes startup and braking. Residual bias, not unbounded drift."
+  },
+  "change": {
+    "count_Kp": [
+      0.25,
+      0.55
+    ],
+    "speed_difference_Kd": [
+      0.4,
+      0.65
+    ],
+    "count_deadband": [
+      2,
+      1
+    ]
+  },
+  "unchanged": "Inner speed position-form PD without I; max target correction12; correction slew2/sample; common target50 raw A edges/50ms, soft start500ms, per-wheel2000 brake, forward once, no post-stop correction.",
+  "validation": "Software regression required; straight-line physical path and wheel slip remain external validation."
+}

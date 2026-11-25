@@ -1,0 +1,32 @@
+{
+  "firmware": "PULSE20_PD_V1",
+  "target_counts_per_20ms": 18,
+  "speed_sample_ms": 20,
+  "position_form_pd": true,
+  "integral": false,
+  "endpoint_reverse_correction": false,
+  "wheel_diameter_mm": 43,
+  "encoder_counts_per_turn": 840,
+  "track_mm": 132,
+  "straight_counts": 622,
+  "left_turn_counts": [
+    [
+      -215,
+      215
+    ],
+    [
+      -430,
+      430
+    ],
+    [
+      -645,
+      645
+    ]
+  ],
+  "global_distance_variable": "g_distance_pulses",
+  "reset": "At average wheel progress reaching 622, brake both wheels and clear segment distance. Preserve wheel totals through braking and last_straight after settled.",
+  "display": "Only target counts/20ms, actual signed wheel counts/20ms, last settled straight wheel counts. 12x24 font.",
+  "build": "Debug/pulse20/pulse20_motion.hex",
+  "tests": "tests/test_pulse20.exe passed; no real-car acceptance yet",
+  "notes": "Fixed 18-count reference; per-wheel directional feedforward estimated from actual open-loop data. No rpm conversion in action firmware. Short moves may overshoot during braking; warnings retained, no completion correction."
+}

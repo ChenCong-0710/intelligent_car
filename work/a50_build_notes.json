@@ -1,0 +1,14 @@
+{
+  "firmware": "A50_PD_V1",
+  "capture": "TIM4 PB6 and TIM3 PA6 CH1 BOTHEDGE input capture interrupts; B PB7/PA7 direction only",
+  "units": "raw signed A edges in non-overlapping 50ms windows, no rpm/distance conversion or artificial count multiplier",
+  "sequence": "IDLE -> PD0 release -> forward each wheel 2000 -> both settled -> 2000ms pause -> reset per-segment global counters -> reverse each wheel 2000 -> both settled -> STOPPED brake hold. Does not loop.",
+  "globals": "g_motor_pulses[2], direction-normalized segment displacement; phase stopped freezes values; signed sampler remains active",
+  "controller": "position-form absolute PWM FF + Kp*error + Kd*filtered error difference + bounded count synchronization; no I; initial feedforward, not real-car tuned",
+  "smoothing": "500ms smoothstep start; last400 counts smoothstep reference50->20; normal drive PWM step <=0.06 duty each50ms. Endpoint threshold and emergency stop brake immediately, no reverse correction.",
+  "display": "12x24 font: raw A edges/50ms, signed PWM percent, each wheel segment total. No A high/low state.",
+  "counting_change": "Old TI12 x4 -> A-only x2, half old quadrature counts at same travel, twice A single-edge counts. Counter polarity assumes previous inverted-A direction; verify first run.",
+  "firmware_path": "F:\\STM32CUBEIDE\\TEST\\Debug\\a50\\a50_motion.hex",
+  "source_backup": "backups/before_a50_20261125_152643",
+  "tests": "test_a50.c software tests; physical edge capture, speed stability, overshoot and return location remain unverified"
+}

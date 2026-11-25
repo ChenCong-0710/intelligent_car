@@ -1,0 +1,19 @@
+{
+  "firmware": "A50_FWD_V2",
+  "request": "Soft start -> forward each wheel 2000 raw A edges -> stopped; no automatic reverse/restart",
+  "observed_old_failure": {
+    "error": "STALL",
+    "counts": [
+      1918,
+      1896
+    ],
+    "pwm1000_before_fault": [
+      276,
+      306
+    ],
+    "source": "work/a50_20261125_154143.jsonl"
+  },
+  "fix": "Remove low endpoint reference that stopped the real wheels; maintain 50-count/50ms target after 500ms startup until each independent 2000 threshold. Preserve actual coast counts rather than clamping display. Stall protection unchanged.",
+  "tests": "test_a50_fwd.c; software tests do not establish real-car stopping accuracy",
+  "file": "Debug/a50_fwd/a50_fwd_2000.hex"
+}
