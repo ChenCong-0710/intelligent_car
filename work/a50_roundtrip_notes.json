@@ -1,0 +1,60 @@
+{
+  "firmware": "A50_ROUNDTRIP_V1",
+  "folder": "F:\\STM32CUBEIDE\\TEST",
+  "confirmed_counting": "Forward and reverse both raw A rising+falling edges, each segment2000",
+  "soft_stop_ms": 300,
+  "pause_after_settled_ms": 2000,
+  "sequence": "forward -> after2000 ramp down -> settled -> wait2s -> reset segment only -> reverse -> after2000 ramp down -> settled stop",
+  "controller": "portable/dual_motor/dual_motor.c with V4 sync and positional PD, no integral. Core bidirectional API and optional soft stop. Application Core/Src/motion_pd.c orchestrates wait/reverse.",
+  "tests": "test_roundtrip.exe and test_portable.py passed; 50,000 V4 default trace equivalence retained",
+  "flash_file": "Debug/a50_roundtrip/a50_roundtrip_2000.hex",
+  "physical_validation": "Observed complete forward/settled wait/reset/reverse/final stop. Trigger2000 verified. Final coast differences exist; exact return position not established.",
+  "flash": "ST-LINK download and verify successful, reset performed.",
+  "telemetry_log": "work/a50_roundtrip_20261125_194118.jsonl",
+  "completed_observed_runs": [
+    {
+      "ms": 28800,
+      "fwdL": 2095,
+      "fwdR": 2091,
+      "revL": 2099,
+      "revR": 2107,
+      "triggerL": 2000,
+      "triggerR": 2000,
+      "error": "OK",
+      "txdrop": 0
+    },
+    {
+      "ms": 43000,
+      "fwdL": 2094,
+      "fwdR": 2093,
+      "revL": 2106,
+      "revR": 2110,
+      "triggerL": 2000,
+      "triggerR": 2000,
+      "error": "OK",
+      "txdrop": 0
+    },
+    {
+      "ms": 58000,
+      "fwdL": 2098,
+      "fwdR": 2108,
+      "revL": 2061,
+      "revR": 2100,
+      "triggerL": 2000,
+      "triggerR": 2000,
+      "error": "OK",
+      "txdrop": 0
+    },
+    {
+      "ms": 74500,
+      "fwdL": 2098,
+      "fwdR": 2094,
+      "revL": 2105,
+      "revR": 2109,
+      "triggerL": 2000,
+      "triggerR": 2000,
+      "error": "OK",
+      "txdrop": 0
+    }
+  ]
+}

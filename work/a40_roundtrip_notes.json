@@ -1,0 +1,19 @@
+{
+  "firmware": "A40_ROUNDTRIP_V2",
+  "units": "Raw A rising+falling edges / 50ms; both directions",
+  "application_profile": {
+    "cruise_target": 40,
+    "sync_count_kp": 0.45,
+    "sync_rate_kd": 0.65,
+    "sync_max": 8,
+    "sync_slew_per_50ms": 0.5,
+    "sync_filter_alpha": 0.25,
+    "duty_slew_per_50ms": 0.04
+  },
+  "unchanged": "V4 portable defaults; speed position-form PD without I; soft start500ms; threshold2000 then soft brake300ms; wait2s after settled; reset segment before reverse; final stop without loop or post-stop correction.",
+  "path": "Debug/a40_roundtrip/a40_roundtrip_2000.hex",
+  "real_car_validation": "Pending; target40 does not imply actual40, path stability must be observed.",
+  "flash": "ST-LINK write and verify successful, MCU reset",
+  "confirmed_telemetry": "A40_ROUNDTRIP_V2 IDLE error=OK txdrop=0",
+  "log": "work/a40_roundtrip_20261125_194704.jsonl"
+}

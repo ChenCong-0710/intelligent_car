@@ -1,7 +1,10 @@
 #ifndef MOTION_PD_H
 #define MOTION_PD_H
-#include <stdbool.h>
-#include <stdint.h>
+#include "../../portable/dual_motor/dual_motor.h"
+typedef DualMotor MotionPd;
+typedef DualMotorWheel PdWheel;
+typedef DualMotorPhase MotionPhase;
+typedef DualMotorError MotionError;
 #define MOTION_SPEED_MS 50U
 #define MOTION_TARGET_PULSES 50.0f
 #define MOTION_GOAL_PULSES 2000
@@ -18,28 +21,30 @@
 #define MOTION_SYNC_MAX 12.0f
 #define MOTION_SYNC_SLEW 2.0f
 #define MOTION_SYNC_DEADBAND 1.0f
-/* Units are raw A-channel edges; no wheel circumference or speed conversion. */
-typedef enum {MP_IDLE,MP_RUN,MP_BRAKE,MP_PAUSE,MP_STOPPING,MP_STOPPED,MP_FAULT} MotionPhase;
-typedef enum {MP_OK,MP_DRIVER,MP_ENCODER,MP_DIRECTION,MP_STALL,MP_TIMEOUT,MP_NOT_SETTLED,MP_OVERSPEED,MP_WATCHDOG} MotionError;
-typedef struct {
- uint16_t previous_counter;
- int64_t total;
- int32_t sample_sum;
- float speed_pulses,target_pulses,previous_error,derivative,duty;
- uint32_t wrong_since,stall_since,overspeed_since;
-} PdWheel;
-typedef struct {
- MotionPhase phase;MotionError error;
- bool running,enable,braked[2];
- unsigned action,sample_ms;
- int32_t sync_error;float sync_rate,sync_correction;
- uint32_t now,since,drive_since,stopped_since;
- int64_t origin[2];
- int32_t actual[2],at_brake[2],forward_result[2];
- PdWheel wheel[2];
-} MotionPd;
+#define MP_IDLE DM_IDLE
+#define MP_RUN DM_RUN
+#define MP_BRAKE DM_BRAKE
+#define MP_PAUSE DM_PAUSE
+#define MP_STOPPING DM_STOPPING
+#define MP_STOPPED DM_STOPPED
+#define MP_FAULT DM_FAULT
+#define MP_OK DM_OK
+#define MP_DRIVER DM_DRIVER
+#define MP_ENCODER DM_ENCODER
+#define MP_DIRECTION DM_DIRECTION
+#define MP_STALL DM_STALL
+#define MP_TIMEOUT DM_TIMEOUT
+#define MP_NOT_SETTLED DM_NOT_SETTLED
+#define MP_OVERSPEED DM_OVERSPEED
+#define MP_WATCHDOG DM_WATCHDOG
 extern volatile uint32_t g_motor_pulses[2];
 void motion_init(MotionPd *m,uint16_t left,uint16_t right);
+typedef enum {MS_IDLE,MS_FORWARD,MS_WAIT,MS_REVERSE,MS_DONE,MS_CANCELLED,MS_FAULT} MotionSequenceStage;
+bool motion_busy(const MotionPd *m);
+MotionSequenceStage motion_sequence_stage(void);
+const char *motion_sequence_name(void);
+uint32_t motion_wait_remaining(const MotionPd *m);
+extern int32_t g_motion_results[2][2];
 void motion_start(MotionPd *m);
 void motion_stop(MotionPd *m);
 void motion_trip(MotionPd *m,MotionError error);
