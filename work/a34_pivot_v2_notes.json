@@ -1,0 +1,17 @@
+{
+  "firmware": "A34_PIVOT_R90_V2",
+  "original_threshold": 645,
+  "original_final_count_observed": 646,
+  "user_measured_body_angle_deg_approx": 95,
+  "desired_body_angle_deg": 90,
+  "correction_scale": "90/95",
+  "new_threshold": 611,
+  "unchanged": "Left wheel braked; right34 raw A both edges/50ms positional PD; soft start500ms; immediate endpoint brake; no reverse correction or loop. Track geometry and PD unchanged.",
+  "validation": "Single measurement approximate calibration; new physical angle must be measured again.",
+  "file": "Debug/a34_pivot_v2/a34_pivot_r90_v2.hex",
+  "backup": "F:\\STM32CUBEIDE\\TEST\\backups\\before_pivot_cal_20261125_200050",
+  "software_checks": "Single-wheel PD/611 threshold hard stop/coast/protection tests passed",
+  "flash": "ST-LINK download verified successfully, MCU reset",
+  "confirmed_telemetry": "A34_PIVOT_R90_V2 IDLE error=OK txdrop=0",
+  "telemetry_log": "work/a34_pivot_v2_20261125_200118.jsonl"
+}

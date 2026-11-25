@@ -1,0 +1,26 @@
+{
+  "firmware": "A34_PIVOT_SEQ_V1",
+  "absolute_angles_deg": [
+    30,
+    120,
+    60,
+    0
+  ],
+  "absolute_count_targets": [
+    204,
+    814,
+    407,
+    0
+  ],
+  "reference": "Initial right encoder total saved at PD0 start; next segment difference uses actual net count including brake coast, not nominal previous step.",
+  "speed": "Only right wheel, target magnitude34 A both edges/50ms, original positional PD and hard stop. Left brake always.",
+  "wait": "Each of first3 stages: 5000ms after both wheels settled; fourth stop then DONE. One sequence per key release.",
+  "end_correction": "None. Final coast may leave small signed residual; no unrequested reverse correction.",
+  "calibration": "Forward90 was confirmed precise by user with scale90/95 and611 threshold; other angles/reverse require physical validation.",
+  "file": "Debug/a34_pivot_sequence/a34_pivot_sequence.hex",
+  "backup": "F:\\STM32CUBEIDE\\TEST\\backups\\before_pivot_sequence_20261125_200701",
+  "software_checks": "test_pivot_sequence.exe passed; actual coast compensation across4stages, three exact5000ms settled waits, fixed-left reverse/stop and cancel/fault tested",
+  "flash": "Verified successfully via ST-LINK under reset at950kHz after initial core-ID connection failure; MCU reset",
+  "confirmed_telemetry": "A34_PIVOT_SEQ_V1 IDLE error=OK txdrop=0",
+  "telemetry_log": "work/a34_pivot_seq_20261125_200907.jsonl"
+}

@@ -37,6 +37,7 @@ typedef struct {
  float decel_start_duty[2];int32_t goal_trigger[2];
  DualMotorConfig config;
  uint32_t counts[2];
+ int32_t wheel_goal[2]; /* 0: hold this wheel braked; positive: segment goal */
  unsigned action,sample_ms;
  int32_t sync_error;float sync_rate,sync_correction;
  uint32_t now,since,drive_since,stopped_since;
@@ -63,6 +64,9 @@ void dual_motor_start(DualMotor *motor);
 /* direction must be +1 or -1. Returns false if busy, faulted or invalid.
  * Resets segment counts ONLY; free-running encoder counters must not reset. */
 bool dual_motor_start_direction(DualMotor *motor,int direction);
+/* Per-wheel count goals, common signed direction. A zero goal holds that wheel
+ * braked. Both zero or negative goals are invalid. Used for single-wheel pivots. */
+bool dual_motor_start_wheels(DualMotor *motor,int direction,int32_t left_goal,int32_t right_goal);
 void dual_motor_stop(DualMotor *motor);
 void dual_motor_trip(DualMotor *motor,DualMotorError error);
 /* Call exactly once each 1ms with FREE-RUNNING signed-direction 16-bit counters.

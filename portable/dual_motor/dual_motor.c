@@ -27,16 +27,20 @@ static void begin(DualMotor *m){
  for(unsigned w=0;w<2;++w){
   DualMotorWheel *p=&m->wheel[w];m->origin[w]=p->total;m->actual[w]=m->at_brake[w]=0;m->counts[w]=0;
   p->sample_sum=0;p->speed_pulses=0;p->target_pulses=0;
-  p->previous_error=p->derivative=p->duty=0;m->braked[w]=false;
+  p->previous_error=p->derivative=p->duty=0;m->braked[w]=m->wheel_goal[w]==0;
   m->decelerating[w]=false;m->decel_since[w]=0;m->decel_start_duty[w]=0;m->goal_trigger[w]=0;
   p->wrong_since=p->stall_since=p->overspeed_since=m->now;
  }
  phase(m,DM_RUN);
 }
-bool dual_motor_start_direction(DualMotor *m,int sign){
- if((sign!=1&&sign!=-1)||m->running||m->phase==DM_STOPPING||m->phase==DM_FAULT)return false;
+bool dual_motor_start_wheels(DualMotor *m,int sign,int32_t left_goal,int32_t right_goal){
+ if((sign!=1&&sign!=-1)||left_goal<0||right_goal<0||(!left_goal&&!right_goal)||m->running||m->phase==DM_STOPPING||m->phase==DM_FAULT)return false;
  m->move_direction=sign;m->action=sign>0?0U:1U;m->error=DM_OK;m->running=true;
+ m->wheel_goal[0]=left_goal;m->wheel_goal[1]=right_goal;
  memset(m->forward_result,0,sizeof(m->forward_result));begin(m);return true;
+}
+bool dual_motor_start_direction(DualMotor *m,int sign){
+ return dual_motor_start_wheels(m,sign,m->config.goal_counts,m->config.goal_counts);
 }
 void dual_motor_start(DualMotor *m){(void)dual_motor_start_direction(m,1);}
 void dual_motor_stop(DualMotor *m){brake(m,0);brake(m,1);m->running=false;m->enable=true;phase(m,DM_STOPPING);}
@@ -102,7 +106,7 @@ void dual_motor_tick_1ms(DualMotor *m,uint16_t left,uint16_t right,bool driver_o
  if(m->phase==DM_RUN){
   if(m->now-m->drive_since>=m->config.action_timeout_ms){dual_motor_trip(m,DM_TIMEOUT);return;}
   for(unsigned w=0;w<2;++w){
-   if(!m->braked[w]&&!m->decelerating[w]&&m->actual[w]>=m->config.goal_counts){
+   if(!m->braked[w]&&!m->decelerating[w]&&m->actual[w]>=m->wheel_goal[w]){
     m->goal_trigger[w]=m->actual[w];
     if(m->config.soft_stop_ms){
      m->decelerating[w]=true;m->decel_since[w]=m->now;

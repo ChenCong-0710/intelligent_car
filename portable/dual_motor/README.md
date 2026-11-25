@@ -161,3 +161,23 @@ TEST的`Core/Src/motion_pd.c`负责：FORWARD -> 双轮STOPPED -> WAIT_2S -> 清
 应用初始化改为cruise_target=40（A相双沿/50ms），同步行程增益0.45、速度差阻尼0.65、修正限幅±8、修正每次最多变化0.5、速度差滤波系数0.25、PWM每次最大变化0.04。参数位于Core/Src/motion_pd.c的motion_init；库默认值保留原V4，未修改。前后各2000、达到阈值后300ms渐停、停稳等2秒再清零后退、结束后不循环均保留。
 
 构建python tools/build_a40_roundtrip.py，输出Debug/a40_roundtrip/a40_roundtrip_2000.hex；采集tools/capture_a40_roundtrip.py。tests/test_a40_profile.c检查低速负载模型、同步修正变化率和完整往返流程。实车稳定性以日志和轨迹观察为准，不能把目标40等同于实际40。
+
+## 单轮转动接口与TEST的90度初测 A34_PIVOT_R90_V1
+
+新增`dual_motor_start_wheels(&car, +1, 0, right_count_goal)`：左目标为0即全程制动，右轮独立位置式PD。左右目标都为0、负目标、无效方向、忙或故障时拒绝启动。原双轮入口继续给两轮相同目标，默认控制行为保留。
+
+TEST当前单轮配置：右轮目标34个A相双沿/50ms，左轮0，保留500ms起步；sync_enabled=false、soft_stop_ms=0。右轮达到目标立即制动，最终真实余量照常保留；只执行一次，不自动往返。
+
+这里90度指车体绕左轮转90度；右轮前进对应车体左转。几何初值N=angle_deg*132*420/(180*43)，90度约645个A相双沿。420/轮来自旧A/B四倍频840的一半，尚未单独实测确认。轮胎打滑、轮距与制动余量会影响转角，所以645仅是首轮标定初值。实际车体角度theta测出后，候选新值约Nnew=Nold*90/theta，需多次复测，不能将几何角度当作实测角度。
+
+修改目标角度用Core/Inc/motion_pd.h的MOTION_PIVOT_ANGLE_DEG，换算函数motion_pivot_counts位于应用层；原有直行往返版本已备份。构建tools/build_a34_pivot.py，固件Debug/a34_pivot/a34_pivot_r90.hex；采集tools/capture_a34_pivot.py。已运行单轮输出、阈值急停、真实余量、负载模型、保护和V4默认等价性检查，物理角度待测。
+
+## 已校准单轮的累计角度序列 A34_PIVOT_SEQ_V1
+
+应用层采用初始右轮累计计数作为绝对基准，目标角度30/120/60/0，对应标定净计数204/814/407/0。每次用“下一绝对目标减去当前真实净计数”调用dual_motor_start_wheels(m, sign, 0, abs(difference))，因此分段阈值会计入前一段刹车后的余量。左轮全程制动，右轮34双沿/50ms、500ms起步、到点急停。前三段实际停稳后各等5000ms，第四段停止后DONE；不循环、不追加终点回调。
+
+30/120/60/0是相对按PD0启动朝向的累计角度，不是独立再转30/120/60/0。只确认过前向90度标定精确，其余角度和反向机械效果待实测。归零是编码器基准归零，不是外部航向传感器闭环。
+
+屏幕显示速度、PWM和相对启动基准的左右净计数，底部显示目标角度及等待秒数。遥测netR对应净计数，countR对应本段行程，absGoal为绝对目标，segmentGoal为本段阈值；两者含义不同。等待期间PD0仍可中止后续动作。
+
+构建tools/build_a34_pivot_sequence.py，固件Debug/a34_pivot_sequence/a34_pivot_sequence.hex，测试tests/test_pivot_sequence.c，采集tools/capture_a34_pivot_sequence.py。

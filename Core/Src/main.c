@@ -77,11 +77,15 @@ typedef struct {
  int32_t sync_error;float sync_correction;
  const char *sequence;uint32_t wait_ms;
  bool decelerating[2];int32_t trigger[2],results[2][2];
+ unsigned step,target_deg;int32_t absolute_goal,segment_goal,net[2];
  unsigned action;float duty[2],pulses[2],ref_pulses[2];int32_t actual[2];
 } MotionView;
 static MotionView snapshot(void){
  MotionView v;uint32_t saved=__get_PRIMASK();__disable_irq();
  v.phase=g_motion.phase;v.error=g_motion.error;v.ms=g_motion.now;v.action=g_motion.action;
+ v.step=motion_pivot_step();v.target_deg=motion_pivot_target_degrees();
+ v.absolute_goal=motion_pivot_absolute_goal();v.segment_goal=motion_pivot_segment_goal();
+ for(unsigned w=0;w<2;++w)v.net[w]=g_pivot_net_counts[w];
  v.sequence=motion_sequence_name();v.wait_ms=motion_wait_remaining(&g_motion);
  memcpy(v.results,g_motion_results,sizeof(v.results));
  for(unsigned w=0;w<2;++w){v.decelerating[w]=g_motion.decelerating[w];v.trigger[w]=g_motion.goal_trigger[w];}
@@ -390,14 +394,14 @@ static void bt_pump(void){
     if(USART1->ISR&(USART_ISR_ORE|USART_ISR_NE|USART_ISR_FE))USART1->ICR=USART_ICR_ORECF|USART_ICR_NECF|USART_ICR_FECF;
 }
 static void telemetry(const MotionView *v){
- static uint32_t last,seq;char line[640];
+ static uint32_t last,seq;char line[560];
  if(v->ms-last<100U)return;
  last=v->ms;
  int n=snprintf(line,sizeof(line),
- "M,fw=A40_ROUNDTRIP_V2,seq=%lu,ms=%lu,phase=%s,action=%s,error=%s,refL=%ld,refR=%ld,pulseL=%ld,pulseR=%ld,pwmL1000=%ld,pwmR1000=%ld,countL=%ld,countR=%ld,txdrop=%lu,keylow=%lu,keystops=%lu,irqUs=%lu,diff=%ld,sync100=%ld,seqstage=%s,wait=%lu,softL=%u,softR=%u,triggerL=%ld,triggerR=%ld,fwdL=%ld,fwdR=%ld,revL=%ld,revR=%ld\r\n",
- (unsigned long)seq++,(unsigned long)v->ms,motion_phase_name(v->phase),motion_action_name(v->action),motion_error_name(v->error),
- lroundf(v->ref_pulses[0]),lroundf(v->ref_pulses[1]),lroundf(v->pulses[0]),lroundf(v->pulses[1]),lroundf(v->duty[0]*1000),lroundf(v->duty[1]*1000),
- (long)v->actual[0],(long)v->actual[1],(unsigned long)bt_drop,(unsigned long)v->key_low,(unsigned long)v->key_stops,(unsigned long)v->irq_us,(long)v->sync_error,lroundf(v->sync_correction*100),v->sequence,(unsigned long)v->wait_ms,v->decelerating[0],v->decelerating[1],(long)v->trigger[0],(long)v->trigger[1],(long)v->results[0][0],(long)v->results[0][1],(long)v->results[1][0],(long)v->results[1][1]);
+ "M,fw=A34_PIVOT_SEQ_V1,seq=%lu,ms=%lu,phase=%s,action=%s,error=%s,seqstage=%s,step=%u,targetDeg=%u,absGoal=%ld,segmentGoal=%ld,netL=%ld,netR=%ld,refL=%ld,refR=%ld,pulseL=%ld,pulseR=%ld,pwmL1000=%ld,pwmR1000=%ld,countL=%ld,countR=%ld,triggerR=%ld,wait=%lu,txdrop=%lu,keylow=%lu,keystops=%lu,irqUs=%lu\r\n",
+ (unsigned long)seq++,(unsigned long)v->ms,motion_phase_name(v->phase),motion_action_name(v->action),motion_error_name(v->error),v->sequence,v->step,v->target_deg,
+ (long)v->absolute_goal,(long)v->segment_goal,(long)v->net[0],(long)v->net[1],lroundf(v->ref_pulses[0]),lroundf(v->ref_pulses[1]),lroundf(v->pulses[0]),lroundf(v->pulses[1]),
+ lroundf(v->duty[0]*1000),lroundf(v->duty[1]*1000),(long)v->actual[0],(long)v->actual[1],(long)v->trigger[1],(unsigned long)v->wait_ms,(unsigned long)bt_drop,(unsigned long)v->key_low,(unsigned long)v->key_stops,(unsigned long)v->irq_us);
  if(n>0&&(size_t)n<sizeof(line))bt_queue(line,(size_t)n);
 }
 static void screen_service(const MotionView *v){
@@ -409,10 +413,10 @@ static void screen_service(const MotionView *v){
   snprintf(rows[1],19,"L %+4ld R %+4ld",lroundf(v->pulses[0]),lroundf(v->pulses[1]));
   snprintf(rows[2],19,"PWM %%");
   snprintf(rows[3],19,"L %+4ld R %+4ld",lroundf(v->duty[0]*100),lroundf(v->duty[1]*100));
-  snprintf(rows[4],19,"%s TOTAL",v->action?"REV":"FWD");
-  snprintf(rows[5],19,"L %8ld",(long)v->actual[0]);
-  snprintf(rows[6],19,"R %8ld",(long)v->actual[1]);
-  snprintf(rows[7],19," ");
+  snprintf(rows[4],19,"NET A EDGES /START");
+  snprintf(rows[5],19,"L %8ld",(long)v->net[0]);
+  snprintf(rows[6],19,"R %8ld",(long)v->net[1]);
+  snprintf(rows[7],19,"TO %hu DEG %hhuS",(unsigned short)v->target_deg,(unsigned char)((v->wait_ms+999U)/1000U));
   for(unsigned r=0;r<8;++r){size_t n=strlen(rows[r]);while(n<18)rows[r][n++]=' ';rows[r][18]=0;}
  }
  char ch[2]={rows[row][col],0};

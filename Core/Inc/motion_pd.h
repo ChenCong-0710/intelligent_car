@@ -45,6 +45,23 @@ MotionSequenceStage motion_sequence_stage(void);
 const char *motion_sequence_name(void);
 uint32_t motion_wait_remaining(const MotionPd *m);
 extern int32_t g_motion_results[2][2];
+/* Nominal geometry for body pivot about the stationary left wheel.
+ * A-only rising+falling=420/turn estimated from previous x4=840/turn. */
+#define MOTION_PIVOT_ANGLE_DEG 90.0f
+#define MOTION_PIVOT_TRACK_MM 132.0f
+#define MOTION_PIVOT_WHEEL_MM 43.0f
+#define MOTION_PIVOT_A_EDGES_PER_TURN 420.0f
+/* Measured: nominal645 threshold produced about95deg at right target34. */
+#define MOTION_PIVOT_CAL_SCALE (90.0f/95.0f)
+int32_t motion_pivot_counts(float body_angle_deg);
+#define MOTION_PIVOT_STEPS 4U
+#define MOTION_PIVOT_WAIT_MS 5000U
+extern volatile int32_t g_pivot_net_counts[2];
+extern int32_t g_pivot_stage_results[MOTION_PIVOT_STEPS];
+unsigned motion_pivot_step(void);
+unsigned motion_pivot_target_degrees(void);
+int32_t motion_pivot_absolute_goal(void);
+int32_t motion_pivot_segment_goal(void);
 void motion_start(MotionPd *m);
 void motion_stop(MotionPd *m);
 void motion_trip(MotionPd *m,MotionError error);

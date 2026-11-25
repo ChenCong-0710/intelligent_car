@@ -1,0 +1,24 @@
+{
+  "firmware": "A34_PIVOT_R90_V1",
+  "motion": "Left wheel braked, right wheel forward, body yaws left about left wheel. One movement per PD0 release.",
+  "speed_target": "Right34 raw A both edges/50ms; left0; positional PD no I; sync disabled",
+  "start_ramp_ms": 500,
+  "stop": "At right count goal brake immediately (soft_stop_ms=0). No reversal, post-stop correction or repeat. True final counts include brake coast.",
+  "initial_goal_counts": 645,
+  "geometry": {
+    "track_mm": 132,
+    "diameter_mm": 43,
+    "estimated_A_both_edges_per_wheel_turn": 420,
+    "body_angle_deg": 90,
+    "formula": "N=angle_deg*track_mm*A_edges_per_turn/(180*wheel_diameter_mm)"
+  },
+  "calibration": "Measure actual body angle after hard stop. Candidate new threshold approx old_threshold*90/measured_angle; repeat>=3 trials. Mechanical braking and slip make this approximate.",
+  "counting_assumption": "420 derives from old x4=840. Verify if angular measurement disagrees; do not declare nominal90 achieved.",
+  "file": "Debug/a34_pivot/a34_pivot_r90.hex",
+  "backup": "F:\\STM32CUBEIDE\\TEST\\backups\\before_pivot_20261125_195417",
+  "software_checks": "test_a34_pivot.exe passed; 50,000 V4 default control traces still identical",
+  "flash": "ST-LINK download complete, verification successful, MCU reset performed",
+  "capture": "COM4 continuous listener confirmed A34_PIVOT_R90_V1 IDLE/error=OK/txdrop=0",
+  "telemetry_log": "work/a34_pivot_20261125_195806.jsonl",
+  "angle_measurement": "Awaiting actual body angle from user; nominal645 not calibrated yet"
+}
