@@ -10,7 +10,7 @@
 
 把 AIM 从「±30° 扫掠 + `1/r` 平面拟合」改成「**0~180° 全行程扫掠 + 两条棱边的角域边界法**」，
 目的是修掉 AIM 输出的法线 φ 偏 4~18°（它让 TURN_PAR 后车头与面不平行，进而把侧扫的 h、w 全带偏）；
-同时把「扫描结束二次微调」重新打开，死区按现场要求收到 **±1°**。
+同时把「扫描结束二次微调」重新打开，死区按现场要求收到 **±1.5°**。
 
 **这一边（摆正/测面）解决了；光斑仍稳定偏向小车后方 → 得分 2~4 分，原因尚未确定，见 §6。**
 
@@ -68,9 +68,9 @@
 | 项 | 旧 | 新 |
 | --- | --- | --- |
 | `LF_SIDE_YAW_ENABLE` | 0（编译掉） | **1** |
-| `LF_SIDE_YAW_DEADBAND_DEG` | 4.0 | **1.0** |
+| `LF_SIDE_YAW_DEADBAND_DEG` | 4.0 | **1.5** |
 
-触发条件不变：长基线样本 ≥30、跨度 ≥50 mm、`probe_side_width_ok(w)`、\|ε̂\| ∈ (1°, 20°)。
+触发条件不变：长基线样本 ≥30、跨度 ≥50 mm、`probe_side_width_ok(w)`、\|ε̂\| ∈ (1.5°, 20°)。
 触发后**必须**退回原扫描原点重扫（性质①的前提），这一点由 `probesideyawfix` 与 `probemovenoturn` 两个用例守着。
 
 ---
@@ -85,7 +85,7 @@ probefit          宽面 0°、无噪声：bw=1  th=-26.6/26.6  w=149.9  aim=0.0
                   窄面 50 mm：w=50.6
                   -12° + 3 mm 噪声 + 10% 丢帧：phi 误差 < 1.5°
 probesideyawfix   面斜 10° → 必须转正（side_yaw_fix≥1、turn_start_ms≠0）
-                  面斜 0.4° → 一次都不转（死区 1° 生效）
+                  面斜 0.4° → 一次都不转（死区 1.5° 生效）
 probeaim / probetour   AIM 两段全行程共 10 s，tick 预算放宽到 20 s
 ```
 
@@ -123,7 +123,7 @@ PROBE_AIM_BW,bw=1,th_l=-26.6,th_r=26.6,w=149.9,aim=0.0,phi=0.0
 
 - 无微调触发：全流程 145.7 → **约 150 s**（限 180 s）。
 - **四面都触发：约 190 s → 超时。** 现场第一轮建议只跑一面，看 `PROBE_SIDE_YAW` 的触发率；
-  超时就把 `LF_SIDE_YAW_DEADBAND_DEG` 改回 2~3°（一行）。
+  超时就把 `LF_SIDE_YAW_DEADBAND_DEG` 从当前 1.5° 改回 2~3°（一行）。
 
 ---
 
@@ -188,15 +188,18 @@ outtest stop                 # 结束
 
 舵机标度互证：`PROBE_LOCK,servo_us=1443,center_us=1500,angle_deg=-5.7` → (1443−1500)/10 = −5.7° ✓。
 
-### 6.5 若确认是角度，落地方式（一行）
+### 6.5 2026-11-24 21:05 现场结论：同轴 → α/e 排除，改成「车头 Δψ」补偿（已落地）
 
-```c
-/* LF_PROBE_LASER：只在侧视锁定后、发激光时加这个角度偏置；扫描仍用 side_us */
-c->out.servo_us = probe_servo_hold(c);
-if (c->side_locked) c->out.servo_us = (uint16_t)(c->out.servo_us + LF_LASER_BIAS_US);
-```
+现场确认 **激光与超声同轴**，靶纸/箱子没问题，因此 §6.3 的 α/e 不成立；剩下的是**扫描后车头又漂了**：
 
-`LF_LASER_BIAS_US = 10 × α`（单位 µs，符号按实测方向；光斑偏车尾 → 需要往车头方向偏 → 脉宽**减小**）。
+- `SIDE_MOVE/复测` 原来固定用 `phase_start_rad`（SIDE_MOVE 的相位起点 = **扫描结束**时的车头），
+  而 `s_m` 是相对 **side_origin_rad（扫描起点）** 量的 → 扫描期间的漂移被当成基准锁住，激光沿 Δψ 打出去；
+- 改成 `probe_drive_signed(c, spd, c->side_origin_rad, dt)`（侧扫/开位/复测/搜索），TURN_PAR 倒车保留 `phase_start_rad`；
+- `LF_PROBE_LASER` 再补一次残余：`|heading − side_origin_rad| > LF_SIDE_YAW_DEADBAND_DEG(1.5°)` 时
+  `servo_us = side_us − 10·Δψ`（限幅 600~2400）；补偿换了角就 **停 400 ms 再开激光**（每面只认第一次命中）。
+  1.5° 在 h=189 时只有 5 mm，落在宽面 6 区 ±15 / 窄面 4 区 ±8.3 内；小于死区不拧舵机、不白等。
+- `side_us=2400` 是舵机上限：正补偿会被截断，现场先把 `probe_side_us` 降到 **2350/2300** 留余量（§17.2 已验 2200~2400 可用）。
+- 顺带把 `update_odometry` 改成中点积分（`θ + Δθ/2`）。
 
 ### 6.6 若确认是位置
 
@@ -214,7 +217,7 @@ if (c->side_locked) c->out.servo_us = (uint16_t)(c->out.servo_us + LF_LASER_BIAS
 4. 若窄面也要 6 分：中点散布要从 ±10~15 mm 压到 ±5 mm —— 方向是「两遍扫描总是取平均」
    （`LF_SIDE_VERIFY_TOL_MM` 8→15，让 9.1 mm 这种差异取平均而不是丢弃初测）**或**改边界判据为单调抬升；
    单靠加点数无效（渐变带里已有 16 个点）。
-5. 时间紧时：`LF_SIDE_YAW_DEADBAND_DEG` 1°→2~3°，或只在窄面复测。
+5. 时间紧时：`LF_SIDE_YAW_DEADBAND_DEG` 1.5°→2~3°，或只在窄面复测。
 
 ---
 

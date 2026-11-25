@@ -25,18 +25,20 @@
 >   `SIDE_LOCK` 去掉 `|h−pred|` 相对门禁（改 `warn=13`）并加"行进均值兜底(warn=10) / 沿面搜索(warn=11)"、
 >   **关闭扫描后二次微调**（`LF_SIDE_YAW_ENABLE 0`）、去掉 LASER 后 `w>20` 停机门禁。
 >   四面逐项数据与两份日志见 **[docs/validation.json](docs/validation.json)** 的 `m4e.full4_20261123`，实现与偏差说明见 **[docs/M4e-full4-20261123.md](docs/M4e-full4-20261123.md)**。遗留：宽度实测散布 −22…+33 mm（`w` 只判宽窄，不进控制）；认面窗口中心与 `face_n` 统计窗口差 20 mm（1 行 TODO，等下次烧录一并改）。
+> - ✅ **M4g 首面后站位与第二面窄面重扫修复（2026-11-25，已烧录）**：`LF_LEG_L1_SCALE=0.85` 缩短绕角后行程；窄面 `w=12.3` 这类“宽度公式失配但中点仍可信”的情况不再回旧原点，而是先到 `s_m` 复测（`warn=14`）；并修掉面内证据不足时提前刹车导致的 13.4 s 超时。Host 单测 **38/38**、Debug/Release 构建零告警、主机自检 PASS；用户实车反馈“这次相当好”。详见 **[docs/M4g-l1-and-narrow-retry-20261125.md](docs/M4g-l1-and-narrow-retry-20261125.md)**。
 > - 🚀 **下一阶段 M4**：回 AIM 重试、`probetour`、参数/Flash 8；计划见根目录 **[M4计划_评审与修订.md](../M4计划_评审与修订.md)**。
 >   接手先读 **Gate 0**：[docs/M3-task-handover.md](docs/M3-task-handover.md)、[docs/teammate-targeting-handover.md](docs/teammate-targeting-handover.md)。
 
 为了让每位组员无需翻阅底层寄存器即可快速掌握整个项目，所有软件与硬件对接文档均整理在本工作区 `docs/` 目录下：
 
 1. **[docs/teammate-targeting-handover.md](docs/teammate-targeting-handover.md)**：**《队友交接指南：全软件任务架构与四面激光打靶（蓝牙标定/录数）开发手册》**（★ 接手打靶任务首读！）
-2. **[docs/pure-analog-rework-and-calibration.md](docs/pure-analog-rework-and-calibration.md)**：**《纯硬件模拟电路改板焊接与电位器标定归档手册》** —— 已实车跑通的纯模拟改板 BOM、Slow Decay 飞线与 3296W 电位器圈数/电压标定记录。
-3. **[docs/codebase-guide.md](docs/codebase-guide.md)**：**《软件工作区代码全景说明书》** —— 详细介绍工作区每个文件夹、每个 `.c/.h` 文件、核心结构体以及算法模块的通俗原理解析。
-4. **[docs/hardware-interface-manual.md](docs/hardware-interface-manual.md)**：**《STM32G474 核心板与主扩展板硬件接口逐脚对应手册》** —— 详细到每一个 MCU 引脚、核心板排针、主扩展板排母、逻辑门芯片引脚与外部传感器/电机的电气对接关系。
-5. **[docs/software-architecture-and-review.md](docs/software-architecture-and-review.md)**：**《固件审查与软件总体架构设计》** —— 记录硬件复用修复、定时器零冲突分配矩阵与快速循迹专项优化设计。
-6. **[docs/board-pin-map.csv](docs/board-pin-map.csv)**：全车 27 项 MCU 引脚、网络名与外设复用速查表格。
-7. **[docs/validation.json](docs/validation.json)**：每次代码修改后的 Debug/Release 编译、静态检查、**37 项**自动化单元测试与**台架验证**记录；M2 台架遥测在 [data/m2_side_bench_20261122.csv](data/m2_side_bench_20261122.csv)。
+2. **[docs/M4g-l1-and-narrow-retry-20261125.md](docs/M4g-l1-and-narrow-retry-20261125.md)**：**《M4g：首面后行程 L1×0.85 与第二面窄面重扫修复》** —— 2026-11-25 的失败证据链、根因、代码改动、38 项回归与复跑观察点。
+3. **[docs/pure-analog-rework-and-calibration.md](docs/pure-analog-rework-and-calibration.md)**：**《纯硬件模拟电路改板焊接与电位器标定归档手册》** —— 已实车跑通的纯模拟改板 BOM、Slow Decay 飞线与 3296W 电位器圈数/电压标定记录。
+4. **[docs/codebase-guide.md](docs/codebase-guide.md)**：**《软件工作区代码全景说明书》** —— 详细介绍工作区每个文件夹、每个 `.c/.h` 文件、核心结构体以及算法模块的通俗原理解析。
+5. **[docs/hardware-interface-manual.md](docs/hardware-interface-manual.md)**：**《STM32G474 核心板与主扩展板硬件接口逐脚对应手册》** —— 详细到每一个 MCU 引脚、核心板排针、主扩展板排母、逻辑门芯片引脚与外部传感器/电机的电气对接关系。
+6. **[docs/software-architecture-and-review.md](docs/software-architecture-and-review.md)**：**《固件审查与软件总体架构设计》** —— 记录硬件复用修复、定时器零冲突分配矩阵与快速循迹专项优化设计。
+7. **[docs/board-pin-map.csv](docs/board-pin-map.csv)**：全车 27 项 MCU 引脚、网络名与外设复用速查表格。
+8. **[docs/validation.json](docs/validation.json)**：每次代码修改后的 Debug/Release 编译、静态检查、**38 项**自动化单元测试与**台架验证**记录；M2 台架遥测在 [data/m2_side_bench_20261122.csv](data/m2_side_bench_20261122.csv)。
 
 ---
 
@@ -280,21 +282,21 @@ bench 0 0.22 800
 | `fs_l` / `fs_r` | `450` / `450` | `100 ~ 1500` | 左轮 / 右轮独立满占空比等效转速 (mm/s，由 `mcal` 自动测得) |
 | `deadband` / `free_speed` | `0.14` / `450` | `0~0.4` / `100~1500` | 同时将左右两轮死区或满速设为同一数值 |
 | `speed_loop` | `1` | `0` 或 `1` | `1`=启用分段前馈+编码器速度 PI 闭环；`0`=仅实测分段前馈开环控制 |
-| `speed_kp` / `speed_ki` | `0.0012` / `0.003` | `0~0.01` / `0~0.03` | 编码器速度环 PI 系数 |
+| `speed_kp` / `speed_ki` | `0.00133` / `0.0053` | `0~0.01` / `0~0.03` | 编码器速度环 PI 系数（2026-11 现场调参值） |
 | `reverse` | `0` | `0` 或 `1` | `0`=禁止内轮反转；`1`=允许急弯内轮反转以突破 `b/2=65mm` 单向转弯半径极限 |
 | `brake_pwm` | `1` | `0` 或 `1` | `1`=DRV8833 驱动/制动（慢衰减，推荐）；`0`=驱动/滑行（快衰减） |
 | `lost_brake_ms` / `search_ms` | `60` / `350` | `0~500` / `0~1000` | 丢线后前置制动时间与旋回找线最大时间 (ms)；竞速时可设 `lost_brake_ms 0` 立即旋回 |
 | `cross_ms` | `80` | `20 ~ 1000` | 四路全黑（起终点横线/十字交叉口）平顺保持最大允许时长 (ms) |
 | `obstacle` / `obs_mm` | `1` / `150` | `0/1` / `50~500` | 超声波自动避障停车开关与停车距离阈值 (mm，默认 `150 mm = 15 cm`) |
 | `servo_us` | `1500` | `900 ~ 2100` | 水平云台舵机正对前方的中位脉宽 (µs) |
-| `probe_aim_ms` | `2000` | `200 ~ 5000` | **每段** AIM 扫掠时长 (ms)；粗扫+细扫合计约 4 s（前 150 ms 归位稳定，其余均分为离散扫描点） |
-| `probe_sweep_us` | `300` | `20 ~ 600` | 粗扫相对中位的单侧扫掠半幅 (µs)；默认 ±300 µs = ±30°（单面测试编译开关会覆盖成 600） |
-| `probe_step_us` | `60` | `20 ~ 200` | 粗扫步进扫掠的脉宽间隔 (µs)；细扫固定 20 µs（2°） |
+| `probe_aim_ms` | `5000` | `200 ~ 5000` | 每段 AIM 扫掠时长 (ms)；全行程 0~180° 两段合计约 10 s |
+| `probe_sweep_us` | `900` | `20 ~ 900` | 相对中位的单侧扫掠半幅 (µs)；900 = 600~2400 µs = 0~180° 全行程 |
+| `probe_step_us` | `30` | `20 ~ 200` | AIM 步进扫掠的脉宽间隔 (µs)；约 4.9°/点 |
 | `probe_fit_rms_mm` | `15` | `2 ~ 20` | M2：面拟合残差上限 (mm) |
 | `probe_scan_mode` | `1` | `0` 或 `1` | M2：`1`=侧视横扫（主方案）；`0`=M1 过渡流程（AIM→正面发射→方阵巡边） |
 | `probe_side_left` | `1` | `0` 或 `1` | M2：`1`=箱体在左（逆时针巡边），M3 起决定转弯方向 |
 | `probe_side_us` | `2400` | `600 ~ 2400` | M2：侧视舵机脉宽 (µs)；2400=**+90°=向左（箱体在左）**，顶死就降到 2200~2350 |
-| `probe_side_spd_mm_s` | `50` | `20 ~ 100` | M2：侧扫/开位速度 (mm/s)；50 对应 60 ms 走 3 mm 一个样本 |
+| `probe_side_spd_mm_s` | `75` | `20 ~ 100` | M2：侧扫/开位速度 (mm/s)；75 对应 40 ms 走 3 mm 一个样本 |
 | `probe_side_reach_mm` | `260` | `80 ~ 400` | M2：单方向最大扫描行程 (mm) |
 | `probe_side_band_mm` | `15` | `4 ~ 30` | M2：面内判据带宽 (mm，车动时实测噪声 ±15 mm) |
 | `probe_side_jump_mm` | `40` | `10 ~ 80` | M2：跳变阈值 (mm)，必须大于 band；背景 500~900 mm 下 40 仍安全 |

@@ -957,6 +957,11 @@ int main(void) {
     /* 上电先尝试恢复上次 save 到片内 Flash 的红外标定与全部参数，保证“上电后按键即可发车” */
     bool cfg_loaded = board_flash_load(&g_lf.cal, &g_lf.cfg);
     g_lf.cfg.hw.adc_vref_v = board_adc_vref_v();
+    /* 2026-11-24 实测四路红外黑白标定（L2/L1/R1/R2，VREF=3.3V）：白 0.57/0.66/0.66/1.12 V，
+     * 黑 0.32/0.41/0.38/0.48 V。仅在 Flash 无有效标定时使用，save 过标定的板子仍以 Flash 为准。 */
+    static const LfCalibration k_ir_cal =
+        {.black = {397, 509, 472, 596}, .white = {707, 819, 819, 1390}, .valid = true};
+    if (!g_lf.cal.valid) g_lf.cal = k_ir_cal;
     board_log("\r\nG474 LINE FOLLOW v2.2; 80MHz/TIM6+ADC1 5x1kHz/control 200Hz/PWM 20kHz; BT=%s (PC10=%c)\r\n",
         bt_probe_label(board_bt_probe_status()), board_bt_status_pin() ? 'H' : 'L');
     board_log("RAM-first mode (no auto Flash wear). Commands: mcal air 5 | mcal ground 5 | cal | start | diag\r\n");
@@ -1005,14 +1010,36 @@ int main(void) {
                 g_lf.side_event = (uint8_t)LF_SIDE_EVENT_NONE;
                 const LfProbeConfig *sp = &g_lf.cfg.probe;
                 float side_reach = g_lf.side_h * tanf((float)sp->beam_half_deg * 0.01745329252f);
-                /* 事件是位掩码：REV 找到第二个边界的那一拍会同时置 EDGE 和 MID，两条日志都要打 */
+                if (side_ev & (uint8_t)LF_SIDE_EVENT_SEEK) {
+                    board_log("PROBE_SIDE_SEEK,n=%u,dir=%s,from=%.1f,target=%.1f,hint_s=%.1f,hint_h=%.1f\r\n",
+                              (unsigned)g_lf.side_seek_n,
+                              g_lf.side_seek_target_mm < g_lf.side_seek_start_mm ? "REV" : "FWD",
+                              (double)g_lf.side_seek_start_mm, (double)g_lf.side_seek_target_mm,
+                              (double)g_lf.side_seek_hint_s, (double)g_lf.side_seek_hint_h);
+                }
+                if (side_ev & (uint8_t)LF_SIDE_EVENT_REV_BRAKE) {
+                    board_log("PROBE_SIDE_REV_BRAKE,seq=%lu,last_in=%.1f,depart_s=%.1f,brake_s=%.1f,d=%u\r\n",
+                              (unsigned long)g_lf.side_result_seq, (double)g_lf.side_s_last_good,
+                              (double)g_lf.side_rev_depart_s, (double)g_lf.side_rev_brake_s,
+                              (unsigned)sample.us_result_mm);
+                }
+                /* 事件是位掩码：第二条边界和中点可能同拍就绪，两条日志都要打。 */
                 if ((side_ev & (uint8_t)LF_SIDE_EVENT_EDGE) && g_lf.side_edges > 0U) {
-                    /* 0 号是 FWD 先发现的 +s 侧（右）边界，1 号是 REV 发现的 -s 侧（左）边界 */
+                    /* 序号按发现顺序记录，波束补偿按该边的实际方向取符号。 */
                     uint8_t i = (uint8_t)(g_lf.side_edges - 1U);
                     float s = g_lf.side_s_edge[i];
-                    float s_true = i == 0U ? s - side_reach : s + side_reach;
-                    board_log("PROBE_SIDE_EDGE,i=%u,s=%.1f,s_true=%.1f,n=%u\r\n",
-                              (unsigned)i, (double)s, (double)s_true, (unsigned)g_lf.side_edge_frames);
+                    bool reverse = g_lf.side_reverse_first != (i == 1U);
+                    float s_true = reverse ? s + side_reach : s - side_reach;
+                    board_log("PROBE_SIDE_EDGE,i=%u,s=%.1f,s_true=%.1f,n=%u,first_seq=%lu,confirm_seq=%lu,type=%s,last_in=%.1f,first_out=%.1f\r\n",
+                              (unsigned)i, (double)s, (double)s_true, (unsigned)g_lf.side_edge_frames,
+                              (unsigned long)g_lf.side_out_first_seq, (unsigned long)g_lf.side_result_seq,
+                              g_lf.side_edge_zero ? "ZERO" : "JUMP",
+                              (double)g_lf.side_s_last_good, (double)g_lf.side_s_out_first);
+                }
+                if (side_ev & (uint8_t)LF_SIDE_EVENT_REFINE) {
+                    board_log("PROBE_SIDE_REFINE,used=%u,last_out=%.1f,first_in=%.1f,s=%.1f\r\n",
+                              (unsigned)g_lf.side_refine_applied, (double)g_lf.side_refine_out_s,
+                              (double)g_lf.side_refine_in_s, (double)g_lf.side_s_edge[1]);
                 }
                 if (side_ev & (uint8_t)LF_SIDE_EVENT_MID) {
                     /* k = d(h)/ds：只作诊断（车/盒残余斜率）。2026-11-22 21:36 起不再参与 LEG 控制 */
@@ -1041,9 +1068,10 @@ int main(void) {
                 uint8_t leg_ev = g_lf.leg_event;
                 g_lf.leg_event = 0U;
                 if (leg_ev & (uint8_t)LF_LEG_EVENT_DRIVE1) {
-                    board_log("PROBE_LEG,seg=DRIVE1,len=%.1f,ach=%.1f,hdg=%.2f\r\n",
+                    board_log("PROBE_LEG,seg=DRIVE1,len=%.1f,ach=%.1f,hdg=%.2f,raw=%.1f,k=%.2f\r\n",
                               (double)g_lf.leg_cmd_mm, (double)g_lf.leg_ach_mm,
-                              (double)g_lf.leg_hdg_deg);
+                              (double)g_lf.leg_hdg_deg, (double)g_lf.leg_l1_raw_mm,
+                              (double)LF_LEG_L1_SCALE);
                 }
                 if (leg_ev & (uint8_t)LF_LEG_EVENT_TURN) {
                     /* dir = 命令符号（L=+90 逆时针）。h_pred = 转完后云台轴到下一面的期望侧距
@@ -1324,10 +1352,11 @@ int main(void) {
                      *   shift 只剩面宽给的 60/30（并没有任何平移发生）。
                      * 现在这一行只描述"实际发生了什么"：一次 5 帧中位数 = h1，写进 side_h 就是 h。 */
                     float pred = g_lf.side_pred_mm;
-                    board_log("PROBE_SIDE_LOCK,h=%.1f,pred=%.1f,us=%u,ok=%u,h1=%.1f,warn=%u\r\n",
+                    board_log("PROBE_SIDE_LOCK,h=%.1f,pred=%.1f,us=%u,ok=%u,h1=%.1f,warn=%u,first=%s\r\n",
                               (double)g_lf.side_h, (double)pred, (unsigned)lp->side_us,
                               (unsigned)(g_lf.probe_phase == LF_PROBE_SIDE_SCAN ? 1U : 0U),
-                              (double)g_lf.side_h1, (unsigned)g_lf.side_lock_warn);
+                              (double)g_lf.side_h1, (unsigned)g_lf.side_lock_warn,
+                              g_lf.side_reverse_first ? "REV" : "FWD");
                 }
                 if (previous_probe_phase == LF_PROBE_TURN_PAR) {
                     /* TURN_PAR 结束（成功进 SIDE_LOCK 或失败停机都打）：cmd/ach 是停稳后的值。

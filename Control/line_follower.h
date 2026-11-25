@@ -24,7 +24,7 @@
 #define LF_CHANNELS 4
 
 /** @brief 编码器测速滑动窗口长度（4 拍 × 5 ms = 20 ms 窗口，降低低速脉冲量化噪声 4 倍） */
-#define LF_ENC_WINDOW 4U
+#define LF_ENC_WINDOW 10U   /* 4 拍(20 ms)→10 拍(50 ms)：低速侧移 22 RPM 时 5 ms 窗口只有 ~1.5 计数/拍，量化噪声 ±16%；50 ms 窗口 ~15 计数，±6.5%。对齐上传 test_servo_pwm 的 50 ms 测速。 */
 
 /** @brief 电机死区与全量程转速标定的占空比阶梯数量（0.06 ~ 0.95 共 15 档，低速 3% 步长测死区，中高占空比覆盖至 95%） */
 #define LF_MCAL_STEPS 15U
@@ -108,7 +108,7 @@
 #define LF_SIDE_K_LIMIT 0.25f
 
 /**
- * @brief 边界确认帧数（距离域“跳变”型）
+ * @brief 普通距离跳变的边界确认帧数
  * @note  有回波但偏离模型（比如面外 60 mm 的墙/邻面）是强证据，连续 3 帧就确认。
  *        单个丢帧也是“偏离”，所以不能只用 2 帧——15% 丢帧率下 2 帧会有 2% 的假边界概率。
  */
@@ -116,15 +116,12 @@
 
 /**
  * @brief 边界确认帧数（整段无回波型）
- * @note  丢帧与“真的出界了”在单帧上不可区分，只能靠持续时间。按 15% 独立丢帧率估算：
- *        单窗口 6 连丢 = 0.15^6 ≈ 1.1e-5，一面扫掠约 90 个窗口 → 整面出一次假边界的概率约 0.1%；
- *        取 5 帧时整面累计约 0.6%，台架偶发“宽度不对”会被误当成算法 bug。
- *        边界位置仍取「最后一个面内样本 + 第一个外点样本」的中点，确认帧数不影响定位精度，
- *        只影响“确认前多走几帧”，所以复测/REV 的行程上限必须把这段确认距离算进去。
+ * @note  首个外点出现后车体制动，并在同一位置等待确认回波，因此确认帧数不会变成额外扫描行程。
+ *        6 连丢仍按 15% 独立丢帧率控制误判概率。
  */
-#define LF_SIDE_EDGE_ZERO_FRAMES 10U
+#define LF_SIDE_EDGE_ZERO_FRAMES 6U
 
-/** @brief 侧视锁定：舵机 90° 到位等待时间 (ms)。实测 1500→2400 的 90° 行程 ≤0.4 s（含 60 ms 测距节拍） */
+/** @brief 侧视锁定：舵机 90° 到位等待时间 (ms)。实测 1500→2400 的 90° 行程 ≤0.4 s */
 /* --- 扫描结束后的"二次微调"（2026-11-23）---
  * 历史教训：7bded7f 曾在 SIDE_MOVE 里按侧距漂移转身，但要求平移 >= 100 mm，而 SIDE_MOVE 只走 |s_m|~20 mm，
  * 那个 if 数学上永远进不去；2e00745 干脆删掉并立下"扫描→发射之间一个角都不许动"的硬规则
@@ -138,7 +135,8 @@
  *        而实测每次它都把 w 弄差（152.9→140.3、64.2→74.3），22:33 那次更用一条 16 mm 的
  *        假边算出 −18.4°，把车转飞、整面丢失。关掉后每面只剩「锁距→扫一次→开到中点→复测」。 */
 #define LF_SIDE_YAW_ENABLE 1
-#define LF_SIDE_YAW_DEADBAND_DEG 1.0f    /**< 死区 (°)：2026-11-24 按现场要求从 4° 收紧到 1°（约 1.7σ） */
+#define LF_SIDE_YAW_DEADBAND_DEG 1.5f    /**< 死区 (°)：2026-11-24 从 4°→1°→按现场要求 1.5°（h=189 时 5 mm，仍在宽面 6 区 ±15 / 窄面 4 区 ±8.3 内）。
+                                          *  同一门限也用于发激光时的 Δψ 补偿：|Δψ|≤1.5° 不拧舵机、不白等 400 ms；>1.5° 才补。 */
 #define LF_SIDE_YAW_MAX_DEG 20.0f        /**< 上限 (°)：超过它说明扫描本身有问题，不转（任务书箱子最多斜 ±20°） */
 
 #define LF_SIDE_LOCK_WAIT_MS 400U
@@ -151,18 +149,19 @@
 #define LF_SIDE_LOCK_FALLBACK_MS 1500U
 
 /**
- * @brief SIDE_LOCK「沿面搜索」：门限不过时**不要立刻停机**，先沿面前进一段再重采，最多 N 次
+ * @brief SIDE_LOCK 沿面搜索：首面沿 AIM 投影找面，后续面接续 LEG 的搜索方向
  * @note  窄面（50 mm）在 h≈200 处的有效可见窗口只有 ±27 mm（面半宽 25 + 有效足印 ~2），
  *        而转向滑移实测 0~70 mm —— 一次机会太薄：2026-11-23 两次窄面都是"停偏了就死"。
- *        每次前进 30 mm、40 mm/s（0.75 s），重采最多等 600 ms，3 次共 ≈4 s，
- *        加上首轮 1.5 s 仍远小于 LF_SIDE_LOCK_TIMEOUT_MS(9000)。
+ *        后续面每次前进 30 mm，移动后重新停车采样。首面的有符号搜索目标另有限幅。
  */
-#define LF_SIDE_SEEK_MM 30.0f          /**< 每次搜索前进距离 (mm) */
-#define LF_SIDE_SEEK_SPEED_MM_S 40.0f  /**< 搜索前进速度 (mm/s) */
-#define LF_SIDE_SEEK_TRIES 3U          /**< 每面最多搜索次数（共 ≤90 mm） */
+#define LF_SIDE_SEEK_MM 30.0f          /**< 后续面搜索步长 (mm) */
+#define LF_SIDE_SEEK_SPEED_MM_S 40.0f  /**< 找面速度 (mm/s) */
+#define LF_SIDE_SEEK_TRIES 3U          /**< 每面最多搜索次数 */
 #define LF_SIDE_SEEK_WAIT_MS 600U      /**< 搜索后重采的等待上限 (ms) */
+#define LF_SIDE_AIM_SEEK_MAX_MM 90.0f  /**< 首面沿初始侧扫轴的找面范围 */
+#define LF_SIDE_AIM_SEEK_DEAD_MM 10.0f /**< 低于此轴向误差时不做预移 */
 
-/** @brief 侧视锁定：连测帧数（每 60 ms 一帧，取中位数） */
+/** @brief 侧视锁定：连测帧数（每个超声触发周期一帧，取中位数） */
 #define LF_SIDE_LOCK_FRAMES 5U
 
 /** @brief 侧视锁定：|h - (rho + pan_x)| 自检容差 (mm)。rho 比卷尺大 15~20 mm，故放到 40 mm */
@@ -181,8 +180,8 @@
 #define LF_SIDE_H_MIN_MM 80.0f
 #define LF_SIDE_H_MAX_MM 450.0f
 
-/** @brief 侧视锁定超时 (ms)：400 ms 舵机 + 5 帧 × 60 ms = 700 ms，留 2.5 s 余量 */
-#define LF_SIDE_LOCK_TIMEOUT_MS 9000U  /* 含预扫测斜：400 等待 + 60 mm 平移（80 mm/s≈1 s）+ 停稳 + h2/h3 各 5 帧 + 最多一次修正转 */
+/** @brief 侧视锁定超时 (ms)：包含舵机等待与 5 帧超声采样，并留出回波异常余量 */
+#define LF_SIDE_LOCK_TIMEOUT_MS 9000U  /* 包含舵机驻留、沿面找面、停稳和重采。 */
 
 /** @brief 侧扫/开位末段降速：|err| 小于它时降到低速，避免过冲 */
 #define LF_SIDE_SLOW_DIST_MM 20.0f
@@ -191,6 +190,8 @@
 /** @brief 侧扫到位判据 (mm) 与到位后的主动制动稳定时间 (ms) */
 #define LF_SIDE_ARRIVE_MM 2.0f
 #define LF_SIDE_SETTLE_MS 150U
+/** @brief 宽面最终停车的前移补偿 (mm)，正值沿扫描轴朝车头方向 */
+#define LF_SIDE_WIDE_PARK_BIAS_MM 20.0f
 
 /* 旧的 SIDE_MOVE 平移测斜门限（MIN_DS_MM/MIN_MM/DEADBAND/MAX）已于 2026-11-23 删除：
  * 那版判据要求平移 ≥100 mm、而 SIDE_MOVE 只走 |s_m|~20 mm，数学上永远进不去；
@@ -211,11 +212,36 @@
 /** @brief 复测一致性判据 (mm)：|s_m2 - s_m| 小于它才取平均放行 */
 #define LF_SIDE_VERIFY_TOL_MM 8.0f
 
+/** @brief 侧扫原始边界跨度（未扣波束足印）的合理下限比例
+ *  @note  窄面 50 mm 在 h≈205 时可能只测到约 66 mm 的原始跨度；旧版固定扣
+ *         2·h·tanγ=54 mm 后得到 12 mm，误触灾难重扫。只要原始跨度仍覆盖名义面宽的
+ *         60%，且中点/行程合理，就允许先开到 s_m 复测，而不是回旧原点或直接停机。
+ *         宽面门槛同样按 150 mm 的 60%（90 mm）计算。 */
+#define LF_SIDE_RAW_SPAN_MIN_RATIO 0.60f
+/** @brief 原始跨度的宽容上限：名义宽 + 2·h·tanγ + 该余量 (mm) */
+#define LF_SIDE_RAW_SPAN_EXTRA_MAX_MM 80.0f
+
 /** @brief 台架手推模式超时 (ms)：人工推 300 mm 大约 5~10 s */
 #define LF_SIDE_PUSH_TIMEOUT_MS 25000U
 
 /** @brief 超声触发周期 (ms)：侧扫按这个节拍取一帧（与 board.c TIM17 单脉冲节拍一致） */
-#define LF_SIDE_PING_MS 60U
+#define LF_SIDE_PING_MS 40U
+
+/** @brief 反扫疑似出界时的限速，以及突变后歧义回波允许维持制动的时间 */
+#define LF_SIDE_REV_APPROACH_MM_S 45.0f
+#define LF_SIDE_REV_BRAKE_HOLD_MS (LF_SIDE_EDGE_JUMP_FRAMES * LF_SIDE_PING_MS)
+#define LF_SIDE_REV_DEPART_FRAMES 2U  /**< 局部模型连续偏远两帧，提前制动观察 */
+#define LF_SIDE_REV_RECOVER_FRAMES 2U /**< 连续两帧回到面内才恢复正常扫描速度 */
+/** @brief 反边确认后，累计制动达到该时长才开始回中 */
+#define LF_SIDE_REV_STOP_MS ((LF_SIDE_EDGE_JUMP_FRAMES - 1U) * LF_SIDE_PING_MS)
+
+/** @brief 粗边界夹区过宽时，从面外分段回探 */
+#define LF_SIDE_EDGE_REFINE_GAP_MM 15.0f
+#define LF_SIDE_EDGE_REFINE_STEP_MM 30.0f
+#define LF_SIDE_EDGE_REFINE_TRAVEL_MM 75.0f
+#define LF_SIDE_EDGE_REFINE_LIMIT_MM 8.0f /**< 相对粗扫最后面内点的回探余量 */
+#define LF_SIDE_EDGE_REFINE_TIMEOUT_MS 2500U
+#define LF_SIDE_EDGE_REFINE_FRAMES 2U
 
 /* ---------------------------------------------------------------------------
  * M3 转平行（TURN_PAR）与绕行（LEG）常数
@@ -246,6 +272,13 @@
 /** @brief LEG 直行速度 (mm/s) 与第一段越角余量 (mm) */
 #define LF_LEG_SPEED_MM_S 100.0f
 #define LF_LEG_MARGIN_MM 20.0f
+
+/** @brief 第一段越角行程 L1 的现场比例系数（2026-11-25）
+ *  @note  第二轮实车：首面 h_ref=153 mm，L1=258 mm，转完后第二面实测 h=205 mm，
+ *         比目标多 52 mm。用户现场判断「第一面扫完后沿面开得过远」，先按 85% 试跑。
+ *         L1 只决定绕角后与下一面的站位，DRIVE2(L2) 只决定沿下一面的展开位置；
+ *         因此这里缩放 L1，不能缩放 L2。若台架量出下一面 h 低于 ~100 mm，再回调此系数。 */
+#define LF_LEG_L1_SCALE 0.85f
 
 /** @brief LEG 前站立距离门禁 (mm)：低于它转 90° 时车体扫掠可能擦箱（h=80 时轮轴到转角仅 106 mm）
  * @note  2026-11-23 按任务书真实工况放宽 120→100：任务书要求「<15cm 自动停车」，实际停车
@@ -439,9 +472,10 @@ typedef enum {
 
 /** @brief 侧视横扫子状态（LfController::side_stage） */
 typedef enum {
-    LF_SIDE_FWD = 0,   /**< 0: 沿 +u∥ 正扫（先找 +s 侧边界） */
-    LF_SIDE_REV = 1,   /**< 1: 折返沿 -u∥ 反扫（找 -s 侧边界） */
-    LF_SIDE_DONE = 2   /**< 2: 两边界齐 */
+    LF_SIDE_FWD = 0,   /**< 0: 沿 +u∥ 正扫，找 +s 侧边界 */
+    LF_SIDE_REV = 1,   /**< 1: 沿 -u∥ 反扫，找 -s 侧边界 */
+    LF_SIDE_DONE = 2,  /**< 2: 两条粗边界已找到 */
+    LF_SIDE_REFINE = 3 /**< 3: 回探过宽的反向边界夹区 */
 } LfSideStage;
 
 /** @brief SIDE_MOVE 子状态（LfController::side_move_stage） */
@@ -495,7 +529,10 @@ typedef enum {
     LF_SIDE_EVENT_EDGE = 0x01,  /**< 找到一个边界 */
     LF_SIDE_EVENT_MID = 0x02,   /**< 中点/宽度确定（含复测后更新） */
     LF_SIDE_EVENT_FAIL = 0x04,  /**< 本次扫描 / SIDE_LOCK 失败 */
-    LF_SIDE_EVENT_YAW = 0x08    /**< SIDE_SCAN 结束时判出车头与面不平行、已转正并重扫（见 LF_SIDE_YAW_*） */
+    LF_SIDE_EVENT_YAW = 0x08,   /**< SIDE_SCAN 结束时判出车头与面不平行、已转正并重扫（见 LF_SIDE_YAW_*） */
+    LF_SIDE_EVENT_REV_BRAKE = 0x10, /**< 反扫局部回波持续偏远，提前制动 */
+    LF_SIDE_EVENT_REFINE = 0x20, /**< 反向边界回探完成 */
+    LF_SIDE_EVENT_SEEK = 0x40 /**< 开始一次沿面找面 */
 } LfSideEvent;
 
 /**
@@ -525,7 +562,7 @@ typedef struct {
     bool side_left;           /**< true = 箱体在左、逆时针巡边（本项目左侧接近；M3 的 TURN_PAR/LEG 用） */
     uint16_t side_us;         /**< 侧视舵机脉宽 (us，默认 2400 = 右掰 90°，即箱体在车左侧) */
     float fit_rms_mm;         /**< 面拟合残差上限 (mm，默认 15；纸盒起伏实测 rms 6~13) */
-    float side_speed_mm_s;    /**< 侧扫/开位速度 (mm/s，默认 50；60 ms 走 3 mm 即一个样本) */
+    float side_speed_mm_s;    /**< 侧扫/开位速度 (mm/s，默认 75；40 ms 走 3 mm 即一个样本) */
     float side_reach_mm;      /**< 单方向最大扫描行程 (mm，默认 260；从扫描起点算，FWD/REV 各一份) */
     float side_band_mm;       /**< 面内判据带宽 (mm，默认 8；实测静止噪声 ±2 mm) */
     float side_jump_mm;       /**< 跳变判据阈值 (mm，默认 25；必须大于 side_band_mm) */
@@ -652,6 +689,10 @@ typedef struct {
     bool adc_ok;               /**< ADC 采样新鲜且无 DMA 错误标志 */
     bool driver_ok;            /**< DRV8833 驱动芯片正常标志 (PC4 DRV_nFAULT 为高电平) */
     bool obstacle_valid;       /**< 超声波回波距离有效标志 */
+    uint32_t us_active_trigger_ms; /**< 最近一次实际触发时刻 (ms)，用于记录该拍里程 */
+    uint32_t us_result_seq;        /**< 最近完成的触发序号；0=尚无结果，同序号只消费一次 */
+    uint32_t us_trigger_ms;        /**< us_result_seq 对应的触发时刻 (ms)，非接收时刻 */
+    uint16_t us_result_mm;         /**< 该次触发的独立回波；0=本周期未获得有效回波 */
 } LfInput;
 
 /**
@@ -691,16 +732,21 @@ typedef struct {
     float x_mm, y_mm;                 /**< 车体在地面坐标系下的推算位置 (mm) */
 } LfOdometry;
 
-/**
- * @brief 一次 AIM 扫掠得到的障碍物平面模型
- * @note  M1 只写前 5 个字段（valid/phi/rho/rms/hits）；侧视横扫（M2）再写边界与站立距离。
- */
+/** @brief AIM 看到的箱面位置，以编码器世界坐标表示 */
+typedef struct {
+    bool valid;
+    float x_mm, y_mm;
+    float width_mm; /**< 两条棱边都可见时给出宽度，只有面内回波时为零 */
+} LfAimSeed;
+
+/** @brief 一次 AIM 扫掠和随后的侧视横扫得到的障碍物平面模型 */
 typedef struct {
     bool    valid;    /**< 本次拟合是否可信 */
     float   phi;      /**< 面法线方向在车体系的角度 (rad，0 = 车头正前) */
     float   rho;      /**< 云台轴到面的垂直距离 (mm) */
     float   rms;      /**< 拟合残差 (mm 量纲) */
     uint8_t hits;     /**< 落在内点带内的采样点数 */
+    LfAimSeed aim_seed; /**< 首次侧锁的找面方向提示 */
     float   s_l;      /**< 左边界在扫描轴上的位置 (mm，M2) */
     float   s_r;      /**< 右边界在扫描轴上的位置 (mm，M2) */
     float   s_m;      /**< 中点位置 (mm，M2) */
@@ -782,10 +828,20 @@ typedef struct {
     LfFace aim_first;                             /**< 粗扫结果备份（细扫失败时回退） */
 
     /* --- M2 侧视横扫：SIDE_LOCK / SIDE_SCAN / SIDE_MOVE + 复测 --- */
-    uint8_t side_stage;        /**< 侧扫子状态 LF_SIDE_FWD / REV / DONE */
-    uint8_t side_edges;        /**< 本次扫描已找到的边界数 0~2（0 号在 FWD 先发现，1 号在 REV 发现） */
-    uint8_t side_bad;          /**< 当前连续外点帧数 */
-    uint8_t side_out_zero;     /**< 当前外点段里"真无回波(d==0)"的帧数（跳变型与无回波型边界分开确认） */
+    uint8_t side_stage;        /**< 侧扫子状态 LF_SIDE_FWD / REV / DONE / REFINE */
+    uint8_t side_edges;        /**< 本次扫描按发现顺序记录的边界数 0~2 */
+    bool side_reverse_first;  /**< 本遍正式扫描从 -s 方向开始 */
+    uint8_t side_out_jump;     /**< 连续跳变回波帧数 */
+    uint8_t side_out_zero;     /**< 连续无回波帧数 */
+    uint8_t side_edge_pending; /**< 已发出候选制动，原地等待证据确认 */
+    bool side_rev_approach;    /**< 反扫已经因连续偏远进入低速观察 */
+    uint8_t side_rev_depart_frames;  /**< 连续偏离局部面内模型的有效远回波帧数 */
+    uint8_t side_rev_recover_frames; /**< 低速观察时连续恢复面内回波的帧数 */
+    uint8_t side_refine_in_frames;   /**< 回探时连续确认的面内回波帧数 */
+    uint8_t side_refine_zero_frames; /**< 回探时连续无回波帧数 */
+    uint8_t side_refine_step_frames; /**< 30 mm 检查点停驻后已采帧数 */
+    bool side_refine_checking;       /**< 正在检查点停车采样 */
+    bool side_refine_applied;        /**< 回探结果替换了粗扫边界 */
     uint8_t side_ring_n;       /**< 面内样本滑动环已填充帧数 0~8（SIDE_LOCK 期间当作 5 帧缓冲用） */
     uint8_t side_ring_i;       /**< 面内样本滑动环写入下标 */
     uint8_t side_retry;        /**< 侧扫失败后已经“退回原点重扫”的次数 0~1 */
@@ -821,15 +877,26 @@ typedef struct {
     float side_ring_d[LF_SIDE_RING]; /**< 最近 8 个面内样本的侧视回波距离 d (mm) */
     uint16_t side_inface;      /**< 当前这一遍扫描累计面内帧数（PROBE_SIDE_EDGE 的 n 用） */
     uint8_t side_edge_frames;  /**< 找到边界时累计的面内帧数（诊断用：正常 15~30） */
+    bool side_edge_zero;       /**< 本拍边界由连续无回波确认；false 表示连续跳变 */
+    uint32_t side_out_first_seq; /**< 当前连续外点段第一帧的触发序号 */
     float side_s_last_good;    /**< 最后一个面内样本的扫描坐标 (mm) */
     float side_s_out_first;    /**< 第一个外点样本的扫描坐标 (mm) */
+    float side_rev_depart_s;   /**< 反扫当前连续偏远的第一帧的扫描坐标 (mm) */
+    float side_rev_brake_s;    /**< 发出反扫提前制动时的扫描坐标 (mm) */
+    float side_refine_out_s;   /**< 回探最后一个可信外点 (mm) */
+    float side_refine_in_s;    /**< 回探连续面内回波的首点 (mm) */
+    float side_refine_next_s;  /**< 下一个回探停车采样点 (mm) */
+    float side_refine_limit_s; /**< 本次回探前进位置上限 (mm) */
     float side_s_edge[2];      /**< 两个边界的扫描坐标 (mm，未排序；边界 = 最后一个面内点与第一个外点的中点) */
     float side_s_turn;         /**< FWD 折返点的扫描坐标 (mm) */
     float side_h0;             /**< 面内直线模型截距 d = h0 + k·s (mm) */
     float side_k;              /**< 面内直线模型斜率 d = h0 + k·s (无量纲，吸收车不平行) */
     float side_h;              /**< SIDE_LOCK 实测的侧视站立距离 (mm) */
     float side_pred_mm;        /**< SIDE_LOCK 自检用的期望侧距 (mm)：面 0 = rho+pan_x，面 1~3 = h_leg+margin */
-    float side_seek_start_mm;  /**< 本次沿面搜索的起点里程 (mm) */
+    float side_seek_start_mm;  /**< 本次找面的起点在锁定轴上的坐标 (mm) */
+    float side_seek_target_mm; /**< 本次找面的目标在锁定轴上的坐标 (mm) */
+    float side_seek_hint_s;    /**< AIM 点投影到转向后侧扫轴的位置 (mm) */
+    float side_seek_hint_h;    /**< AIM 点在转向后侧视回波的预计距离 (mm)，0 无提示 */
     uint32_t side_lock_sample_since; /**< 本轮 5 帧采样的起始时间戳 (ms)，搜索后重采会刷新 */
     uint8_t side_seek_n;       /**< 本面已执行的沿面搜索次数（0~LF_SIDE_SEEK_TRIES） */
     float side_target;         /**< SIDE_MOVE 的目标扫描坐标 (mm，绝对量，正=车头方向) */
@@ -839,13 +906,19 @@ typedef struct {
     float side_origin_x_mm;    /**< 侧扫轴原点世界坐标 x (mm)：从 SIDE_SCAN 起点锁存，跨 SIDE_MOVE/复测共用 */
     float side_origin_y_mm;    /**< 侧扫轴原点世界坐标 y (mm) */
     float side_origin_rad;     /**< 侧扫轴方向（原点处的车头航向，rad） */
-    uint32_t side_ping_since;  /**< 上一次取侧扫样本的时间戳 (ms)，按 60 ms 超声节拍取帧 */
+    float side_move_ref_rad;   /**< 开位保持航向；转正后回原点时保持转完的航向，位置仍沿原扫描轴投影 */
+    uint32_t side_ping_since;  /**< 本段采样起点，之前的触发不属于当前扫描 */
+    uint32_t side_brake_since; /**< 本次边界候选触发制动的时刻 (ms) */
+    uint32_t side_refine_since; /**< 反边回探开始时刻 (ms) */
+    uint32_t side_trigger_ms;  /**< 已记录位置的超声触发时刻 */
+    float side_trigger_s;      /**< 该触发时刻沿本遍扫描轴的位移 */
+    uint32_t side_result_seq;  /**< 上次处理的独立测量序号 */
 
     /* --- M3 转平行 TURN_PAR + 绕行 LEG --- */
     uint8_t turn_stage;        /**< 原地转子状态 LF_TURN_IDLE / DRIVE / SETTLE / DONE */
     uint8_t turn_ok;           /**< 1 = 停稳后 |ach - cmd| <= LF_TURN_TOL_DEG */
     uint8_t turn_backup;       /**< 1 = TURN_PAR 的低 ρ 倒车已完成/不需要；0 = 还没倒 */
-    uint8_t side_lock_stage;   /**< SIDE_LOCK 预扫测斜：0=等舵机 1=h1 2=沿面平移 60 mm 3=h2 4=退回+转正 5=h3 6=完成 */
+    uint8_t side_lock_stage;   /**< SIDE_LOCK：0=等舵机 1=采 h1 6=完成自检 7=沿面找面 */
     float side_h1;             /**< 预扫第一点 h (mm) */
     float side_h2;             /**< 沿面平移 60 mm 后重采的 h (mm)（必须重新采样，不能复用 h1 的样本环） */
     float side_h3;             /**< 退回并转正后 h (mm) */
@@ -877,7 +950,8 @@ typedef struct {
     float leg_hdg0;            /**< LEG 入口航向（DRIVE1 的纠偏基准，rad） */
     float leg_hdg1;            /**< DRIVE1 结束/进 TURN 前的航向 (rad) */
     float leg_hdg2;            /**< TURN 结束/DRIVE2 起始的航向 (rad) */
-    float leg_l1_mm;           /**< DRIVE1 目标距离 (mm) */
+    float leg_l1_mm;           /**< DRIVE1 目标距离 (mm，已乘 LF_LEG_L1_SCALE) */
+    float leg_l1_raw_mm;       /**< 乘 LF_LEG_L1_SCALE 前的 DRIVE1 几何距离 (mm)，供现场判读 */
     float leg_l2_mm;           /**< DRIVE2 目标距离 (mm) */
     float leg_cmd_mm;          /**< 最近一段直行的命令距离 (mm) */
     float leg_ach_mm;          /**< 最近一段直行的实测距离 (mm) */

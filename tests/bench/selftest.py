@@ -35,7 +35,7 @@ RIGHT_SIDE_LOCK = ("PROBE_SIDE_LOCK,h=400.6,pred=0.0,us=600,ok=1,h1=390.0,h2=400
                    "h3=395.0,corr=-10.0,warn=0,ds=60")
 SIDE_MID = "PROBE_SIDE_MID,s_m=13.0,w=150.0,kind=wide,retry=0,k=-0.250"
 SIDE_MID_NARROW = "PROBE_SIDE_MID,s_m=12.0,w=50.0,kind=narrow,retry=0,k=-0.250"
-SIDE_CFG_OK = ("PROBE_SIDE_CFG,scan=1,left=1,us=2400,spd=50,reach=260,band=15.0,"
+SIDE_CFG_OK = ("PROBE_SIDE_CFG,scan=1,left=1,us=2400,spd=75,reach=260,band=15.0,"
                "jump=40.0,verify=0,gamma=7.5,pan_x=30,fit_rms=5.0")
 SIDE_CFG_WRONG = SIDE_CFG_OK.replace("us=2400", "us=600")
 US_ODOM = ("US_ODOM,obs_mm=394,obs_ok=1,servo_center=1500,dist_mm=0.0,hdg_deg=0.00,"

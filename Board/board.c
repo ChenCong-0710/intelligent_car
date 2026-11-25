@@ -60,6 +60,9 @@ static uint16_t previous_count[2];
 static uint16_t latest_obstacle_mm;
 static uint32_t obstacle_time, last_us_trig_ms;
 static bool obstacle_ready;
+static bool us_waiting_for_echo;
+static uint32_t us_result_seq, us_result_trigger_ms;
+static uint16_t us_result_mm;
 static int8_t motor_direction[2];
 static uint32_t reverse_deadline[2];
 static bool reversing[2];
@@ -698,6 +701,14 @@ bool board_control_ready(uint32_t *now_ms, float *dt_s) {
     return false;
 }
 
+/* 每个触发只发布一次结果。无回波在下次触发之前结算，0 序号留给尚未有结果的上电状态。 */
+static void ultrasonic_complete(uint16_t mm) {
+    us_result_trigger_ms = last_us_trig_ms;
+    us_result_mm = mm;
+    if (++us_result_seq == 0U) ++us_result_seq;
+    us_waiting_for_echo = false;
+}
+
 void board_sample(LfInput *sample) {
     uint32_t now = HAL_GetTick();
     uint32_t saved = __get_PRIMASK(); __disable_irq();
@@ -728,23 +739,36 @@ void board_sample(LfInput *sample) {
      * 于是"丢回波"在侧扫里永远不会以 d==0 出现，零回波型边界（LF_SIDE_EDGE_ZERO_FRAMES）永不触发，
      * 只剩跳变型边界可用——是多次 PROBE_SIDE_FAIL,edges=0 的成因之一。
      * 清掉之后 obstacle_valid 的语义恢复为"220 ms 内真的收到过一次回波"。 */
-    if (TIM8->SR & TIM_SR_CC2IF) {
+    uint32_t echo_flags = TIM8->SR;
+    if (echo_flags & TIM_SR_CC2IF) {
         TIM8->SR = ~TIM_SR_CC2IF;                  /* 只清 CC2IF；其余位是 rc_w0，写 1 无副作用 */
         uint16_t pulse_us = (uint16_t)TIM8->CCR2;
         if (pulse_us >= 80U && pulse_us <= 18000U) {
             latest_obstacle_mm = (uint16_t)(((uint32_t)pulse_us * 343U + 1000U) / 2000U);
             obstacle_time = now;
             obstacle_ready = true;
+            /* 从本次触发起必须既见过上升沿又见过下降沿；忽略跨周期的残留脉冲。 */
+            if (us_waiting_for_echo && (echo_flags & TIM_SR_CC1IF)) {
+                ultrasonic_complete(latest_obstacle_mm);
+            }
         }
     }
-    /* 每 60 ms 启动一次 TIM17 硬件单脉冲触发 (45 us)，完全不阻塞 CPU */
-    if (now - last_us_trig_ms >= 60U) {
+    /* 每 LF_SIDE_PING_MS 启动一次 TIM17 硬件单脉冲触发 (45 us)，完全不阻塞 CPU。
+     * 40 ms 为当前试验频率（25 Hz），短于 HC-SR04 常见资料建议的 60 ms 周期。 */
+    if (now - last_us_trig_ms >= LF_SIDE_PING_MS) {
+        if (us_waiting_for_echo) ultrasonic_complete(0U);
         last_us_trig_ms = now;
+        TIM8->SR = ~(TIM_SR_CC1IF | TIM_SR_CC2IF);
+        us_waiting_for_echo = true;
         TIM17->CNT = 0;
         SET_BIT(TIM17->CR1, TIM_CR1_CEN);
     }
     sample->obstacle_valid = obstacle_ready && (now - obstacle_time <= 220U);
     sample->obstacle_mm = sample->obstacle_valid ? latest_obstacle_mm : 0U;
+    sample->us_active_trigger_ms = last_us_trig_ms;
+    sample->us_result_seq = us_result_seq;
+    sample->us_trigger_ms = us_result_trigger_ms;
+    sample->us_result_mm = us_result_mm;
 }
 
 void board_emergency_off(void) {

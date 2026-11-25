@@ -116,7 +116,7 @@ flowchart LR
      - `SIDE_LOCK`：舵机锁到 `probe_side_us`（2400 µs = **+90° = 向左，箱体在左**），等 400 ms 后按 60 ms 超声节拍连测 5 帧取中位数得站立距离 h。判据只要**绝对量程** `h∈[80,450]`——2026-11-23 22:25 去掉 `|h−pred|≤70` 相对门禁（LEG 落点误差实测 −106…+69 mm，与"认错面"数值上无法区分；21:36 差 5.8 mm、21:56 差 1.0 mm 都被它误杀），超差只记 `warn=13`；
        - 一帧都采不到时：等 1.5 s 后若 LEG 行进中确实见过面（`leg_face2_n≥5`）用它行进中的均值兜底（`warn=10`）；
        - 还不行就**沿面搜索**：前进 30 mm@40 mm/s 后重采 5 帧，最多 3 次（`LF_SIDE_SEEK_*`，`warn=11`），仍不可用才停机；
-     - `SIDE_SCAN`：车沿面切线平移（50 mm/s，60 ms 一帧 = 3 mm），用 8 点最小二乘 `d=h0+k·s` 拟合面内距离（k 吸收车不平行漂移），边界确认分两类证据（跳变型 3 帧且 |d−h|>jump / 真无回波型 10 帧），FWD 找 +s 边界、REV 找 −s 边界，行程上限相对扫描原点对称 ±`side_reach_mm`；
+     - `SIDE_SCAN`：车沿面切线平移（默认 75 mm/s，40 ms 一帧 = 3 mm），用 8 点最小二乘 `d=h0+k·s` 拟合面内距离（k 吸收车不平行漂移），边界确认分两类证据（跳变型 3 帧且 |d−h|>jump / 真无回波型 6 帧），FWD 找 +s 边界、REV 找 −s 边界，行程上限相对扫描原点对称 ±`side_reach_mm`；
      - 边界取「最后一个面内样本 + 第一个外点样本」中点，`s_m=(lo+hi)/2`、`w=(hi−lo)−2·h·tanγ`、`kind=(w<100?窄:宽)`（`LF_SIDE_KIND_SPLIT_MM`）；
      - `SIDE_MOVE`：沿切线开到 `s_m`（末段 20 mm 降到 25 mm/s，到位 2 mm 停车 + 150 ms 主动制动），可选 `SIDE_VERIFY` 复测（原点改锁到中点，行程 ±(w/2+h·tanγ+确认距离) 动态算，|s_m2−s_m|<8 取平均）；开位超时会置 `side_warn=4`，留给复测自愈；
      - `LASER`：**保持 side_us 不动**发射 10 s（扫描与发射同轴同角 → 中点与 `pan_x`/侧角无关）；侧视模式但未锁定时先等 400 ms 再点灯（自动流程里舵机本来就在法线角，等于无额外动作）。
@@ -125,12 +125,12 @@ flowchart LR
    - **模块 8c（M3/M4 Gate 0，已烧录；2026-11-23 实车 G0-2 与 G0-4 通过）**：
      - `TURN_PAR`：AIM 成功后按 `side_left ? φ−90 : φ+90` 原地转（`probe_turn_to`，50 mm/s、6 s 超时；精度不拦——只有 `|ach−cmd|>LF_TURN_GROSS_DEG(20°)` 这种机构级失败才停，9° 的角度残差交给下游）。`cmd` 与 −90 的差就是 AIM 测到的车头偏航 φ；车摆正时实测 `cmd=-90.6 / ach=-90.9`；
      - `SIDE_LOCK` 的**沿面平移两点测斜已整段删除**（提交 `8284f01`）：输入是侧视超声的双稳态读数（同一位置 ±13~22 mm 跳变），60 mm 基线上真实信号只有 5 mm，信噪比 0.3；现场一次 `eps=21°` 把车从 −93.3° 转到 −67.1°、一次 `eps=−53.8°` 钳位后甩转。扫描↔发射同轴（性质①）本来就不需要扫描前的转角。历史背景（含当时的修法与被撤原因）见 [M4-side-tilt-fix-20261123.md](M4-side-tilt-fix-20261123.md)。原设计（已不再存在）：锁面后可选**沿面 60 mm 平移两点测斜**（前进 60 mm@80 mm/s → 停 200 ms → **清样本环重采 5 帧**得 h2 → 退回原点 → 按 `corr=atan2(h2−h1,60)` 原地转正（右面取反）→ 量 h3），只对第一面做；1.5 s 走不到一半判卡住（`warn=6`）；h2 重采 800 ms 凑不满 3 帧（窄面/丢回波）跳过测斜（`warn=8`）；锁定 h 取 h1/h2/h3 中最接近 `pred` 者，h3 出界用 h2（`warn=7`）。**2026-11-23 12:26 修复**：此前 h2 复用了 h1 的样本环，`h1==h2` 恒成立、corr 永远 0（见 [M4-side-tilt-fix-20261123.md](M4-side-tilt-fix-20261123.md)）；
-     - `LEG`：`probe_leg_tick` 三段 `DRIVE1 → TURN → DRIVE2`，入口锁存 `leg_origin_mm/leg_hdg0`，**`L1=w_nom/2+pan_x+h_ref`**（`h_ref` = 首面实测站距；2026-11-23 22:40 起不再用本面 h、也不再 `+margin`，否则站距会 160→206→298 逐面外扩，窄面在 30 cm 外只剩一条边可见）、`L2=h+d_B/2−pan_x` 只当上限；宽窄由首面实测锁存 + 面序交替（判据 `LF_SIDE_KIND_SPLIT_MM=100`）；
+     - `LEG`：`probe_leg_tick` 三段 `DRIVE1 → TURN → DRIVE2`，入口锁存 `leg_origin_mm/leg_hdg0`，**`L1=LF_LEG_L1_SCALE·(w_nom/2+pan_x+h_ref)`**（`h_ref` = 首面实测站距；2026-11-23 22:40 起不再用本面 h、也不再 `+margin`，否则站距会 160→206→298 逐面外扩，窄面在 30 cm 外只剩一条边可见；2026-11-25 现场 `L1=258` 后第二面 `h=205`、期望 153，故 `LF_LEG_L1_SCALE=0.85`）、`L2=h+d_B/2−pan_x` 只当上限；宽窄由首面实测锁存 + 面序交替（判据 `LF_SIDE_KIND_SPLIT_MM=100`）；
        - **DRIVE2 认面事件停车**（`LF_LEG_FACE_BAND_MM=70` / `LF_LEG_FACE_CONFIRM=2`）：侧距连续 2 帧进 `h_ref±70` 即停，再补 `d_B/2+波束足印`（窄面 ≈+27 mm）落到面内；一直没认到面时窄面再往前找 100 mm；DRIVE2 速度 60 mm/s。原地转时 `ds=.5(ΔL+ΔR)` 恒 0，转向拖走车体的几十毫米编码器看不见——落点不能用里程死算；
        - DRIVE2 末尾若面已滑出侧视（h>350 或丢回波）且行进中 `face_n>=5`，走 `LF_LEG_BACKUP` 先倒回 40 mm；
      - **LEG 侧距连续采样**：舵机全程保持 `side_us`，每 50 ms 取一帧，`PROBE_LEG,seg=PROX`（100 ms 一行）/ `seg=PROX2`（DRIVE2 统计 `pred/n/face_n/face_h`）——窄面在行进中被直接量到；
      - **无 14° ALIGN**：`side_k` 只作诊断；`BOARD_SWAP_LR=0`、`track_width_mm=112.5` 是方向/标度正确的两个前提；
-     - 日志 `PROBE_LEG,seg=DRIVE1/TURN/DRIVE2/BACKUP/FAIL`（`leg_event` 位掩码）；`seg=DRIVE2` 追加 `stop=E|L,s=`（E=认面事件停车、s=认到面时的行程，L=走满上限）；`PROBE_SIDE_LOCK` 的 `pred` 打控制器**实际用**的值（面 1~3 = `h_ref`），`warn=0/10/11/12/13` = 正常 / 行进均值兜底 / 沿面搜索 / 宽度不可信退回 / 站距超差。早期实车记录见 [M4-gate0-20261123.md](M4-gate0-20261123.md)，当前全流程见 [M4e-full4-20261123.md](M4e-full4-20261123.md)。
+     - 日志 `PROBE_LEG,seg=DRIVE1/TURN/DRIVE2/BACKUP/FAIL`（`leg_event` 位掩码）；`seg=DRIVE1` 追加 `raw=`（乘 0.85 前的几何 L1）与 `k=`（当前比例）；`seg=DRIVE2` 追加 `stop=E|L,s=`（E=认面事件停车、s=认到面时的行程，L=走满上限）；`PROBE_SIDE_LOCK` 的 `pred` 打控制器**实际用**的值（面 1~3 = `h_ref`），`warn=0/10/11/12/13/14` = 正常 / 行进均值兜底 / 沿面搜索 / 宽度不可信退回 / 站距超差 / 宽度公式失配但中点仍用于复测。早期实车记录见 [M4-gate0-20261123.md](M4-gate0-20261123.md)，当前全流程见 [M4e-full4-20261123.md](M4e-full4-20261123.md)。
    - **模块 8d（M4e 四面循环，2026-11-23 22:46 实车通过）**：
      - 四面循环：LASER 出口 `++probe_face` → LEG → 下一面 SIDE_LOCK；最后一面 COMPLETE_BEEPS；面 2~4 不 AIM。实车 `faces=4 / laser=10000 ms`：AIM→COMPLETE_BEEPS **145.7 s**（限 180 s），四面 `SIDE_LOCK ok=1 warn=0`、三段 LEG `stop=E`、转角 90.2/90.1/90.5。
      - **扫描后"二次微调"已关闭**（`LF_SIDE_YAW_ENABLE 0`，代码保留）：性质①已保证残余偏航在光斑处抵消；实测每次转完 `w` 都变差（152.9→140.3、64.2→74.3），22:33 更用一条 16 mm 的假边算出 −18.4° 把车转飞、整面丢失。

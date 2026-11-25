@@ -779,6 +779,72 @@
     "static_cmd": "outtest servo 2400 30000 + outtest laser 1 10000（不驱动电机，车不动）",
     "doc": "docs/M4f-aim-boundary-20261124.md §6"
    }
+  },
+  "m4f_heading_fix_20261124": {
+   "date": "2026-11-24 21:05",
+   "what": "修 SIDE_MOVE/复测锁错航向基准（phase_start_rad → side_origin_rad）；LASER 加 Δψ 补偿（±1.5° 死区、换角时 400 ms settle）；update_odometry 改中点积分；LF_SIDE_YAW_DEADBAND_DEG 1.0→1.5",
+   "why": "现场确认激光/超声同轴、靶纸无问题。19:54 日志 SIDE_SCAN→LASER 航向差 4.1°（h=189→13.6 mm），无 GROUND 标定时侧漂 10.3°，两项叠加≈47 mm，与 45~75 mm 光斑偏一致。SIDE_MOVE 的相位起点是扫描结束时的车头，s_m 却相对扫描起点，等于把漂移锁进激光轴。",
+   "changes": [
+    "probe_drive_signed(c, speed, ref_rad, dt)：侧扫/开位/复测/搜索用 side_origin_rad；TURN_PAR 倒车保留 phase_start_rad",
+    "LF_PROBE_LASER：|Δψ|>1.5° 时 servo_us = side_us − 10·Δψ（600~2400 限幅）；换角则 settle 400 ms 再开激光；≤1.5° 不换角、不等待",
+    "LF_SIDE_YAW_DEADBAND_DEG 1.0→1.5（h=189 时 5 mm，仍在宽面 6 区 ±15 / 窄面 4 区 ±8.3 内）",
+    "update_odometry：x/y 用 θ+Δθ/2 中点积分",
+    "side_us=2400 时正补偿会被截断；现场可 set probe_side_us 2350/2300 留余量"
+   ],
+   "tests": {"host": "38/38", "probesideyawfix": "0.4° 不转；10° 转正"},
+   "sizes": {"debug": 114912, "release": 107768, "warnings": 0},
+   "flashed": false,
+   "next": "烧 Debug + push GROUND；单面 side 看 SIDE_SCAN/LASER hdg 差<1.5°、LASER servo_us 是否被 2400 截断、卷尺量云台轴到面中心",
+   "docs": ["docs/M4f-aim-boundary-20261124.md §6.5", "问题排查手册.md §17.17"]
+   },
+  "m4g_l1_85_narrow_retry_20261125": {
+   "date": "2026-11-25",
+   "what": "M4g：首面后 L1 统一乘 0.85；窄面宽度公式失配但双边界/中点合理时不再回旧原点，改去 s_m 复测；面内证据不足时禁止提前刹车死锁",
+   "why": "上一轮第二面 DRIVE1=258 mm 后 h=205 mm（期望 153）；窄面原始跨度 66.3 mm 扣 2·h·tan7.5°=54 mm 得假宽度 12.3 mm，旧逻辑回 side_target=0；该点距初扫中点 29.5 mm，重扫无法积累 10 帧面内证据，最终 edges=0 等满 13.4 s 超时",
+   "changes": [
+    "Control/line_follower.h：新增 LF_LEG_L1_SCALE=0.85f、原始跨度合理性门限",
+    "Control/line_follower.c：leg_l1_mm=0.85*(w_nom/2+pan_x+h_ref)，L2 不变；DRIVE1 日志追加 raw/k",
+    "probe_side_pair_plausible()：w 公式失配但双边界跨度/中点仍合理时 side_warn=14，继续去 s_m 复测",
+    "probe_side_retry_target()：异常重扫优先回初扫 s_m，只有中点不可用才回 0",
+    "probe_side_feed()：side_inface<10 时候选外点不再刹车，消除“停住后证据无法增长”的死锁",
+    "tests/test_controller.c：新增 h=205/原始边 +62.6−3.7/w=12.3/s_m=29.5、坏跨度回中点、证据不足不刹车三组回归；probeleg 更新 0.85 断言"
+   ],
+   "evidence": {
+    "source_log": "data/bench/second_face_bt_20261125_123050.log",
+    "raw_edges_mm": [
+     62.6,
+     -3.7
+    ],
+    "raw_span_mm": 66.3,
+    "h_mm": 205.0,
+    "old_w_mm": 12.3,
+    "old_s_m_mm": 29.5,
+    "old_timeout_ms": 13433
+   },
+   "tests": {
+    "host": "38/38 PASS",
+    "selftest": "PASS",
+    "new_cases": [
+     "probeside w=12.3 中点到 SIDE_MOVE",
+     "bad-span retry target=s_m",
+     "insufficient in-face no-brake",
+     "probeleg L1×0.85"
+    ]
+   },
+   "sizes": {
+    "debug_flash_bytes": 119480,
+    "release_flash_bytes": 111696,
+    "warnings": 0
+   },
+   "flashed": true,
+   "field_feedback": "用户现场反馈：这次相当好",
+   "quantitative_log_archived": false,
+   "next": "补录 2 面/4 面日志：核对 DRIVE1 raw=258→len≈219.3、第二面 h 是否落到 160~175、warn=14 后是否 SIDE_MOVE→VERIFY→LASER，并量首次光斑到窄面中心线偏距",
+   "docs": [
+    "docs/M4g-l1-and-narrow-retry-20261125.md",
+    "docs/teammate-targeting-handover.md",
+    "docs/codebase-guide.md"
+   ]
   }
- }
+  }
 }

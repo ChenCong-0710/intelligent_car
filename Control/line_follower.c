@@ -103,12 +103,12 @@ LfConfig lf_default_config(void) {
         .line_kp = 115, .line_ki = 0, .line_kd = 1.8f, .line_k3 = .35f, .derivative_tau_s = .016f,
         /* 速度与加减速参数：默认直线 120 mm/s，急弯减速下限 55 mm/s，加速度 1200 mm/s² */
         .cruise_mm_s = 120, .curve_min_mm_s = 55, .max_wheel_mm_s = 280,
-        .max_turn_mm_s = 190, .acceleration_mm_s2 = 1200, .duty_slew_s = 5,
+        .max_turn_mm_s = 190, .acceleration_mm_s2 = 1200, .duty_slew_s = 20,
         /* 速度环与左右轮独立死区/满速参数（可通过 mcal air / mcal ground 5 轮实测自动更新） */
-        .speed_kp = .0012f, .speed_ki = .003f, .free_speed_mm_s = 450,
+        .speed_kp = .00133f, .speed_ki = .0053f, .free_speed_mm_s = 450,
         .feedforward_deadband = .14f,
         .wheel_deadband = {.14f, .14f}, .wheel_free_speed = {450, 450},
-        .max_duty = .95f, .integral_limit = .25f,
+        .max_duty = .95f, .integral_limit = .60f,
         /* 机械几何参数：840 脉冲/圈，轮径 43 mm，探头坐标 {-1, -0.35, +0.35, +1}
          * 轮距用“等效里程计轮距”112.5：2026-11-22 台架实测 LEG 命令 90° 实车约 104°（多 14°），
          * 按 130×90/104≈112.5 标定（物理轮距仍约 130；turn 90 60 复测后再微调）。 */
@@ -149,7 +149,7 @@ LfConfig lf_default_config(void) {
             /* M2 侧视横扫：主方案默认开启（scan_mode=1），箱体在左、舵机右掰 90° 侧视 */
             .scan_mode = 1U, .side_left = true, .side_us = 2400U,
             .fit_rms_mm = LF_PROBE_FIT_RMS_MM,
-            .side_speed_mm_s = 50.0f, .side_reach_mm = 260.0f,
+            .side_speed_mm_s = 75.0f, .side_reach_mm = 260.0f,
             /* 台架实测（2026-11-22 上车）：车在动时侧视读数噪声约 ±15 mm（静止只有 ±2 mm），
              * band 8 会把大部分面内样本当噪声丢掉 → 放宽到 15；背景在 500~900 mm，jump 放到 40 仍安全。
              * 波束半角：4 次干净扫描反推 (span 202/185/199/191, h≈166) → γ≈7.6°，
@@ -625,15 +625,18 @@ static void update_odometry(LfController *c, const LfInput *in, float dt) {
     if (sum_dt > 0) {
         for (unsigned i = 0; i < 2; ++i) {
             float win_speed = (sum_counts[i] * mm_per_count) / sum_dt;
-            c->measured_mm_s[i] += dt / (.006f + dt) * (win_speed - c->measured_mm_s[i]);
+            c->measured_mm_s[i] += dt / (.05f + dt) * (win_speed - c->measured_mm_s[i]);
         }
     }
     float ds = .5f * (step_mm[0] + step_mm[1]);
     float dtheta = (step_mm[1] - step_mm[0]) / c->cfg.track_width_mm;
+    /* 中点积分：这一拍的位移方向取「上一拍车头 + 半拍转角」，不是更新后的车头。
+     * 侧扫/开位的 s 由 x/y 投影得到；转弯时用新车头会把弧长切向提前半拍，留下系统性偏置。 */
+    float mid_rad = c->odo.heading_rad + 0.5f * dtheta;
     c->odo.distance_mm += ds;
     c->odo.heading_rad += dtheta;
-    c->odo.x_mm += ds * cosf(c->odo.heading_rad);
-    c->odo.y_mm += ds * sinf(c->odo.heading_rad);
+    c->odo.x_mm += ds * cosf(mid_rad);
+    c->odo.y_mm += ds * sinf(mid_rad);
 }
 
 /* ============================================================================
@@ -944,7 +947,7 @@ static bool morse_2short_1long(uint32_t elapsed_ms) {
 
 /**
  * @brief 单个扫掠采样点的最短驻留时长 (ms)
- * @note  60 ms 覆盖一次硬件超声触发周期，另 60 ms 用于等舵机走完这一步（SG90 约 10 ms/deg，
+ * @note  40 ms 覆盖一次硬件超声触发周期，另 60 ms 用于等舵机走完这一步（SG90 约 10 ms/deg，
  *        7.5° 一步约 75 ms）。驻留不足会让采样点混入上一角度的旧回波，使法线出现 1~2° 系统偏置。
  */
 #define LF_PROBE_SCAN_MIN_DWELL_MS 120U
@@ -1039,6 +1042,14 @@ static bool probe_inlier(float rho, float phi, float th, uint16_t d, float band)
     return fabsf((float)d - pred) <= band;
 }
 
+/** @brief 将 AIM 时相对超声轴的箱面位置锁存为里程计坐标 */
+static LfAimSeed probe_aim_seed_world(const LfController *c, float x, float y, float width) {
+    float co = cosf(c->odo.heading_rad), si = sinf(c->odo.heading_rad);
+    x += c->cfg.probe.pan_x_mm;
+    return (LfAimSeed){.valid = true, .x_mm = c->odo.x_mm + x * co - y * si,
+                      .y_mm = c->odo.y_mm + x * si + y * co, .width_mm = width};
+}
+
 /**
  * @brief 角域边界法：用最近连续段的两条**棱边**求面法线 / 垂直距离 / 宽度（2026-11-24）
  *
@@ -1124,6 +1135,7 @@ static bool probe_boundary_normal(LfController *c, unsigned start, unsigned len,
     c->aim_bw_th_l_deg = fminf(th_a, th_b) * 57.2957795f;
     c->aim_bw_th_r_deg = fmaxf(th_a, th_b) * 57.2957795f;
     c->aim_bw_aim_deg = atan2f(0.5f * (ay + by), 0.5f * (ax + bx)) * 57.2957795f;
+    c->face.aim_seed = probe_aim_seed_world(c, 0.5f * (ax + bx), 0.5f * (ay + by), w);
     *phi = atan2f(fy, fx);
     *rho = fr;
     *rms = sqrtf(e2 / (float)m);
@@ -1278,14 +1290,18 @@ static bool probe_fit_normal(LfController *c, uint16_t *pulse_us, uint16_t *dist
         float phi = atan2f(plane_b, plane_a);
         float rho = 1.0f / sqrtf(plane_a * plane_a + plane_b * plane_b);
         if (isfinite(phi) && isfinite(rho) && rho > 1.0f) {
-            float e2 = 0.0f;
+            float e2 = 0.0f, sum_x = 0.0f, sum_y = 0.0f;
             unsigned used = 0, inl = 0;
             for (unsigned i = fit_start; i < fit_end; ++i) {
                 float th = probe_scan_angle(c, i);
                 float e = (float)c->scan_range_mm[i] - rho / cosf(th - phi);
                 e2 += e * e;
                 ++used;
-                if (probe_inlier(rho, phi, th, c->scan_range_mm[i], LF_PROBE_INLIER_BAND_MM)) ++inl;
+                if (probe_inlier(rho, phi, th, c->scan_range_mm[i], LF_PROBE_INLIER_BAND_MM)) {
+                    sum_x += (float)c->scan_range_mm[i] * cosf(th);
+                    sum_y += (float)c->scan_range_mm[i] * sinf(th);
+                    ++inl;
+                }
             }
             c->face.phi = phi;
             c->face.rho = rho;
@@ -1293,6 +1309,8 @@ static bool probe_fit_normal(LfController *c, uint16_t *pulse_us, uint16_t *dist
             c->face.hits = (uint8_t)(inl > 255U ? 255U : inl);
             c->face.valid = (inl >= LF_PROBE_MIN_INLIERS) && (c->face.rms < c->cfg.probe.fit_rms_mm) &&
                             (rho > 60.0f) && (rho < 400.0f);
+            if (c->face.valid)
+                c->face.aim_seed = probe_aim_seed_world(c, sum_x / (float)inl, sum_y / (float)inl, 0.0f);
         }
     }
     return true;
@@ -1337,9 +1355,9 @@ static void probe_scan_finish(LfController *c) {
 static void probe_side_ring_reset(LfController *c) {
     c->side_ring_n = 0U;
     c->side_ring_i = 0U;
-    c->side_bad = 0U;
+    c->side_out_jump = 0U;
     c->side_out_zero = 0U;
-    c->side_s_out_first = 0.0f;
+    /* 保留外点起点及序号供本拍 EDGE 日志读取；下一段证据的首帧会覆盖它们。 */
 }
 
 /** @brief 把一帧面内样本压入 8 点滑动环（环形覆盖，最小二乘与顺序无关） */
@@ -1367,6 +1385,7 @@ static void probe_side_ring_push(LfController *c, float s, float d) {
 /** @brief 清空一遍侧扫的全部判定状态（不动 side_h / 原点 / 复测标志） */
 static void probe_side_scan_reset(LfController *c) {
     c->side_stage = (uint8_t)LF_SIDE_FWD;
+    c->side_reverse_first = false;
     c->side_edges = 0U;
     c->side_verify_mode = 0U;
     c->side_warn = 0U;
@@ -1375,6 +1394,10 @@ static void probe_side_scan_reset(LfController *c) {
     c->side_h0 = c->side_h;
     c->side_k = 0.0f;
     c->side_inface = 0U;
+    c->side_edge_pending = 0U;
+    c->side_rev_approach = false;
+    c->side_rev_depart_frames = 0U;
+    c->side_rev_recover_frames = 0U;
     c->side_edge_frames = 0U;
     c->side_fit_sum_s = 0.0f;
     c->side_fit_sum_d = 0.0f;
@@ -1399,11 +1422,12 @@ static float probe_side_along(const LfController *c) {
     return dx * cosf(c->side_origin_rad) + dy * sinf(c->side_origin_rad);
 }
 
-/** @brief 锁存侧扫轴原点（车体位姿 + 航向）并按 60 ms 超声节拍重新起算采样计时 */
+/** @brief 锁存侧扫轴原点（车体位姿 + 航向）并按超声触发节拍重新起算采样计时 */
 static void probe_side_begin(LfController *c, uint32_t now) {
     c->side_origin_x_mm = c->odo.x_mm;
     c->side_origin_y_mm = c->odo.y_mm;
     c->side_origin_rad = c->odo.heading_rad;
+    c->side_move_ref_rad = c->side_origin_rad;
     c->side_ping_since = now;
     c->face.id = c->probe_face;
     probe_side_scan_reset(c);
@@ -1411,7 +1435,12 @@ static void probe_side_begin(LfController *c, uint32_t now) {
 
 /* 2026-11-22：扫描期按 side_k 修车头的 probe_drive_face 已撤掉。
  * 台架实测效果一般，且 side_k 会被电机死区造成的走弯污染（k≈0.25 里有一部分是弧线，
- * 不是静态斜停）。侧扫/开位一律回到 probe_drive_signed：锁 phase_start_rad。 */
+ * 不是静态斜停）。侧扫/开位一律回到 probe_drive_signed，但参考航向必须显式传入：
+ *   - 侧扫 / 开位 / 复测 / 沿面搜索：side_origin_rad（本遍扫描原点）；
+ *   - TURN_PAR 倒车：phase_start_rad（该相位原点）。
+ * 以前函数内部固定用 phase_start_rad：SIDE_MOVE/复测的相位起点是「扫描结束时的车头」，
+ * 而 s_m 是相对「扫描起点车头」量的，两者差就是扫描期间漂掉的航向；开位时不但没纠回，
+ * 反而把这个漂移当成基准锁住，激光就沿这个偏航打出去（h·tanΔψ）。 */
 
 /**
  * @brief 沿当前航向有符号直行（带里程计航向纠偏），侧扫与开位共用
@@ -1421,10 +1450,10 @@ static void probe_side_begin(LfController *c, uint32_t now) {
  *        120 意味着"每偏 1° 只给 2.1 mm/s 差速"（≈6°/s 的纠正能力），持续性漂移会留下 2~3° 稳态误差。
  *        300 对应 ≈15°/s，稳态误差应压到 ~1°。若出现低频摆动，把这两个数改回 120 / 30 即可。
  */
-static void probe_drive_signed(LfController *c, float speed_mm_s, float dt) {
+static void probe_drive_signed(LfController *c, float speed_mm_s, float ref_rad, float dt) {
     float sign = speed_mm_s >= 0.0f ? 1.0f : -1.0f;
     float spd = fabsf(speed_mm_s);
-    float corr = limit((c->odo.heading_rad - c->phase_start_rad) * 300.0f, -40.0f, 40.0f);
+    float corr = limit((c->odo.heading_rad - ref_rad) * 300.0f, -40.0f, 40.0f);
     speed_control(c, sign * spd + corr, sign * spd - corr, dt, true);
 }
 
@@ -1461,19 +1490,58 @@ static bool probe_side_fit(const LfController *c, float *h0, float *k) {
     return true;
 }
 
+/** @brief 波束足印半宽 h·tanγ (mm)，用于边界补偿与扫程预算 */
+static float probe_side_footprint(const LfController *c) {
+    return c->side_h * tanf(c->cfg.probe.beam_half_deg * 0.01745329252f);
+}
+
+/** @brief 用已知的正向边界检查反向外点的位置 */
+static bool probe_side_rev_out_position_ok(const LfController *c, float s) {
+    if (c->side_stage != (uint8_t)LF_SIDE_REV || c->side_edges != 1U) return false;
+    float gap = c->side_s_last_good - s;
+    if (gap <= 0.0f) return false;
+    /* 过渡带较宽时，夹区中点估出的宽度可能刚好落在分类空档；也核对首个外点的宽度。 */
+    float width_at_out = c->side_s_edge[0] - s - 2.0f * probe_side_footprint(c);
+    return probe_side_width_ok(width_at_out - 0.5f * gap) || probe_side_width_ok(width_at_out);
+}
+
+/** @brief 跟踪反扫局部回波偏离，返回 true 表示本次偏离首次达到提前制动条件 */
+static bool probe_side_rev_track(LfController *c, float s, float residual, bool inside) {
+    if (inside) {
+        c->side_rev_depart_frames = 0U;
+        if (c->side_rev_approach && ++c->side_rev_recover_frames >= LF_SIDE_REV_RECOVER_FRAMES) {
+            c->side_rev_approach = false;
+            c->side_rev_recover_frames = 0U;
+        }
+        return false;
+    }
+    c->side_rev_recover_frames = 0U;
+    if (residual <= c->cfg.probe.side_band_mm) {
+        c->side_rev_depart_frames = 0U;
+        return false;
+    }
+    if (c->side_rev_depart_frames == 0U) c->side_rev_depart_s = s;
+    if (c->side_rev_depart_frames < LF_SIDE_REV_DEPART_FRAMES) ++c->side_rev_depart_frames;
+    if (c->side_rev_approach || c->side_rev_depart_frames < LF_SIDE_REV_DEPART_FRAMES) return false;
+    c->side_rev_approach = true;
+    return true;
+}
+
 /**
- * @brief 侧扫单帧喂入：维护面内直线模型，连续外点判定边界
+ * @brief 侧扫单帧喂入：维护面内模型，确认明显出界或累积连续外点
  * @param s 当前扫描坐标 (mm)
+ * @param s_now 收到结果时的扫描坐标 (mm)，用于记录制动位置
  * @param d 当前侧视回波 (mm，0 = 无回波/丢帧)
+ * @param now 收到该结果的控制时刻 (ms)
  */
-static void probe_side_feed(LfController *c, float s, uint16_t d) {
+static void probe_side_feed(LfController *c, float s, float s_now, uint16_t d, uint32_t now) {
     const LfProbeConfig *pr = &c->cfg.probe;
     /* 起步/换向后先重建基线：只收与 SIDE_LOCK 实测 h 接近的样本，避免背景墙（几百 mm）污染模型 */
     if (c->side_ring_n < LF_SIDE_RING_MIN) {
         if (d != 0U && fabsf((float)d - c->side_h) <= pr->side_jump_mm) {
             probe_side_ring_push(c, s, (float)d);
             c->side_s_last_good = s;
-            c->side_bad = 0U;
+            c->side_out_jump = 0U;
             c->side_out_zero = 0U;
         }
         return;
@@ -1481,43 +1549,85 @@ static void probe_side_feed(LfController *c, float s, uint16_t d) {
     float h0 = 0.0f, k = 0.0f;
     if (!probe_side_fit(c, &h0, &k)) return;
     float pred = h0 + k * s;
-    float dev = d != 0U ? fabsf((float)d - pred) : 1.0e9f;
-    if (dev <= pr->side_band_mm) {
+    float residual = d != 0U ? (float)d - pred : 0.0f;
+    float dev = d != 0U ? fabsf(residual) : 1.0e9f;
+    bool inside = dev <= pr->side_band_mm;
+    bool enough_inface = c->side_inface >= LF_SIDE_EDGE_MIN_INFACE;
+    bool rev_ready = c->side_stage == (uint8_t)LF_SIDE_REV && enough_inface;
+    if (rev_ready && probe_side_rev_track(c, s, residual, inside) && !c->side_edge_pending) {
+        c->side_brake_since = now;
+        c->side_edge_pending = 1U;
+        c->side_rev_brake_s = s_now;
+        if (!c->side_push) c->side_event |= (uint8_t)LF_SIDE_EVENT_REV_BRAKE;
+    }
+    bool local_jump = rev_ready && residual > pr->side_jump_mm &&
+                      c->side_rev_depart_frames >= LF_SIDE_REV_DEPART_FRAMES &&
+                      probe_side_rev_out_position_ok(c, s);
+    if (inside) {
         /* 面内：更新模型（k 吸收车不平行造成的 h 随 s 线性漂移） */
         probe_side_ring_push(c, s, (float)d);
         c->side_s_last_good = s;
         c->side_h0 = h0;
         c->side_k = k;
-        c->side_bad = 0U;
+        c->side_out_jump = 0U;
         c->side_out_zero = 0U;
-    } else if (dev > pr->side_jump_mm) {
-        /* 外点。两类证据分开累计：
-         *   ① 跳变型：有回波、且与基线 h 的差 > jump —— 说明确实换了一个物体（背景墙），3 帧确认；
-         *   ② 无回波型：d == 0 —— 丢帧与真出界不可区分，只能靠持续时间，6 帧确认。
-         * 只有"偏离预测"但回波仍接近 h（例如面外 20 mm 处有墙）时两类都不成立，当歧义继续扫，
-         * 最终由 reach/timeout 判失败——宁可不打这一面，也不要拿假边界算中点。 */
-        if (c->side_bad == 0U) c->side_s_out_first = s;
-        if (c->side_bad < 255U) ++c->side_bad;
-        if (d == 0U) {
-            if (c->side_out_zero < 255U) ++c->side_out_zero;
+        if (!c->side_rev_approach || now - c->side_brake_since >= LF_SIDE_REV_BRAKE_HOLD_MS)
+            c->side_edge_pending = 0U;
+    } else if (local_jump || (dev > pr->side_jump_mm &&
+                              (d == 0U || fabsf((float)d - c->side_h) > pr->side_jump_mm))) {
+        /* 面内证据还不够时不要因一个候选外点刹车：车一停，side_inface 就永远长不到
+         * LF_SIDE_EDGE_MIN_INFACE，确认条件再也不可能满足，最后只能等到整段超时。
+         * 2026-11-25 第二面从旧原点重扫正是这样：edges=0、原地等了 13.4 s。 */
+        if (!enough_inface) {
+            c->side_out_jump = 0U;
+            c->side_out_zero = 0U;
+            c->side_edge_pending = 0U;
+            return;
         }
-        bool jump_edge = (d != 0U) && (c->side_bad >= LF_SIDE_EDGE_JUMP_FRAMES) &&
-                         (fabsf((float)d - c->side_h) > pr->side_jump_mm);
-        bool zero_edge = c->side_out_zero >= LF_SIDE_EDGE_ZERO_FRAMES;
+        /* 外点。两类证据分开累计：
+         *   ① 跳变型：一般 3 帧确认，反扫遇到几何上合理的明显远背景时可当拍确认；
+         *   ② 无回波型：d == 0 —— 丢帧与真出界不可区分，只能靠持续时间，6 帧确认。
+         * 两类只累计连续同类证据，歧义回波不能用于确认。 */
+        bool confirmed;
+        bool first = d == 0U ? c->side_out_zero == 0U : c->side_out_jump == 0U;
+        if (first) {
+            c->side_s_out_first = s;
+            c->side_out_first_seq = c->side_result_seq;
+        }
+        if (!c->side_edge_pending) c->side_brake_since = now;
+        c->side_edge_pending = 1U;
+        if (d == 0U) {
+            c->side_out_jump = 0U;
+            if (c->side_out_zero < 255U) ++c->side_out_zero;
+            confirmed = c->side_out_zero >= LF_SIDE_EDGE_ZERO_FRAMES;
+        } else {
+            c->side_out_zero = 0U;
+            if (c->side_out_jump < 255U) ++c->side_out_jump;
+            confirmed = c->side_out_jump >= LF_SIDE_EDGE_JUMP_FRAMES;
+        }
         /* 还要求自上次边界以来已积累足够的面内证据：防止「擦边丢帧」被当成边界 */
-        bool enough_inface = c->side_inface >= LF_SIDE_EDGE_MIN_INFACE;
-        if (enough_inface && (jump_edge || zero_edge)) {
+        bool fast = rev_ready && (float)d - fmaxf(pred, c->side_h) > 2.0f * pr->side_jump_mm &&
+                    probe_side_rev_out_position_ok(c, c->side_s_out_first);
+        if (enough_inface && (confirmed || fast)) {
+            c->side_edge_zero = d == 0U;
             float edge = 0.5f * (c->side_s_last_good + c->side_s_out_first);
             if (c->side_edges < 2U) c->side_s_edge[c->side_edges++] = edge;
+            /* 停稳回探期间不再滚动更新，用确认粗边时的面内模型识别回波重现。 */
+            c->side_h0 = h0;
+            c->side_k = k;
             c->side_edge_frames = c->side_inface > 255U ? 255U : (uint8_t)c->side_inface;
             c->side_inface = 0U;
             c->side_event |= (uint8_t)LF_SIDE_EVENT_EDGE;
+            c->side_edge_pending = 0U;
             probe_side_ring_reset(c);
         }
     } else {
-        /* 中间带（band < dev <= jump）：当噪声丢弃，不更新模型也不累加外点 */
-        c->side_bad = 0U;
+        /* 中间带或仍接近锁定侧距的歧义回波：打断两种连续证据。 */
+        c->side_out_jump = 0U;
         c->side_out_zero = 0U;
+        /* 提前制动和强外点后的观察都有时限，之后才低速探下一点。 */
+        if (rev_ready && c->side_edge_pending && now - c->side_brake_since < LF_SIDE_REV_BRAKE_HOLD_MS) return;
+        c->side_edge_pending = 0U;
     }
 }
 
@@ -1531,8 +1641,7 @@ static bool probe_side_center(LfController *c) {
     float e1 = c->side_s_edge[1];
     float lo = fminf(e0, e1);
     float hi = fmaxf(e0, e1);
-    float gamma = c->cfg.probe.beam_half_deg * 0.01745329252f;
-    float reach = c->side_h * tanf(gamma); /* 波束足印半宽：两侧同向外扩 → 中点不动 */
+    float reach = probe_side_footprint(c); /* 两侧各向内补偿同一距离，中点不动 */
     c->face.s_l = lo + reach;
     c->face.s_r = hi - reach;
     c->face.s_m = 0.5f * (lo + hi);
@@ -1589,6 +1698,33 @@ static bool probe_side_width_ok(float w) {
            (w >= 140.0f && w <= 190.0f);
 }
 
+/** @brief 本面名义宽窄（0=窄 50 / 1=宽 150）。首面基准锁存后按面号奇偶交替，避免信坏 w。 */
+static uint8_t probe_side_expected_kind(const LfController *c) {
+    if (c->box_kind_ok) return (uint8_t)(c->box_first_kind ^ (c->probe_face & 1U));
+    return c->face.kind;
+}
+
+/** @brief 两条原始边界是否仍值得去中点复测（不要求宽度公式可信） */
+static bool probe_side_pair_plausible(const LfController *c) {
+    if (c->side_edges < 2U || !isfinite(c->face.w) || !isfinite(c->face.s_m)) return false;
+    const LfProbeConfig *pr = &c->cfg.probe;
+    if (fabsf(c->face.s_m) > pr->side_reach_mm) return false;
+    float fp = probe_side_footprint(c);
+    float raw_span = c->face.w + 2.0f * fp; /* 加回宽度公式扣掉的足印 */
+    uint8_t kind = probe_side_expected_kind(c);
+    float nominal = kind == 0U ? LF_BOX_SHORT_MM : LF_BOX_LONG_MM;
+    if (raw_span < LF_SIDE_RAW_SPAN_MIN_RATIO * nominal) return false;
+    return raw_span <= nominal + 2.0f * fp + LF_SIDE_RAW_SPAN_EXTRA_MAX_MM;
+}
+
+/** @brief 异常重扫优先回到初扫中点；只有中点本身不可用时才退回旧原点 */
+static float probe_side_retry_target(const LfController *c) {
+    const LfProbeConfig *pr = &c->cfg.probe;
+    if (c->side_edges >= 2U && isfinite(c->face.s_m) &&
+        fabsf(c->face.s_m) <= 0.75f * pr->side_reach_mm) return c->face.s_m;
+    return 0.0f;
+}
+
 /** @brief 取 side_ring_d[0..n-1] 的中位数（SIDE_LOCK 的 5 帧；插入排序，n 很小） */
 static float probe_side_median(const LfController *c, uint8_t n) {
     float v[LF_SIDE_LOCK_FRAMES];
@@ -1606,11 +1742,6 @@ static float probe_side_median(const LfController *c, uint8_t n) {
     return v[n / 2U];
 }
 
-/** @brief 波束足印半宽 h·tanγ (mm)：边界会向外多出这一段，行程预算与 γ 补偿都要用它 */
-static float probe_side_footprint(const LfController *c) {
-    return c->side_h * tanf(c->cfg.probe.beam_half_deg * 0.01745329252f);
-}
-
 /** @brief 边界确认距离 (mm)：连续 LF_SIDE_EDGE_ZERO_FRAMES 帧 × 每帧行程 + 余量 */
 static float probe_side_confirm_mm(const LfController *c) {
     float step = c->cfg.probe.side_speed_mm_s * ((float)LF_SIDE_PING_MS * 0.001f);
@@ -1620,20 +1751,124 @@ static float probe_side_confirm_mm(const LfController *c) {
 /** @brief 侧扫引擎返回码（与 LfSideStage 的 LF_SIDE_DONE 区分命名） */
 typedef enum { LF_SIDE_SCAN_RUN = 0, LF_SIDE_SCAN_OK = 1, LF_SIDE_SCAN_FAIL = 2 } LfSideResult;
 
-/**
- * @brief 侧扫（或复测）一拍：先按 60 ms 超声节拍取一帧，再推进 FWD/REV 子状态并输出驱动
- * @return LF_SIDE_SCAN_RUN = 仍在扫；LF_SIDE_SCAN_OK = 两边界齐；LF_SIDE_SCAN_FAIL = 超时/超行程
- */
+/** @brief 把一次独立的超声结果配回发出该脉冲时的扫描位置。 */
+static bool probe_side_ping(LfController *c, const LfInput *in, float s, float *sample_s) {
+    /* 丢回波可能在下一次触发时才结算，必须先读旧位置，再记录新位置。 */
+    bool fresh = false;
+    if (in->us_result_seq != 0U && in->us_result_seq != c->side_result_seq) {
+        c->side_result_seq = in->us_result_seq;
+        if (in->us_trigger_ms == c->side_trigger_ms &&
+            (int32_t)(in->us_trigger_ms - c->side_ping_since) > 0) {
+            *sample_s = c->side_trigger_s;
+            fresh = true;
+        }
+    }
+    if (in->us_active_trigger_ms != c->side_trigger_ms) {
+        c->side_trigger_ms = in->us_active_trigger_ms;
+        c->side_trigger_s = s;
+    }
+    return fresh;
+}
+
+/** @brief 粗反边制动后开始正向回探，首个外点作为已知的面外位置 */
+static void probe_side_refine_begin(LfController *c, float s, uint32_t now) {
+    c->side_stage = (uint8_t)LF_SIDE_REFINE;
+    c->side_refine_since = now;
+    c->side_ping_since = now;
+    c->side_refine_out_s = c->side_s_out_first;
+    c->side_refine_in_s = c->side_s_last_good;
+    c->side_refine_next_s = s + LF_SIDE_EDGE_REFINE_STEP_MM;
+    c->side_refine_limit_s = fminf(s + LF_SIDE_EDGE_REFINE_TRAVEL_MM,
+                                  c->side_s_last_good + LF_SIDE_EDGE_REFINE_LIMIT_MM);
+    c->side_refine_in_frames = 0U;
+    c->side_refine_zero_frames = 0U;
+    c->side_refine_step_frames = 0U;
+    c->side_refine_checking = false;
+    c->side_refine_applied = false;
+}
+
+/** @brief 完成回探，只有夹区收窄且面宽合理时才更新粗边界 */
+static LfSideResult probe_side_refine_finish(LfController *c, bool have_inside) {
+    float gap = c->side_refine_in_s - c->side_refine_out_s;
+    float edge = 0.5f * (c->side_refine_out_s + c->side_refine_in_s);
+    c->side_refine_applied = have_inside && gap > 0.0f && gap <= LF_SIDE_EDGE_REFINE_GAP_MM &&
+                            c->side_refine_in_s <= c->side_s_last_good + LF_SIDE_EDGE_REFINE_LIMIT_MM &&
+                            probe_side_width_ok(c->side_s_edge[0] - edge - 2.0f * probe_side_footprint(c));
+    if (c->side_refine_applied) c->side_s_edge[1] = edge;
+    c->side_event |= (uint8_t)LF_SIDE_EVENT_REFINE;
+    c->side_stage = (uint8_t)LF_SIDE_DONE;
+    probe_motion_reset(c);
+    return LF_SIDE_SCAN_OK;
+}
+
+/** @brief 面外低速往前找面内回波，两帧独立的面内回波确认重入 */
+static LfSideResult probe_side_refine_tick(LfController *c, const LfInput *in, float s,
+                                           uint32_t now, float dt) {
+    const LfProbeConfig *pr = &c->cfg.probe;
+    c->out.park_lamp = true;
+    if (s >= c->side_refine_limit_s || now - c->side_refine_since >= LF_SIDE_EDGE_REFINE_TIMEOUT_MS)
+        return probe_side_refine_finish(c, false);
+
+    if (!c->side_refine_checking && s >= c->side_refine_next_s) {
+        c->side_refine_checking = true;
+        c->side_refine_step_frames = 0U;
+        c->side_ping_since = now + LF_SIDE_PING_MS; /* 检查点先制动一帧周期，再接收新的触发。 */
+    }
+    float sample_s;
+    if (probe_side_ping(c, in, s, &sample_s)) {
+        uint16_t d = in->us_result_mm;
+        float residual = (float)d - (c->side_h0 + c->side_k * sample_s);
+        if (d != 0U && fabsf(residual) <= pr->side_band_mm) {
+            if (c->side_refine_in_frames == 0U) c->side_refine_in_s = sample_s;
+            c->side_refine_zero_frames = 0U;
+            if (++c->side_refine_in_frames >= LF_SIDE_EDGE_REFINE_FRAMES)
+                return probe_side_refine_finish(c, true);
+        } else {
+            c->side_refine_in_frames = 0U;
+            if (d != 0U) c->side_refine_zero_frames = 0U;
+            else if (c->side_refine_zero_frames < LF_SIDE_EDGE_REFINE_FRAMES) ++c->side_refine_zero_frames;
+            if ((d != 0U && residual > pr->side_band_mm) || c->side_refine_zero_frames >= LF_SIDE_EDGE_REFINE_FRAMES)
+                c->side_refine_out_s = fmaxf(c->side_refine_out_s, sample_s);
+        }
+        if (c->side_refine_checking && ++c->side_refine_step_frames >= LF_SIDE_EDGE_REFINE_FRAMES) {
+            c->side_refine_checking = false;
+            c->side_refine_next_s = s + LF_SIDE_EDGE_REFINE_STEP_MM;
+        }
+    }
+    if (c->side_refine_checking || c->side_refine_in_frames != 0U) probe_motion_reset(c);
+    else probe_drive_signed(c, fminf(pr->side_speed_mm_s, LF_SIDE_REV_APPROACH_MM_S), c->side_origin_rad, dt);
+    return LF_SIDE_SCAN_RUN;
+}
+
+/** @brief 处理本拍新回波，推进正扫/反扫状态并输出轮速。 */
 static LfSideResult probe_side_scan_tick(LfController *c, const LfInput *in, uint32_t now, float dt) {
     const LfProbeConfig *pr = &c->cfg.probe;
-    uint32_t elapsed = now - c->phase_since;
+    /* lf_step() 每拍清空输出，确认第二边或扫程失败提前返回时也要保持主动制动。 */
+    if (!c->side_push) c->out.enable = c->out.brake = true;
     float s = probe_side_along(c);
-    /* 1. 按超声 60 ms 触发节拍取一帧（不是每个 5 ms 控制拍都取，否则滑动环只有 40 ms 历史，斜率全被噪声吃掉） */
-    if ((uint32_t)(now - c->side_ping_since) >= LF_SIDE_PING_MS) {
-        c->side_ping_since = now;
-        probe_side_feed(c, s, in->obstacle_valid ? in->obstacle_mm : 0U);
+    if (c->side_stage == (uint8_t)LF_SIDE_REFINE) return probe_side_refine_tick(c, in, s, now, dt);
+    if (c->side_stage != (uint8_t)LF_SIDE_DONE) {
+        float sample_s;
+        if (probe_side_ping(c, in, s, &sample_s))
+            probe_side_feed(c, sample_s, s, in->us_result_mm, now);
+        if (c->side_edges >= 2U) {
+            c->side_stage = (uint8_t)LF_SIDE_DONE;
+            probe_motion_reset(c);
+        }
     }
-    /* 2. 子状态推进：FWD 找 +s 侧边界 → REV 找 -s 侧边界 → DONE
+    if (c->side_stage == (uint8_t)LF_SIDE_DONE) {
+        /* 边界已锁存。单帧确认时先保持制动，再开始回中。 */
+        c->out.park_lamp = true;
+        if (c->side_push) return LF_SIDE_SCAN_OK;
+        if (now - c->side_brake_since >= LF_SIDE_REV_STOP_MS) {
+            if (c->side_reverse_first || c->side_s_last_good - c->side_s_out_first <= LF_SIDE_EDGE_REFINE_GAP_MM)
+                return LF_SIDE_SCAN_OK;
+            probe_side_refine_begin(c, s, now);
+        }
+        return LF_SIDE_SCAN_RUN;
+    }
+    uint32_t elapsed = now - c->phase_since;
+    /* 2. 第一条边确认后换向，第二条边确认后结束。
      *    行程上限 **相对扫描原点左右对称**（契约 §2.3「单方向最大扫描行程」）：
      *    普通扫描 = ±side_reach；复测 = ±(w/2 + h·tanγ + 确认距离)，随 h/速度动态算。 */
     float reach = c->side_verify_mode
@@ -1642,56 +1877,102 @@ static LfSideResult probe_side_scan_tick(LfController *c, const LfInput *in, uin
     uint32_t timeout_ms = c->side_push
         ? LF_SIDE_PUSH_TIMEOUT_MS
         : (uint32_t)((2.0f * pr->side_reach_mm + 300.0f) / fmaxf(pr->side_speed_mm_s, 20.0f) * 1000.0f) + 2500U;
-    if (c->side_stage == (uint8_t)LF_SIDE_FWD) {
-        if (c->side_edges >= 1U) {
-            c->side_s_turn = s;
-            c->side_stage = (uint8_t)LF_SIDE_REV;
-            probe_side_ring_reset(c);
-        } else if (s >= reach || elapsed >= timeout_ms) {
-            return LF_SIDE_SCAN_FAIL;
-        }
-    } else if (c->side_stage == (uint8_t)LF_SIDE_REV) {
-        if (c->side_edges >= 2U) {
-            c->side_stage = (uint8_t)LF_SIDE_DONE;
-            return LF_SIDE_SCAN_OK;
-        }
-        if (s <= -reach || elapsed >= timeout_ms) return LF_SIDE_SCAN_FAIL;
-    } else {
-        return LF_SIDE_SCAN_OK;
+    bool reverse = c->side_stage == (uint8_t)LF_SIDE_REV;
+    if (c->side_edges == 1U && reverse == c->side_reverse_first) {
+        c->side_s_turn = s;
+        c->side_stage = (uint8_t)(reverse ? LF_SIDE_FWD : LF_SIDE_REV);
+        c->side_rev_approach = false;
+        c->side_rev_depart_frames = 0U;
+        c->side_rev_recover_frames = 0U;
+        probe_side_ring_reset(c);
+    } else if ((reverse ? -s : s) >= reach || elapsed >= timeout_ms) {
+        return LF_SIDE_SCAN_FAIL;
     }
     /* 3. 输出：台架手推模式断电（人工推车），正常模式沿面直行 */
     if (c->side_push) {
         c->out.enable = false;
         c->out.brake = false;
         c->out.duty[0] = c->out.duty[1] = 0.0f;
+    } else if (c->side_edge_pending) {
+        /* 边界候选出现后原地取确认回波，避免为了凑连续帧数再向前多走一段。 */
+        probe_motion_reset(c);
     } else {
-        float spd = c->side_stage == (uint8_t)LF_SIDE_FWD ? pr->side_speed_mm_s : -pr->side_speed_mm_s;
-        probe_drive_signed(c, spd, dt);
+        float spd = pr->side_speed_mm_s;
+        if (c->side_stage == (uint8_t)LF_SIDE_REV) {
+            if (c->side_rev_approach || c->side_rev_depart_frames != 0U)
+                spd = fminf(spd, LF_SIDE_REV_APPROACH_MM_S);
+            spd = -spd;
+        }
+        probe_drive_signed(c, spd, c->side_origin_rad, dt);
     }
     c->out.park_lamp = true;
     return LF_SIDE_SCAN_RUN;
 }
 
-/**
- * @brief 启动一次 SIDE_LOCK 沿面搜索：下一拍进 stage 7 前进 LF_SIDE_SEEK_MM 再重采
- * @note  只在 probe_face>0（刚从 LEG 过来）才有意义；面 0 没有前序里程可依，照旧直接失败。
- */
-static void probe_side_seek_begin(LfController *c) {
+static bool probe_side_is_first_lock(const LfController *c) {
+    return c->probe_face == 0U && !c->side_bench && !c->side_push;
+}
+
+/** @brief 把 AIM 看到的面投影到转向完成后的扫描轴，计算侧视射线对上该点所需的位移 */
+static void probe_side_aim_seek_hint(LfController *c) {
+    const LfAimSeed *seed = &c->face.aim_seed;
+    if (!probe_side_is_first_lock(c) || !c->face.valid || !seed->valid) return;
+
+    float heading = c->side_origin_rad;
+    float co = cosf(heading), si = sinf(heading);
+    float ray_angle = ((float)c->cfg.probe.side_us - (float)c->cfg.servo_center_us) *
+                      (0.01745329252f / LF_PROBE_SCAN_US_PER_DEG);
+    float ray_y = sinf(ray_angle);
+    if (fabsf(ray_y) < 0.5f) return;
+    float dx = seed->x_mm - c->side_origin_x_mm;
+    float dy = seed->y_mm - c->side_origin_y_mm;
+    float range = (-dx * si + dy * co) / ray_y;
+    if (!(range >= LF_SIDE_H_MIN_MM && range <= LF_SIDE_H_MAX_MM)) return;
+    c->side_seek_hint_s = dx * co + dy * si - c->cfg.probe.pan_x_mm - range * cosf(ray_angle);
+    c->side_seek_hint_h = range;
+}
+
+/** @brief 选择下一次沿面重采位置，首面按 AIM 找面并有限换向，后续面沿用 LEG 的搜索方向 */
+static bool probe_side_seek_next(LfController *c) {
+    if (c->side_push || c->side_seek_n >= LF_SIDE_SEEK_TRIES) return false;
+    float start = probe_side_along(c);
+    float target;
+    if (probe_side_is_first_lock(c)) {
+        float hint = c->side_seek_hint_s;
+        float direction = hint > LF_SIDE_AIM_SEEK_DEAD_MM ? 1.0f : -1.0f;
+        float stride = 2.0f * LF_SIDE_SEEK_MM;
+        float first = fabsf(hint) > LF_SIDE_AIM_SEEK_DEAD_MM
+            ? limit(hint, -LF_SIDE_AIM_SEEK_MAX_MM, LF_SIDE_AIM_SEEK_MAX_MM) : direction * stride;
+        if (c->side_seek_n == 0U) target = first;
+        else if (c->side_seek_n == 1U && fabsf(first) < stride) target = direction * stride;
+        else if (c->side_seek_n == 1U || fabsf(first) < stride) target = -direction * stride;
+        else target = -direction * LF_SIDE_AIM_SEEK_MAX_MM;
+    } else if (c->probe_face > 0U) {
+        target = start + LF_SIDE_SEEK_MM;
+    } else {
+        return false;
+    }
     c->side_seek_n = (uint8_t)(c->side_seek_n + 1U);
-    c->side_seek_start_mm = c->odo.distance_mm;
+    c->side_seek_start_mm = start;
+    c->side_seek_target_mm = target;
     c->side_warn = 11U;
+    c->side_event |= (uint8_t)LF_SIDE_EVENT_SEEK;
     probe_motion_reset(c);
     c->side_lock_stage = 7U;
     c->side_h1 = 0.0f;
     c->side_ring_n = 0U;
+    return true;
 }
 
-/** @brief 进入 SIDE_LOCK：清空锁定/扫描状态，让 60 ms 采样节拍与 SIDE_MOVE 子状态从头开始 */
+/** @brief 进入 SIDE_LOCK：清空锁定/扫描状态，让超声采样节拍与 SIDE_MOVE 子状态从头开始 */
 static void probe_side_lock_begin(LfController *c, uint32_t now) {
     c->side_h = 0.0f;
     c->side_pred_mm = 0.0f;
     c->side_seek_n = 0U;
     c->side_seek_start_mm = 0.0f;
+    c->side_seek_target_mm = 0.0f;
+    c->side_seek_hint_s = 0.0f;
+    c->side_seek_hint_h = 0.0f;
     c->side_lock_sample_since = now;
     c->side_target = 0.0f;
     c->side_move_stage = (uint8_t)LF_SIDE_MOVE_DRIVE;
@@ -1725,15 +2006,16 @@ static void probe_side_lock_begin(LfController *c, uint32_t now) {
 }
 
 /**
- * @brief SIDE_LOCK 的 5 帧采样：每 60 ms 取一帧，返回 true 表示 5 帧齐
+ * @brief SIDE_LOCK 的 5 帧采样：每次新超声结果取一帧，返回 true 表示 5 帧齐
  * @note  预扫测斜的 h1/h2/h3 都用它；h2/h3 前把 side_ring_n 清 0。
  */
-static bool probe_side_lock_sample(LfController *c, const LfInput *in, uint32_t now) {
+static bool probe_side_lock_sample(LfController *c, const LfInput *in) {
     const LfProbeConfig *pr = &c->cfg.probe;
-    if ((uint32_t)(now - c->side_ping_since) >= LF_SIDE_PING_MS) {
-        c->side_ping_since = now;
-        uint16_t d = in->obstacle_valid ? in->obstacle_mm : 0U;
-        if (d >= pr->aim_min_mm && d <= pr->aim_max_mm && c->side_ring_n < LF_SIDE_LOCK_FRAMES)
+    float sample_s;
+    if (probe_side_ping(c, in, 0.0f, &sample_s)) {
+        uint16_t d = in->us_result_mm;
+        bool matches_aim = c->side_seek_hint_h <= 0.0f || fabsf((float)d - c->side_seek_hint_h) <= LF_SIDE_LOCK_TOL_MM;
+        if (d >= pr->aim_min_mm && d <= pr->aim_max_mm && matches_aim && c->side_ring_n < LF_SIDE_LOCK_FRAMES)
             c->side_ring_d[c->side_ring_n++] = (float)d;
     }
     return c->side_ring_n >= LF_SIDE_LOCK_FRAMES;
@@ -1751,6 +2033,11 @@ static bool probe_side_verify_begin(LfController *c, uint32_t now) {
     probe_side_begin(c, now);
     c->side_verify_mode = 1U;
     return true;
+}
+
+/** @brief 只修正已识别为宽面的最终停车目标，测得的中点仍供复测和几何计算使用 */
+static float probe_side_wide_park_bias(const LfController *c) {
+    return c->face.valid && c->face.kind == 1U ? LF_SIDE_WIDE_PARK_BIAS_MM : 0.0f;
 }
 
 /** @brief 当前应保持的舵机脉宽：侧视锁定后必须保持 side_us（扫描与发射同角是性质①的前提） */
@@ -1865,7 +2152,8 @@ static LfLegResult probe_leg_tick(LfController *c, const LfInput *in, uint32_t n
          * 2026-11-23 22:38 实测 160 → 206 → 298，第 3 面窄面已经在 30 cm 外，
          * 扫出来的 w = −20.3（两条边反序），整面丢失。 */
         if (c->h_ref_mm < 1.0f) c->h_ref_mm = h_leg;
-        c->leg_l1_mm = 0.5f * w_nom + pr->pan_x_mm + c->h_ref_mm;
+        c->leg_l1_raw_mm = 0.5f * w_nom + pr->pan_x_mm + c->h_ref_mm;
+        c->leg_l1_mm = LF_LEG_L1_SCALE * c->leg_l1_raw_mm;
         /* L2 要让**云台轴**落在下一面中心，所以减掉 pan_x；否则窄面会从面外 30 mm 起扫 */
         c->leg_l2_mm = h_leg + 0.5f * d_b - pr->pan_x_mm;
         if (c->leg_l2_mm < 20.0f) c->leg_l2_mm = 20.0f;
@@ -2083,7 +2371,7 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
             uint32_t s_el = elapsed - settle_ms;
             if (s_el > sweep_ms) s_el = sweep_ms;
             /* 由已用时间反推当前应驻留的离散角度点：舵机做“台阶式”步进而非连续扫掠，
-             * 保证每个角度上都留足 >= 60 ms 去覆盖一次硬件超声触发周期 */
+             * 保证每个角度上都留足 >= LF_SIDE_PING_MS 去覆盖一次硬件超声触发周期 */
             uint32_t index = (s_el * (uint32_t)points) / sweep_ms;
             if (index >= (uint32_t)points) index = (uint32_t)points - 1U;
             c->scan_index = (uint8_t)index;
@@ -2137,6 +2425,8 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
                         if (dphi <= LF_PROBE_AIM_MERGE_MAX_DEG) {
                             c->face.phi = 0.5f * (c->aim_first.phi + c->face.phi);
                             c->face.rho = 0.5f * (c->aim_first.rho + c->face.rho);
+                            if (c->aim_first.aim_seed.width_mm > 0.0f && c->face.aim_seed.width_mm <= 0.0f)
+                                c->face.aim_seed = c->aim_first.aim_seed;
                         } else {
                             c->face = c->aim_first;
                         }
@@ -2200,7 +2490,7 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
                 c->phase_start_rad = c->odo.heading_rad;
                 c->turn_stage = (uint8_t)LF_TURN_IDLE;
             } else {
-                probe_drive_signed(c, -50.0f, dt);
+                probe_drive_signed(c, -50.0f, c->phase_start_rad, dt);
             }
             break;
         }
@@ -2214,6 +2504,7 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
                 break;
             }
             probe_side_lock_begin(c, now);
+            probe_side_aim_seek_hint(c);
             change_probe_phase(c, LF_PROBE_SIDE_LOCK, now);
         } else if (elapsed >= LF_TURN_PAR_TIMEOUT_MS) {
             c->turn_ach_deg = (c->odo.heading_rad - c->turn_base_rad) * 57.2957795f;
@@ -2225,9 +2516,7 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
         break;
     }
     case LF_PROBE_SIDE_LOCK: {
-        /* 舵机掰到侧视 ±90°（默认 2400us = +90° = 箱体在左），等它走完，然后采一次 h 就结束。
-         * 2026-11-23 起这里**不做任何平移、不做任何转角**（扫描前自动测斜已整段删除，
-         * 原因见 case 1 的注释）；残余偏航交给 SIDE_SCAN 结束后的"二次微调"。
+        /* 舵机掰到侧视 ±90°后停车测 h。首面不在回波范围内时先根据 AIM 短距离找面。
          * 手推台架模式必须断电：否则 H 桥短接制动，人工推不动（与 side push 的承诺矛盾）。 */
         c->out.park_lamp = true;
         c->out.servo_us = pr->side_us;
@@ -2247,7 +2536,7 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
             c->side_lock_stage = 1;
             break;
         case 1: { /* h1（搜索重采后可能多次进入） */
-            if (!probe_side_lock_sample(c, in, now)) {
+            if (!probe_side_lock_sample(c, in)) {
                 uint32_t waited = now - c->side_lock_sample_since;
                 uint32_t wait_need = (c->side_seek_n == 0U) ? LF_SIDE_LOCK_FALLBACK_MS
                                                             : LF_SIDE_SEEK_WAIT_MS;
@@ -2264,14 +2553,20 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
                         break;
                     }
                 }
-                /* ② 还一帧都没采到、也搜够次数：沿面再进 30 mm 重采（见 LF_SIDE_SEEK_*） */
-                if (c->probe_face > 0U && c->side_seek_n < LF_SIDE_SEEK_TRIES) {
-                    probe_side_seek_begin(c);
-                }
+                if (!probe_side_seek_next(c) && probe_side_is_first_lock(c)) fail = true;
                 break;
             }
             c->side_h1 = probe_side_median(c, c->side_ring_n);
-            if (c->side_h1 < LF_SIDE_H_MIN_MM || c->side_h1 > LF_SIDE_H_MAX_MM) { fail = true; break; }
+            if (c->side_h1 < LF_SIDE_H_MIN_MM || c->side_h1 > LF_SIDE_H_MAX_MM) {
+                fail = !probe_side_seek_next(c);
+                break;
+            }
+            /* 窄面在棱边附近也可能回声有效，先向 AIM 看到的面内移，再留出足够的采样起跑距离。 */
+            if (c->side_seek_n == 0U && c->side_seek_hint_h > 0.0f) {
+                float w = c->face.aim_seed.width_mm;
+                float margin = LF_SIDE_AIM_SEEK_DEAD_MM + (w >= LF_SIDE_KIND_SPLIT_MM ? 0.5f * w : 0.0f);
+                if (w > 0.0f && fabsf(c->side_seek_hint_s) > margin && probe_side_seek_next(c)) break;
+            }
             /* 扫描前自动测斜（h1→平移→h2→退回→转正→h3）已于 2026-11-23 **整段删除**：
              * 它的输入是侧视超声在 side_us=2400 处的双稳态读数（同一位置 ±13~22 mm 跳变），
              * 60 mm 基线上的真实信号只有 5 mm，信噪比 0.3 —— 不是修正，是把噪声当信号再转一次。
@@ -2283,19 +2578,20 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
             c->side_lock_stage = 6;
             break;
         }
-        case 7: { /* 沿面搜索：前进 LF_SIDE_SEEK_MM（舵机仍压在 side_us），到位后重采 5 帧 */
-            float moved = c->odo.distance_mm - c->side_seek_start_mm;
-            if (moved >= LF_SIDE_SEEK_MM) {
+        case 7: { /* 沿面搜索：根据有符号的编码器位移到位，停稳后重采 */
+            float err = c->side_seek_target_mm - probe_side_along(c);
+            if (fabsf(err) < LF_SIDE_ARRIVE_MM) {
                 probe_motion_reset(c);
                 c->out.enable = c->out.brake = true;
                 c->out.duty[0] = c->out.duty[1] = 0.0f;
                 c->side_ring_n = 0U;
-                c->side_ping_since = now;
+                c->side_ping_since = now + LF_SIDE_PING_MS;
                 c->side_lock_sample_since = now;
                 c->side_lock_stage = 1U;
                 break;
             }
-            probe_drive_signed(c, LF_SIDE_SEEK_SPEED_MM_S, dt);
+            probe_drive_signed(c, err < 0.0f ? -LF_SIDE_SEEK_SPEED_MM_S : LF_SIDE_SEEK_SPEED_MM_S,
+                               c->side_origin_rad, dt);
             break;
         }
         default: { /* 6：ρ+pan_x 自检并通过才写 side_h */
@@ -2346,12 +2642,15 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
                 c->side_h = h;
                 c->face.h = h;
                 c->side_locked = 1U;
+                /* 起点在找面期间可能已移动，先在旧扫描轴上计算离 AIM 目标还差多少。 */
+                float hint = c->side_seek_hint_s - probe_side_along(c);
+                if (fabsf(hint) <= LF_SIDE_AIM_SEEK_DEAD_MM) hint = c->side_seek_hint_s;
+                bool reverse_first = c->side_seek_hint_h > 0.0f && hint < -LF_SIDE_AIM_SEEK_DEAD_MM;
                 probe_side_begin(c, now);
+                c->side_reverse_first = reverse_first;
+                if (reverse_first) c->side_stage = (uint8_t)LF_SIDE_REV;
                 change_probe_phase(c, LF_PROBE_SIDE_SCAN, now);
-            } else if (c->probe_face > 0U && c->side_seek_n < LF_SIDE_SEEK_TRIES) {
-                /* 回波本身不可用（<80 或 >450）：沿面再挪一段重采（见 LF_SIDE_SEEK_*） */
-                probe_side_seek_begin(c);
-            } else {
+            } else if (!probe_side_seek_next(c)) {
                 fail = true;
             }
             break;
@@ -2377,14 +2676,16 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
             if (!probe_turn_to(c, now, c->odo.heading_rad, c->side_yaw_rad,
                                LF_LEG_TURN_SPEED_MM_S, 3.0f, dt)) break;
             c->side_yaw_fix = 2U;
+            c->side_move_ref_rad = c->odo.heading_rad;
             c->turn_stage = (uint8_t)LF_TURN_IDLE;
             c->side_event |= (uint8_t)LF_SIDE_EVENT_YAW;  /* 再报一次：这次带上真实的 cmd/ach */
 
-            /* 关键：**不重锁扫描原点**。转完先沿面退回原来那个扫描原点（s=0），
-             * 再用已有的 side_rescan 机制从原点重扫一遍 —— 这样 s_m 仍在同一个坐标系里，
-             * SIDE_MOVE 的 side_target 才有意义。（重锁原点会让车在"面边缘"起扫，
-             * 单测 probeside 的 8° 用例就是靠这一点暴露出来的。） */
-            c->side_target = 0.0f;
+            /* 偏航修正后回到本次初扫估出的面中心，再重扫并重新锁定坐标原点。
+             * 原先回到旧扫描原点 s=0；若初扫原点偏离靶心（本次约 30 mm），重扫仍从
+             * 偏心位置出发，正反方向到边界的距离不均。这里先开到 face.s_m，重扫时
+             * probe_side_begin() 会在靶心附近重新锁原点，正反扫程更对称，之后仍以新扫
+             * 得到的 s_m 定位/复测。不能直接在旧原点系下重锁，否则会从边缘起扫。 */
+            c->side_target = c->face.s_m;
             c->side_rescan = 1U;
             c->side_verify_done = 1U;   /* 这次回退不做复测，重扫完成后再复位成 0 */
             c->side_retry = 0U;
@@ -2398,17 +2699,21 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
         if (sr == LF_SIDE_SCAN_OK) {
             probe_side_center(c);
             bool w_ok = probe_side_width_ok(c->face.w);
-            bool catastrophic = !(c->face.w > 15.0f && c->face.w < 400.0f);
-            c->face.valid = w_ok;
-            c->side_warn = w_ok ? 0U : 1U;
+            bool pair_ok = probe_side_pair_plausible(c);
+            bool catastrophic = !pair_ok;
+            /* 宽度公式失配但两条原始边与中点仍合理时，不能拿 w 当“整遍扫描无效”：
+             * 窄面 h≈205 会得到 w≈12，但中点仍可用来定位。先照常开到 s_m 复测。 */
+            c->face.valid = w_ok || pair_ok;
+            c->side_warn = w_ok ? 0U : (pair_ok ? 14U : 1U);
+            if (!w_ok && pair_ok) c->face.kind = probe_side_expected_kind(c);
             c->side_event |= (uint8_t)LF_SIDE_EVENT_MID;
             if (catastrophic && !c->side_push && c->side_retry == 0U) {
-                /* 两个边界反序/间距离谱（w∉(15,400)）：当作扫描失败，回原点重扫一遍
-                 * （普通超范围 80~120 不算 catastrophic，不重扫，交给复测纠正） */
+                /* 原始跨度/中点也不可信：仍优先回到可用的初扫中点，绝不回旧原点；
+                 * 旧原点在第二面只剩 3.7 mm 边距，重扫会在面外刹停并等超时。 */
                 c->side_retry = 1U;
                 c->side_rescan = 1U;
                 c->side_verify_done = 1U;
-                c->side_target = 0.0f;
+                c->side_target = probe_side_retry_target(c);
                 c->side_move_stage = (uint8_t)LF_SIDE_MOVE_DRIVE;
                 probe_motion_reset(c);
                 change_probe_phase(c, LF_PROBE_SIDE_MOVE, now);
@@ -2436,6 +2741,7 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
             } else {
                 probe_motion_reset(c);
                 c->side_target = c->face.s_m;
+                if (!pr->side_verify) c->side_target += probe_side_wide_park_bias(c);
                 c->side_move_stage = (uint8_t)LF_SIDE_MOVE_DRIVE;
                 c->side_verify_done = 0U;
                 change_probe_phase(c, LF_PROBE_SIDE_MOVE, now);
@@ -2482,7 +2788,7 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
                 c->phase_since = now;
             } else {
                 float spd = fabsf(err) < LF_SIDE_SLOW_DIST_MM ? LF_SIDE_SLOW_SPEED_MM_S : pr->side_speed_mm_s;
-                probe_drive_signed(c, err < 0.0f ? -spd : spd, dt);
+                probe_drive_signed(c, err < 0.0f ? -spd : spd, c->side_move_ref_rad, dt);
             }
             break;
         }
@@ -2502,15 +2808,22 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
             LfSideResult vr = probe_side_scan_tick(c, in, now, dt);
             if (vr == LF_SIDE_SCAN_RUN) break;
             bool have = false;
+            bool w2_ok = false;
             float s2_local = 0.0f;
             if (vr == LF_SIDE_SCAN_OK) {
-                have = probe_side_center(c);
-                if (have) s2_local = c->face.s_m;
+                bool center_ok = probe_side_center(c);
+                w2_ok = probe_side_width_ok(c->face.w);
+                bool pair2_ok = probe_side_pair_plausible(c);
+                have = center_ok && (w2_ok || pair2_ok);
+                if (have) {
+                    s2_local = c->face.s_m;
+                    if (!w2_ok) c->face.kind = probe_side_expected_kind(c);
+                }
             } else {
                 c->side_event |= (uint8_t)LF_SIDE_EVENT_FAIL; /* 复测失败也要能诊断 */
             }
-            /* 复测宽度合法才采用，否则回退初测的宽度/分类（复测只用来校正中点） */
-            if (have && probe_side_width_ok(c->face.w)) {
+            /* 无可信复测边界时，同时恢复初测的宽度、分类和中点。 */
+            if (have) {
                 c->face.valid = 1U; /* 初测宽度越界、复测正常的面也要恢复成可信 */
             } else {
                 c->face.w = c->side_w_prev;
@@ -2520,14 +2833,14 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
             float dh = s2 - c->side_s_m_ref;
             if (have && fabsf(dh) < LF_SIDE_VERIFY_TOL_MM) {
                 c->face.s_m = 0.5f * (c->side_s_m_ref + s2); /* 一致：取两次平均 */
-                c->side_warn = 2U;
+                c->side_warn = w2_ok ? 2U : 14U;
             } else {
                 c->face.s_m = have ? s2 : c->side_s_m_ref;
-                c->side_warn = 3U; /* 不一致：以复测为准（无复测结果则保持初测），照样发射 */
+                c->side_warn = have && !w2_ok ? 14U : 3U; /* 不一致：以复测为准（无结果则保持初测） */
             }
             probe_side_sync_lr(c); /* 复测可能改了 s_m/w，三者必须自洽 */
             c->side_event |= (uint8_t)LF_SIDE_EVENT_MID;
-            c->side_target = c->face.s_m - c->side_verify_offset;
+            c->side_target = c->face.s_m - c->side_verify_offset + probe_side_wide_park_bias(c);
             c->side_verify_mode = 0U;
             c->side_verify_done = 1U;
             c->side_move_stage = (uint8_t)LF_SIDE_MOVE_DRIVE;
@@ -2555,7 +2868,32 @@ static void step_probing(LfController *c, const LfInput *in, uint32_t now, float
          * M1 兜底（侧视锁定失败）时舵机要从侧视角甩回法线角，先等 400 ms 再点激光，
          * 避免「10 s 窗口」的前 0.4 s 打在还没转到的方向上；窗口长度因此顺延。 */
         c->out.servo_us = probe_servo_hold(c);
-        uint32_t settle = (pr->scan_mode != 0U && !c->side_locked) ? LF_SIDE_LOCK_WAIT_MS : 0U;
+        /* 同轴前提下的最后一道软件修正：侧扫/开位的 s_m 是相对 side_origin_rad 量的；
+         * 发激光时若车头又漂了 Δψ，激光轴（固定 +90°）就跟着转 Δψ，光斑沿面偏 h·tanΔψ。
+         * 这里把舵机反拧 Δψ，让激光轴回到扫描原点那条射线。扫描/开位仍用 side_us，性质①不动。
+         * 注意 side_us=2400 是舵机上限：若 Δψ 需要正的脉宽补偿，会被 2400 截断，
+         * 此时应把 probe_side_us 降到 2350/2300 给补偿留余量（手册 §17.2 已验 2200~2400 可用）。 */
+        if (pr->scan_mode != 0U && c->side_locked) {
+            float dyaw_deg = (c->odo.heading_rad - c->side_origin_rad) * 57.2957795f;
+            /* ±1.5° 死区：h=189 时 1.5° 只有 5 mm，落在宽面 6 区 ±15 / 窄面 4 区 ±8.3 内；
+             * 小于死区就不动舵机，也就不会为噪声白等 400 ms，第一拍就能开激光。 */
+            if (fabsf(dyaw_deg) > LF_SIDE_YAW_DEADBAND_DEG) {
+                float bias_f = -dyaw_deg * LF_PROBE_SCAN_US_PER_DEG;
+                int32_t bias = (int32_t)(bias_f >= 0.0f ? bias_f + 0.5f : bias_f - 0.5f);
+                int32_t us = (int32_t)pr->side_us + bias;
+                if (us < (int32_t)LF_SERVO_US_MIN) us = (int32_t)LF_SERVO_US_MIN;
+                if (us > (int32_t)LF_SERVO_US_MAX) us = (int32_t)LF_SERVO_US_MAX;
+                c->out.servo_us = (uint16_t)us;
+            }
+        }
+        /* 侧视锁定后舵机若因上面的 Δψ 补偿而换角，必须先停稳再开激光：
+         * 任务书每面只认第一次命中，0.4 s 的旧角光斑会把这一面直接判丢。
+         * bias=0（好工况）时保持原行为，激光第一拍就开，不白等 0.4 s。 */
+        uint32_t settle = 0;
+        if (pr->scan_mode != 0U) {
+            if (!c->side_locked) settle = LF_SIDE_LOCK_WAIT_MS;            /* M1 兜底：舵机要甩回法线角 */
+            else if (c->out.servo_us != pr->side_us) settle = LF_SIDE_LOCK_WAIT_MS; /* Δψ 补偿换了角 */
+        }
         c->out.laser = c->out.buzzer = (elapsed >= settle) && (elapsed < settle + pr->laser_ms);
         if (elapsed >= settle + pr->laser_ms) {
             c->out.laser = c->out.buzzer = false;
