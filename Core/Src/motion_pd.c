@@ -1,4 +1,4 @@
-/* Right-wheel absolute-angle plan: 30 -> 120 -> 60 -> 0 degrees.
+/* LEFT-wheel absolute-angle sequence: 30 -> 120 -> 60 -> 0 degrees.
  * The portable PD core handles each individual movement, never the 5s waits. */
 #include "motion_pd.h"
 #include <math.h>
@@ -15,6 +15,16 @@ static int32_t segment_goal;
 static const unsigned targets[MOTION_PIVOT_STEPS]={30,120,60,0};
 int32_t motion_pivot_counts(float angle){
  if(!isfinite(angle)||angle<=0||angle>360)return 0;
+ /* Independent left calibration anchors: do not scale the confirmed90 point.
+    The right-wheel geometric/calibrated mapping remains unchanged. */
+ if(MOTION_PIVOT_ACTIVE_WHEEL==0U&&angle<=120.0f){
+  static const float angles[]={0,30,60,90,120};
+  static const int32_t counts[]={0,MOTION_PIVOT_LEFT_COUNT_30,MOTION_PIVOT_LEFT_COUNT_60,MOTION_PIVOT_LEFT_COUNT_90,MOTION_PIVOT_LEFT_COUNT_120};
+  for(unsigned i=1;i<5;++i)if(angle<=angles[i]){
+   float t=(angle-angles[i-1])/(angles[i]-angles[i-1]);
+   return (int32_t)lroundf(counts[i-1]+t*(counts[i]-counts[i-1]));
+  }
+ }
  return (int32_t)lroundf(angle*MOTION_PIVOT_TRACK_MM*MOTION_PIVOT_A_EDGES_PER_TURN*MOTION_PIVOT_CAL_SCALE/(180.0f*MOTION_PIVOT_WHEEL_MM));
 }
 static void mirror(const MotionPd *m){
@@ -32,20 +42,20 @@ int32_t motion_pivot_absolute_goal(void){return motion_pivot_counts((float)targe
 int32_t motion_pivot_segment_goal(void){return segment_goal;}
 uint32_t motion_wait_remaining(const MotionPd *m){uint32_t elapsed=m->now-wait_since;return sequence==MS_WAIT&&elapsed<MOTION_PIVOT_WAIT_MS?MOTION_PIVOT_WAIT_MS-elapsed:0;}
 static void stage_finished(MotionPd *m){
- int64_t net=m->wheel[1].total-plan_origin[1];g_pivot_stage_results[step_index]=(int32_t)net;
+ int64_t net=m->wheel[MOTION_PIVOT_ACTIVE_WHEEL].total-plan_origin[MOTION_PIVOT_ACTIVE_WHEEL];g_pivot_stage_results[step_index]=(int32_t)net;
  g_motion_results[m->move_direction>0?0:1][0]=m->actual[0];
  g_motion_results[m->move_direction>0?0:1][1]=m->actual[1];
  if(step_index+1<MOTION_PIVOT_STEPS){sequence=MS_WAIT;wait_since=m->now;}
  else sequence=MS_DONE;
 }
 static void begin_stage(MotionPd *m){
- int64_t net=m->wheel[1].total-plan_origin[1];
+ int64_t net=m->wheel[MOTION_PIVOT_ACTIVE_WHEEL].total-plan_origin[MOTION_PIVOT_ACTIVE_WHEEL];
  int64_t difference=(int64_t)motion_pivot_absolute_goal()-net;
  if(difference>INT32_MAX||difference<-(int64_t)INT32_MAX){motion_trip(m,DM_ENCODER);return;}
  segment_goal=(int32_t)(difference<0?-difference:difference);
  if(!segment_goal){stage_finished(m);return;}
  int sign=difference>0?1:-1;
- if(dual_motor_start_wheels(m,sign,0,segment_goal))sequence=sign>0?MS_FORWARD:MS_REVERSE;
+ if(dual_motor_start_wheels(m,sign,MOTION_PIVOT_ACTIVE_WHEEL==0U?segment_goal:0,MOTION_PIVOT_ACTIVE_WHEEL==1U?segment_goal:0))sequence=sign>0?MS_FORWARD:MS_REVERSE;
  else motion_trip(m,DM_CONFIG);
 }
 void motion_init(MotionPd *m,uint16_t l,uint16_t r){
@@ -73,6 +83,6 @@ void motion_tick(MotionPd *m,uint16_t l,uint16_t r,bool ok){
  mirror(m);
 }
 float motion_pulse_duty(unsigned w,float t,float v,float d,float lag){DualMotorConfig c;(void)lag;dual_motor_default_config(&c);return dual_motor_pd_duty(&c,w,t,v,d);}
-const char *motion_action_name(unsigned a){(void)a;static const char *n[]={"TO_30","TO_120","TO_60","TO_0"};return n[step_index];}
+const char *motion_action_name(unsigned a){(void)a;static const char *n[]={"LEFT_TO_30","LEFT_TO_120","LEFT_TO_60","LEFT_TO_0"};return n[step_index];}
 const char *motion_phase_name(MotionPhase p){return dual_motor_phase_name(p);}
 const char *motion_error_name(MotionError e){return dual_motor_error_name(e);}

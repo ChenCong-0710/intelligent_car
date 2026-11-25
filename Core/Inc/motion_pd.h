@@ -52,7 +52,16 @@ extern int32_t g_motion_results[2][2];
 #define MOTION_PIVOT_WHEEL_MM 43.0f
 #define MOTION_PIVOT_A_EDGES_PER_TURN 420.0f
 /* Measured: nominal645 threshold produced about95deg at right target34. */
-#define MOTION_PIVOT_CAL_SCALE (90.0f/95.0f)
+#define MOTION_PIVOT_RIGHT_CAL_SCALE (90.0f/95.0f)
+/* Left90 initial scale was confirmed precise by user; retain independently. */
+#define MOTION_PIVOT_LEFT_CAL_SCALE (90.0f/95.0f)
+#define MOTION_PIVOT_ACTIVE_WHEEL 0U
+/* Left30: former204 produced approx35deg. Keep other calibrated anchors. */
+#define MOTION_PIVOT_LEFT_COUNT_30 175
+#define MOTION_PIVOT_LEFT_COUNT_60 407
+#define MOTION_PIVOT_LEFT_COUNT_90 611
+#define MOTION_PIVOT_LEFT_COUNT_120 814
+#define MOTION_PIVOT_CAL_SCALE (MOTION_PIVOT_ACTIVE_WHEEL==0U?MOTION_PIVOT_LEFT_CAL_SCALE:MOTION_PIVOT_RIGHT_CAL_SCALE)
 int32_t motion_pivot_counts(float body_angle_deg);
 #define MOTION_PIVOT_STEPS 4U
 #define MOTION_PIVOT_WAIT_MS 5000U

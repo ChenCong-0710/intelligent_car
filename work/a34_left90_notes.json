@@ -1,0 +1,18 @@
+{
+  "firmware": "A34_LEFT90_V1",
+  "active_wheel": "LEFT, forward",
+  "held_wheel": "RIGHT, brake throughout",
+  "body_rotation": "Clockwise/right about stationary right wheel",
+  "target": "34 raw A rising+falling edges /50ms, position-form PD, no I",
+  "start_ramp_ms": 500,
+  "duty_slew": 0.04,
+  "stop": "At611 immediate brake; no smooth stop, no reverse correction, no automatic sequence/repeat.",
+  "initial_threshold": 611,
+  "calibration": "Initial borrowed from confirmed right-wheel90deg coefficient. Left needs independent actual body-angle measurement. Right calibrated scale90/95 preserved separately.",
+  "file": "Debug/a34_left90/a34_left90.hex",
+  "backup": "F:\\STM32CUBEIDE\\TEST\\backups\\proven_right_sequence_before_left_20261125_201757",
+  "capture": "Stopped; not restarted per user request",
+  "software_checks": "Single left PD, fixed right brake, 611 cutoff, no loop, load model and protection tests passed",
+  "flash": "ST-LINK write and verification successful; MCU reset performed",
+  "physical_angle": "Awaiting user measurement of left-wheel body pivot"
+}

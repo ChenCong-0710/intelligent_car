@@ -1,0 +1,21 @@
+{
+  "firmware": "A34_LEFT_SEQ_V2",
+  "user_observation": "Left30 target overshot to approximately35deg",
+  "correction": "204*30/35 ->175 raw A both-edge counts at left30 anchor",
+  "left_anchors": {
+    "0": 0,
+    "30": 175,
+    "60": 407,
+    "90": 611,
+    "120": 814
+  },
+  "mapping": "Linear interpolation between left anchors for0..120deg; beyond120 retain former formula. Right scale unchanged.",
+  "unchanged": "Left-only34/50ms positional PD, right brake,500ms startup, hard endpoint stop,30/120/60/0 absolute plan,5s settled waits, no post-stop correction.",
+  "validation": "Physical left30 correction is approximate and requires remeasurement. Left90 remains user-confirmed611.",
+  "file": "Debug/a34_left_sequence_v2/a34_left_sequence_v2.hex",
+  "backup": "F:\\STM32CUBEIDE\\TEST\\backups\\before_left30_cal_20261125_202544",
+  "software_checks": "Left-only absolute sequence with175/407/611/814 anchors, monotonic interpolation, exact5s waits and protection tests passed",
+  "flash": "ST-LINK write and verification successful; reset performed",
+  "current_listener": "COM4 continuous capture confirmed A34_LEFT_SEQ_V2 IDLE error=OK absGoal=175",
+  "telemetry_log": "work/a34_left_seq_v2_20261125_202740.jsonl"
+}

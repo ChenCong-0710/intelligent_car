@@ -181,3 +181,9 @@ TEST当前单轮配置：右轮目标34个A相双沿/50ms，左轮0，保留500m
 屏幕显示速度、PWM和相对启动基准的左右净计数，底部显示目标角度及等待秒数。遥测netR对应净计数，countR对应本段行程，absGoal为绝对目标，segmentGoal为本段阈值；两者含义不同。等待期间PD0仍可中止后续动作。
 
 构建tools/build_a34_pivot_sequence.py，固件Debug/a34_pivot_sequence/a34_pivot_sequence.hex，测试tests/test_pivot_sequence.c，采集tools/capture_a34_pivot_sequence.py。
+
+## 左轮第二测试 A34_LEFT_SEQ_V1
+
+左轮90度611计数初值经用户确认精度高后，保持标定和全部PD参数，切换为累计30/120/60/0度；当前MOTION_PIVOT_ACTIVE_WHEEL=0，右轮全程制动。前三段停稳后各等5秒，最后回0停止，不额外修正或循环。速度目标幅值34双沿/50ms，急停，按实际左轮净计数决定下一段剩余行程。
+
+已认可的右轮序列和左轮90度程序均在backups保留。构建tools/build_a34_left_sequence.py，固件Debug/a34_left_sequence/a34_left_sequence.hex，验证tests/test_left_pivot_sequence.c；已烧录校验成功，按用户偏好未开启监听。完整左轮角度序列实测待用户反馈。

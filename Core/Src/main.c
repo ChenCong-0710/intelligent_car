@@ -398,10 +398,10 @@ static void telemetry(const MotionView *v){
  if(v->ms-last<100U)return;
  last=v->ms;
  int n=snprintf(line,sizeof(line),
- "M,fw=A34_PIVOT_SEQ_V1,seq=%lu,ms=%lu,phase=%s,action=%s,error=%s,seqstage=%s,step=%u,targetDeg=%u,absGoal=%ld,segmentGoal=%ld,netL=%ld,netR=%ld,refL=%ld,refR=%ld,pulseL=%ld,pulseR=%ld,pwmL1000=%ld,pwmR1000=%ld,countL=%ld,countR=%ld,triggerR=%ld,wait=%lu,txdrop=%lu,keylow=%lu,keystops=%lu,irqUs=%lu\r\n",
+ "M,fw=A34_LEFT_SEQ_V2,seq=%lu,ms=%lu,phase=%s,action=%s,error=%s,seqstage=%s,step=%u,activeWheel=0,targetDeg=%u,absGoal=%ld,segmentGoal=%ld,netL=%ld,netR=%ld,refL=%ld,refR=%ld,pulseL=%ld,pulseR=%ld,pwmL1000=%ld,pwmR1000=%ld,countL=%ld,countR=%ld,triggerL=%ld,triggerR=%ld,wait=%lu,txdrop=%lu,keylow=%lu,keystops=%lu,irqUs=%lu\r\n",
  (unsigned long)seq++,(unsigned long)v->ms,motion_phase_name(v->phase),motion_action_name(v->action),motion_error_name(v->error),v->sequence,v->step,v->target_deg,
  (long)v->absolute_goal,(long)v->segment_goal,(long)v->net[0],(long)v->net[1],lroundf(v->ref_pulses[0]),lroundf(v->ref_pulses[1]),lroundf(v->pulses[0]),lroundf(v->pulses[1]),
- lroundf(v->duty[0]*1000),lroundf(v->duty[1]*1000),(long)v->actual[0],(long)v->actual[1],(long)v->trigger[1],(unsigned long)v->wait_ms,(unsigned long)bt_drop,(unsigned long)v->key_low,(unsigned long)v->key_stops,(unsigned long)v->irq_us);
+ lroundf(v->duty[0]*1000),lroundf(v->duty[1]*1000),(long)v->actual[0],(long)v->actual[1],(long)v->trigger[0],(long)v->trigger[1],(unsigned long)v->wait_ms,(unsigned long)bt_drop,(unsigned long)v->key_low,(unsigned long)v->key_stops,(unsigned long)v->irq_us);
  if(n>0&&(size_t)n<sizeof(line))bt_queue(line,(size_t)n);
 }
 static void screen_service(const MotionView *v){
@@ -413,7 +413,7 @@ static void screen_service(const MotionView *v){
   snprintf(rows[1],19,"L %+4ld R %+4ld",lroundf(v->pulses[0]),lroundf(v->pulses[1]));
   snprintf(rows[2],19,"PWM %%");
   snprintf(rows[3],19,"L %+4ld R %+4ld",lroundf(v->duty[0]*100),lroundf(v->duty[1]*100));
-  snprintf(rows[4],19,"NET A EDGES /START");
+  snprintf(rows[4],19,"L GOAL %hu",(unsigned short)v->absolute_goal);
   snprintf(rows[5],19,"L %8ld",(long)v->net[0]);
   snprintf(rows[6],19,"R %8ld",(long)v->net[1]);
   snprintf(rows[7],19,"TO %hu DEG %hhuS",(unsigned short)v->target_deg,(unsigned char)((v->wait_ms+999U)/1000U));

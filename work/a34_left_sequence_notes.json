@@ -1,0 +1,25 @@
+{
+  "firmware": "A34_LEFT_SEQ_V1",
+  "active_wheel": "LEFT only, right held braked",
+  "absolute_angles_deg": [
+    30,
+    120,
+    60,
+    0
+  ],
+  "absolute_count_targets": [
+    204,
+    814,
+    407,
+    0
+  ],
+  "same_as_right_sequence": "Speed magnitude34 raw A both edges/50ms; positional PD; start500ms; immediate brake; three5000ms settled waits; actual net count determines each remaining segment; no extra corrections or repeat.",
+  "left_calibration": "User confirmed previous611-count90deg left test high precision; retained left scale90/95, no new tuning.",
+  "right_calibration": "Preserved separately",
+  "capture": "Not started per user preference",
+  "file": "Debug/a34_left_sequence/a34_left_sequence.hex",
+  "backup": "F:\\STM32CUBEIDE\\TEST\\backups\\proven_left90_before_sequence_20261125_202038",
+  "software_checks": "Left-only sequence, absolute targets, actual coast compensation, exact settled5s waits, reverse/brake and cancellation/fault checks passed",
+  "flash": "ST-LINK download and verification successful; MCU reset performed",
+  "physical_validation": "Awaiting user test of full left-wheel sequence"
+}
