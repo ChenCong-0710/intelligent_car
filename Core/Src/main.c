@@ -245,12 +245,16 @@ static void ultrasound(uint32_t now) {
         TIM8->SR=~(TIM_SR_CC2IF|TIM_SR_CC2OF);
         if(us_pending && now-us_trigger_ms<=25U && !(sr&TIM_SR_CC2OF)) {
             ++us_seq;us_echo_ms=now;us_pending=false;
-            us_valid=pulse>=234U && pulse<=2333U; /* 40..400 mm */
+            us_valid=pulse>=234U && pulse<=23324U; /* 40..4000 mm; retain far echoes for scan exits. */
             us_mm=(uint16_t)(((uint32_t)pulse*343U+1000U)/2000U);
         }
     }
     if(us_pending && now-us_trigger_ms>25U) {us_pending=false;us_valid=false;us_mm=0;++us_seq;us_echo_ms=now;}
-    if(now-us_trigger_ms>=60U) {
+    bool scan=g_align.phase==ALIGN_SCAN;
+    bool due=scan?(g_align.scan_trigger_count<4U &&
+        now-g_align.since>=60U*(1U+g_align.scan_trigger_count)):true;
+    if(due && now-us_trigger_ms>=60U) {
+        if(scan)++g_align.scan_trigger_count;
         us_trigger_ms=now;us_pending=true;us_valid=false;
         TIM8->SR=~(TIM_SR_CC2IF|TIM_SR_CC2OF);
         TIM17->CNT=0;SET_BIT(TIM17->CR1,TIM_CR1_CEN);
@@ -442,14 +446,14 @@ static void telemetry(uint32_t now,const MotorView *v){
  /* Log every accepted face sample, not only the 200ms status snapshot. */
  while(sent_points<g_align.line_n){
   unsigned i=sent_points++;char sample[128];
-  int n=snprintf(sample,sizeof(sample),"L,fw=BOX_APPROACH_V2,i=%u,x10=%ld,range10=%ld\r\n",i,x10(g_align.line_x[i]),x10(g_align.line_y[i]));
+  int n=snprintf(sample,sizeof(sample),"L,fw=BOX_SCAN4_V3,i=%u,x10=%ld,range10=%ld\r\n",i,x10(g_align.line_x[i]),x10(g_align.line_y[i]));
   if(n>0&&(size_t)n<sizeof(sample))bt_queue(sample,(size_t)n);else ++bt_drop;
  }
  static uint32_t last,seq;static AlignPhase previous=(AlignPhase)255;char line[1024];
  if(now-last<200&&g_align.phase==previous)return;
  last=now;previous=g_align.phase;
  int n=snprintf(line,sizeof(line),
- "M,fw=BOX_APPROACH_V2,seq=%lu,ms=%lu,phase=%s,action=%s,error=%s,motorError=%s,scan=%u,servo=%u,range=%u,valid=%u,side=%s,normal10=%ld,target10=%ld,actual10=%ld,wheelLdeg10=%ld,wheelRdeg10=%ld,edgeL=%u,edgeR=%u,edgeLmm=%u,edgeRmm=%u,edgeNormal10=%ld,centreY10=%ld,moveWheel=%u,dir=%d,refL10=%ld,refR10=%ld,pulseL=%ld,pulseR=%ld,pwmL1000=%ld,pwmR1000=%ld,countL=%lu,countR=%lu,goalL=%ld,goalR=%ld,fitSupport=%u,fitTotal=%u,fitRms10=%ld,entry=%lu,entryInferred=%u,exit=%lu,lineN=%u,lineSupport=%u,lineRms10=%ld,fine10=%ld,fineNormal10=%ld,lineWarn=%u,front=%u,planMm=%u,stopMm=%u,stopHits=%u,remain=%ld,approachPlan=%u,echoLost=%u,txdrop=%lu,irqUs=%lu\r\n",
+ "M,fw=BOX_SCAN4_V3,seq=%lu,ms=%lu,phase=%s,action=%s,error=%s,motorError=%s,scan=%u,servo=%u,range=%u,valid=%u,side=%s,normal10=%ld,target10=%ld,actual10=%ld,wheelLdeg10=%ld,wheelRdeg10=%ld,edgeL=%u,edgeR=%u,edgeLmm=%u,edgeRmm=%u,edgeNormal10=%ld,centreY10=%ld,moveWheel=%u,dir=%d,refL10=%ld,refR10=%ld,pulseL=%ld,pulseR=%ld,pwmL1000=%ld,pwmR1000=%ld,countL=%lu,countR=%lu,goalL=%ld,goalR=%ld,fitSupport=%u,fitTotal=%u,fitRms10=%ld,entry=%lu,entryInferred=%u,exit=%lu,lineN=%u,lineSupport=%u,lineRms10=%ld,fine10=%ld,fineNormal10=%ld,lineWarn=%u,front=%u,planMm=%u,stopMm=%u,stopHits=%u,remain=%ld,approachPlan=%u,echoLost=%u,txdrop=%lu,irqUs=%lu\r\n",
  (unsigned long)seq++,(unsigned long)now,align_phase_name(g_align.phase),stage_action(),align_error_name(g_align.error),dual_motor_error_name(v->status.error),
  g_align.index,g_align.servo_us,us_mm,us_valid,g_align.side_left?"LEFT":"RIGHT",x10(g_align.normal_deg),x10(g_align.target_deg),x10(g_align.actual_deg),x10(g_align.wheel_degrees[0]),x10(g_align.wheel_degrees[1]),
  g_align.fit_first,g_align.fit_last,g_align.edge_left_mm,g_align.edge_right_mm,x10(g_align.edge_normal_deg),x10(g_align.centre_y_mm),g_align.moving_wheel,g_align.motor_direction,
@@ -460,7 +464,7 @@ static void telemetry(uint32_t now,const MotorView *v){
 /* Dump the actual settled scan averages BEFORE fitting; live range telemetry
    may be from a different servo position. One bounded frame, no RX commands. */
 static void scan_telemetry(void){
- char line[384];int n=snprintf(line,sizeof(line),"S,fw=BOX_APPROACH_V2");
+ char line[384];int n=snprintf(line,sizeof(line),"S,fw=BOX_SCAN4_V3");
  for(unsigned i=0;i<ALIGN_POINTS&&n>0&&(size_t)n<sizeof(line);++i){
   int k=snprintf(line+n,sizeof(line)-(size_t)n,",p%u=%u",i,g_align.range[i]);
   if(k<0||(size_t)k>=sizeof(line)-(size_t)n){++bt_drop;return;}n+=k;
@@ -515,7 +519,12 @@ int main(void){
    if(cancel_requested)align_cancel(&g_align);
    AlignMotionFeedback motion={view.status.running,view.done,view.status.phase==DM_FAULT,view.actual_deg,(uint32_t)view.status.error,{view.status.counts[0],view.status.counts[1]},{view.wheel_degrees[0],view.wheel_degrees[1]}};
    if(g_align.phase==ALIGN_FIT)scan_telemetry();
+   AlignPhase before_phase=g_align.phase;uint32_t before_since=g_align.since;
    align_step(&g_align,now,us_seq,us_trigger_ms,us_echo_ms,us_valid,us_mm,&motion);
+   if(g_align.phase==ALIGN_SCAN&&(before_phase!=ALIGN_SCAN||before_since!=g_align.since)){
+    us_pending=false;us_valid=false;us_trigger_ms=now;
+    TIM8->SR=~(TIM_SR_CC2IF|TIM_SR_CC2OF);
+   }
    if((g_align.phase==ALIGN_APPROACH||g_align.phase==ALIGN_APPROACH_STOP)&&!g_align.approach_requested&&!cancel_requested){
     uint32_t saved=__get_PRIMASK();__disable_irq();bool started=car_motion_start_scan(&g_car);__set_PRIMASK(saved);
     if(started)g_align.approach_requested=true;

@@ -1,0 +1,6 @@
+{
+  "Core/Src/car_motion.c": "bcad80a22a237db6bae1f027a4f60323a4d1827364ca06bcda26a521f8ce77b3",
+  "Core/Inc/car_motion.h": "3f8e3be4017bd5a078f351d6fda9d96278546a30b1425a4564ccadb280378bf2",
+  "portable/dual_motor/dual_motor.c": "41b79c7d9aa9eb40160d7034d2b9cfd931962c4c0f2c34f70343fda3726978b8",
+  "portable/dual_motor/dual_motor.h": "9cf8a1cc9354a97f01f5cc5cece13879d50fab16b01298e6af1f63b4d5b1423c"
+}

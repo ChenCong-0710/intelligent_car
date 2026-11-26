@@ -23,9 +23,9 @@ static void run(float phi,int lo,int hi){
  assert(a.phase==ALIGN_HOME&&a.servo_us==1460&&!c.motor.running);
  step(&a,&c,1199,0,0,0,false,0);assert(a.phase==ALIGN_HOME);
  now=1200;step(&a,&c,now,0,0,0,false,0);assert(a.phase==ALIGN_SEEK);
- step(&a,&c,1201,1,1200,1201,true,301);assert(a.phase==ALIGN_SEEK&&!c.motor.running);
- step(&a,&c,1202,2,1201,1202,true,400);assert(a.phase==ALIGN_SEEK&&!c.motor.running);
- step(&a,&c,1203,3,1202,1203,true,300);assert(a.phase==ALIGN_APPROACH&&c.motor.running);
+ step(&a,&c,1201,1,1200,1201,true,501);assert(a.phase==ALIGN_SEEK&&!c.motor.running);
+ step(&a,&c,1202,2,1201,1202,true,800);assert(a.phase==ALIGN_SEEK&&!c.motor.running);
+ step(&a,&c,1203,3,1202,1203,true,500);assert(a.phase==ALIGN_APPROACH&&c.motor.running);
  /* Reinitialize for the same full approach run at250mm. */
  assert(car_motion_init(&c,0,0));align_start(&a,0);a.phase=ALIGN_SEEK;
  now=1260;step(&a,&c,now,++seq+1,now,now,true,250);assert(a.phase==ALIGN_APPROACH&&c.motor.running&&a.servo_us==1460);
@@ -46,16 +46,17 @@ static void run(float phi,int lo,int hi){
  assert(a.approach_stop_hits>=2&&a.approach_stop_mm>=95&&a.approach_stop_mm<=105);
  float stopped=250-((raw[0]+raw[1])*.5f*CAR_MM_PER_EDGE);assert(stopped>=95&&stopped<=105);
  printf("Approach mock stop %.1f mm, plan at %u mm\n",stopped,a.approach_plan_mm);
- /* Actual37-point scan is performed only after stopping, left to right. */
- uint32_t scan_since=a.since;uint16_t previous=2400;
- for(unsigned i=0;i<37;++i){
-  assert(a.index==i&&a.servo_us<=previous);previous=a.servo_us;
-  if(i==0)assert(a.servo_us==2400);if(i==18)assert(a.servo_us==1460);if(i==36)assert(a.servo_us==500);
+ /* Centre-out scan, four distinct echo transactions per commanded angle. */
+ unsigned points=0;
+ while(a.phase==ALIGN_SCAN){
+  unsigned i=a.index;uint32_t origin=a.since;
   uint16_t mm=(int)i>=lo&&(int)i<=hi?(uint16_t)lroundf(150/cosf((90-5*(int)i-phi)*.01745329252f)):0;
-  uint32_t settle=i==0?1200:120;
-  step(&a,&c,scan_since+settle+20,++seq+1,scan_since+settle+10,scan_since+settle+15,mm!=0,mm);
-  step(&a,&c,scan_since+settle+80,++seq+1,scan_since+settle+70,scan_since+settle+75,mm!=0,mm);
-  now=scan_since+settle+180;step(&a,&c,now,seq+1,0,0,false,0);scan_since=now;
+  for(unsigned k=1;k<=4;++k){
+   uint32_t trig=origin+60*k;
+   step(&a,&c,trig+5,++seq+1,trig,trig+5,mm!=0,mm);
+  }
+  now=origin+300;step(&a,&c,now,seq+1,0,0,false,0);
+  assert(++points<=38);
  }
  assert(a.phase==ALIGN_FIT);step(&a,&c,++now,seq+1,0,0,false,0);
  assert(a.phase==ALIGN_SIDE_SETTLE&&a.servo_us==(a.side_left?2400:500)&&!c.motor.running);
@@ -88,8 +89,35 @@ static void run(float phi,int lo,int hi){
  step(&a,&c,now+30000,++seq+1,now,now,true,150);
  assert(a.phase==ALIGN_DONE&&!c.motor.running&&c.motor.actual[0]==left&&c.motor.actual[1]==right);
 }
+static void scan4_checks(void){
+ InitialAlign a;AlignMotionFeedback m={0};
+ uint16_t samples[4]={90,100,120,220};
+ align_start(&a,0);a.phase=ALIGN_SCAN;a.index=18;a.scan_bounded=true;
+ a.scan_left_bound=a.scan_right_bound=255;
+ for(unsigned k=0;k<4;++k){uint32_t t=60*(k+1);
+  align_step(&a,t+5,k+1,t,t+5,true,samples[k],&m);
+  /* Duplicate sequence must not count twice. */
+  align_step(&a,t+6,k+1,t,t+5,true,samples[k],&m);
+ }
+ assert(a.scan_attempts==4);align_step(&a,299,4,240,245,true,220,&m);
+ assert(a.index==18);align_step(&a,300,4,240,245,true,220,&m);
+ assert(a.range[18]==110&&a.index==17&&a.servo_us>1460);
+ /* One missing echo is trimmed; two missing echoes mark the outside. */
+ for(unsigned k=0;k<4;++k){uint32_t t=360+60*k;
+  align_step(&a,t+5,5+k,t,t+5,k!=3,100,&m);
+ }
+ align_step(&a,600,8,540,545,false,0,&m);
+ assert(a.range[17]==100&&a.index==16);
+ for(unsigned k=0;k<4;++k){uint32_t t=660+60*k;
+  align_step(&a,t+5,9+k,t,t+5,k<2,100,&m);
+ }
+ align_step(&a,900,12,840,845,false,0,&m);
+ assert(a.range[16]>250&&a.scan_left_bound==17&&a.index==18&&a.servo_us==1460&&a.scan_direction==1);
+ puts("PASS: four samples, trimmed mean, duplicate rejection, 300ms schedule and missing-echo outside policy");
+}
 int main(void){
- run(20,10,17);run(-20,19,26);run(0,7,13);run(0,23,29);run(-30,20,27);run(30,9,16);
+ scan4_checks();
+ run(20,10,24);run(-20,12,26);run(0,10,26);run(-30,12,27);run(30,9,24);
  InitialAlign a;CarMotion c;assert(car_motion_init(&c,0,0));align_start(&a,0);
  step(&a,&c,1200,0,0,0,false,0);step(&a,&c,1300,1,1290,1295,true,95);
  assert(a.phase==ALIGN_PRE_SCAN_WAIT&&!c.motor.running&&a.servo_us==1460);
@@ -104,5 +132,5 @@ int main(void){
  assert(a.phase==ALIGN_PRE_SCAN_WAIT);step(&a,&c,a.since+500,3,0,0,false,0);assert(a.phase==ALIGN_SEEK&&a.servo_us==1460);
  AlignMotionFeedback bad={0};bad.fault=true;bad.error=DM_DRIVER;align_step(&a,3000,0,0,0,false,0,&bad);assert(a.phase==ALIGN_FAILED&&a.error==ALIGN_MOTOR);
  align_start(&a,0);align_cancel(&a);align_step(&a,3000,0,0,0,true,150,0);assert(a.phase==ALIGN_CANCELLED);
- puts("PASS: home0, wait obstacle, straight with fixed servo, TEST brake lead toward100mm, stopped37-point scan, side choice, right calibrated half then left calibrated opposite half, 500ms settle gap, signed reporting and terminal DONE; close target/no echo/fault/cancel");
+ puts("PASS: home0, wait obstacle, straight with fixed servo, TEST brake lead toward100mm, stopped centre-out four-sample scan, side choice, right calibrated half then left calibrated opposite half, 500ms settle gap, signed reporting and terminal DONE; close target/no echo/fault/cancel");
 }

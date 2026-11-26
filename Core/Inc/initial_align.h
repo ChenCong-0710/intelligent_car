@@ -3,7 +3,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #define ALIGN_POINTS 37U
-#define ALIGN_START_RANGE_MM 300U
+#define ALIGN_START_RANGE_MM 500U
 #define ALIGN_APPROACH_TRIGGER_MM 120U
 #define ALIGN_APPROACH_TARGET_MM 100U
 #define ALIGN_LEFT_US 2400U
@@ -41,6 +41,9 @@ typedef struct {
  uint16_t approach_range_mm,approach_plan_mm,approach_stop_mm;
  uint32_t approach_stop_sum;uint8_t approach_stop_hits;
  int32_t approach_remaining_counts;
+ uint16_t scan_samples[4];
+ uint8_t scan_attempts,scan_trigger_count,scan_direction,scan_left_bound,scan_right_bound;
+ bool scan_bounded;
  bool left_turn_requested;
  float wheel_degrees[2],first_turn_degrees[2];
 

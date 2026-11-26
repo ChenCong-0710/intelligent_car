@@ -10,7 +10,7 @@ def parse(s):
   k,v=part.split('=',1)
   try:out[k]=int(v)
   except ValueError:out[k]=v
- return out if out.get('fw') in ('BOX_ALIGN_PD_V1','BOX_ALIGN_PD_V2','BOX_ALIGN_PD_V3','BOX_ALIGN_PD_V4','BOX_ALIGN_PD_V5','BOX_ALIGN_PD_V6','BOX_ALIGN_PD_V7','BOX_ALIGN_PD_V8','BOX_ALIGN_PD_V9','BOX_ALIGN_PD_V10','BOX_APPROACH_V1','BOX_APPROACH_V2') else None
+ return out if out.get('fw') in ('BOX_ALIGN_PD_V1','BOX_ALIGN_PD_V2','BOX_ALIGN_PD_V3','BOX_ALIGN_PD_V4','BOX_ALIGN_PD_V5','BOX_ALIGN_PD_V6','BOX_ALIGN_PD_V7','BOX_ALIGN_PD_V8','BOX_ALIGN_PD_V9','BOX_ALIGN_PD_V10','BOX_APPROACH_V1','BOX_APPROACH_V2','BOX_SCAN4_V3') else None
 
 def main():
  import serial
@@ -21,7 +21,7 @@ def main():
  conn=serial.Serial(port=None,baudrate=115200,timeout=.2);conn.port=opt.port;conn.dtr=False;conn.rts=False
  pending=bytearray();confirmed=False;seen={};previous=None;last_print=0;last_rx=time.monotonic();warned=False
  try:
-  conn.open();print(f'PORT_OPEN {opt.port}; awaiting BOX_APPROACH_V2 (accepting previous versions for identification); log={path}',flush=True)
+  conn.open();print(f'PORT_OPEN {opt.port}; awaiting BOX_SCAN4_V3 (accepting previous versions for identification); log={path}',flush=True)
   with path.open('x',encoding='utf-8') as log,path.with_suffix('.jsonl').open('x',encoding='utf-8') as js,path.with_suffix('.bin').open('xb') as raw:
    while True:
     data=conn.read(1024)

@@ -126,9 +126,11 @@ static bool boundary(uint16_t inside,uint16_t outside,uint16_t next){
  return next?(float)next-inside>band*.5f:inside<350U;
 }
 static bool left_edge(const InitialAlign *a,unsigned i){
+ if(a->scan_bounded)return a->scan_left_bound<ALIGN_POINTS&&i==a->scan_left_bound;
  return i>=2&&boundary(a->range[i],a->range[i-1],a->range[i-2]);
 }
 static bool right_edge(const InitialAlign *a,unsigned i){
+ if(a->scan_bounded)return a->scan_right_bound<ALIGN_POINTS&&i==a->scan_right_bound;
  return i+2<ALIGN_POINTS&&boundary(a->range[i],a->range[i+1],a->range[i+2]);
 }
 bool align_fit(InitialAlign *a){
@@ -231,7 +233,7 @@ void align_step(InitialAlign *a,uint32_t now,uint32_t seq,uint32_t trigger_ms,
  if(motion&&motion->fault){a->motor_error=motion->error;fail(a,ALIGN_MOTOR);return;}
  bool fresh=seq!=a->last_seq;if(fresh)a->last_seq=seq;
  uint32_t elapsed=now-a->since;
- bool range_ok=fresh&&valid&&mm>=40&&mm<=400&&now-echo_ms<=100U;
+ bool range_ok=fresh&&valid&&mm>=40&&mm<=(a->phase==ALIGN_SCAN?4000U:500U)&&now-echo_ms<=100U;
  if(a->phase==ALIGN_HOME){
   a->servo_us=ALIGN_CENTRE_US;
   if(elapsed>=ALIGN_SIDE_SETTLE_MS){a->phase=ALIGN_SEEK;a->since=now;}
@@ -269,19 +271,45 @@ void align_step(InitialAlign *a,uint32_t now,uint32_t seq,uint32_t trigger_ms,
   }
   if(elapsed>=ALIGN_SEGMENT_WAIT_MS){
    if(a->approach_echo_lost){a->phase=ALIGN_SEEK;a->since=now;}
-   else {a->phase=ALIGN_SCAN;a->index=0;a->sum=0;a->hits=0;
-    memset(a->range,0,sizeof(a->range));a->servo_us=ALIGN_LEFT_US;a->since=now;}
+   else {a->phase=ALIGN_SCAN;a->index=18;a->hits=0;
+    a->scan_attempts=a->scan_trigger_count=a->scan_direction=0;
+    a->scan_bounded=true;a->scan_left_bound=a->scan_right_bound=255;
+    memset(a->range,0,sizeof(a->range));a->servo_us=ALIGN_CENTRE_US;a->since=now;}
   }
  }else if(a->phase==ALIGN_SCAN){
-  uint32_t settle=a->index==0?1200U:120U;
-  if(range_ok&&elapsed>=settle&&(uint32_t)(trigger_ms-a->since)>=settle&&
+  /* Four distinct trigger/echo transactions, including timeout attempts.
+     Trigger slots are 60,120,180,240 ms after commanding this angle.
+     Finish at 300 ms: 60 ms servo settle + four 60 ms echo slots. */
+  if(fresh&&a->scan_attempts<4&&elapsed>=60U&&
+     (uint32_t)(trigger_ms-a->since)>=60U&&
      (uint32_t)(trigger_ms-a->since)<=elapsed){
-   a->sum+=mm;if(a->hits<250)++a->hits;
+   a->scan_samples[a->scan_attempts++]=range_ok?mm:4000U;
+   if(range_ok)++a->hits;
   }
-  if(elapsed>=settle+180U){
-   a->range[a->index]=a->hits>=2?(uint16_t)(a->sum/a->hits):0;a->sum=0;a->hits=0;
-   if(++a->index==ALIGN_POINTS)a->phase=ALIGN_FIT;
-   else {a->servo_us=pulse(a->index);a->since=now;}
+  if(elapsed>=300U&&a->scan_attempts==4){
+   uint16_t d=0;
+   /* A missing echo is a far sample, as requested. Trim one high and low. */
+   {
+    uint16_t lo=65535,hi=0;uint32_t sum=0;
+    for(unsigned k=0;k<4;++k){uint16_t v=a->scan_samples[k];
+     sum+=v;if(v<lo)lo=v;if(v>hi)hi=v;}
+    d=(uint16_t)((sum-lo-hi+1U)/2U);
+   }
+   a->range[a->index]=d;
+   bool outside=d>250U;
+   if(a->scan_direction==0){
+    if(outside||a->index==0){
+     if(outside&&a->index<18&&a->range[a->index+1])a->scan_left_bound=a->index+1;
+     a->scan_direction=1;a->index=18; /* Return to zero, then scan right. */
+    }else --a->index;
+   }else {
+    if(outside||a->index==36){
+     if(outside&&a->index>18&&a->range[a->index-1])a->scan_right_bound=a->index-1;
+     a->phase=ALIGN_FIT;
+    }else ++a->index;
+   }
+   a->scan_attempts=a->scan_trigger_count=a->hits=0;
+   if(a->phase==ALIGN_SCAN){a->servo_us=pulse(a->index);a->since=now;}
   }
  }else if(a->phase==ALIGN_FIT){
   if(!align_fit(a)){fail(a,ALIGN_NO_FACE);return;}
