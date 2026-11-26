@@ -1,0 +1,17 @@
+{
+  "firmware": "BOX_ALIGN_PD_V5",
+  "flash": "NOT FLASHED",
+  "sequence": [
+    "existing coarse align",
+    "back150",
+    "forward detect two boundaries",
+    "soft stop",
+    "right wheel only fine adjustment",
+    "back450",
+    "DONE"
+  ],
+  "forward_limit": 620,
+  "tests": "original and new integration tests; hardware validation pending",
+  "capture": "Existing V4 capture remains unchanged; restart updated capture script before V5 deployment",
+  "timestamp": "2026-11-25T22:00:52.416792"
+}

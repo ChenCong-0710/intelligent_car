@@ -1,0 +1,16 @@
+{
+  "firmware": "BOX_ALIGN_PD_V6",
+  "observed_device_fw": "BOX_ALIGN_PD_V4",
+  "reason_previous_stops": "V4 DONE/OK ends after retreat150; V5 previously built only",
+  "changes": [
+    "direct forward after retreat",
+    "start-inside face accepted without outside prerequisite",
+    "large screen distance, L/R per-segment totals, ERR cause",
+    "new segment origins reset counts; final450 counts retained"
+  ],
+  "tests": "all three test groups passed; target build passed without warnings",
+  "flash": "FAILED to get core ID before write; reset and slower SWD attempts unsuccessful",
+  "capture_session": 27957,
+  "capture_log": "F:\\STM32CUBEIDE\\find_box_and_shoot_cc\\work\\box_stage1_20261125_220839.log",
+  "time": "2026-11-25T22:09:35.201837"
+}

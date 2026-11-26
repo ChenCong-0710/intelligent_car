@@ -1,0 +1,4 @@
+arm-none-eabi-gcc "../Core/Src/car_motion.c" -mcpu=cortex-m4 -std=gnu11 -g3 -DDEBUG -DUSE_HAL_DRIVER -DSTM32G474xx -c -I../Core/Inc -I../Drivers/STM32G4xx_HAL_Driver/Inc -I../Drivers/STM32G4xx_HAL_Driver/Inc/Legacy -I../Drivers/CMSIS/Device/ST/STM32G4xx/Include -I../Drivers/CMSIS/Include -O0 -ffunction-sections -fdata-sections -Wall -fstack-usage -fcyclomatic-complexity -MMD -MP -MF"Core/Src/car_motion.d" -MT"Core/Src/car_motion.o" --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -o "Core/Src/car_motion.o"
+arm-none-eabi-gcc -o "find_box_and_shoot_cc.elf" @"objects.list"   -mcpu=cortex-m4 -T"F:\STM32CUBEIDE\find_box_and_shoot_cc\STM32G474VETX_FLASH.ld" --specs=nosys.specs -Wl,-Map="find_box_and_shoot_cc.map" -Wl,--gc-sections -static --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
+Finished building target: find_box_and_shoot_cc.elf
+ 

@@ -1,0 +1,11 @@
+      -------------------------------------------------------------------
+                       STM32CubeProgrammer v2.20.0                  
+      -------------------------------------------------------------------
+
+Warning: UR connection mode is defined with the HWrst reset mode
+ST-LINK SN  : 37FF71064E57343646321443
+ST-LINK FW  : V2J46S7
+Board       : --
+Voltage     : 3.29V
+Error: Unable to get core ID
+Error: No STM32 target found! If your product embeds Debug Authentication, please perform a discovery using Debug Authentication

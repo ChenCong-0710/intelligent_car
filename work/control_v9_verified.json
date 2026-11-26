@@ -1,0 +1,20 @@
+{
+  "baseline": "F:\\STM32CUBEIDE\\find_box_and_shoot_cc\\backups\\before_disable_stall_direction_20261125_221817",
+  "functions_identical": {
+    "dual_motor_pd_duty": "dc987d30a0baaaf9435e9fe13d8c99cf05dc63838ce5808ec3fe6767de50b1f0",
+    "update_pd": "0eb8852b43fedb0a592a27455ec9f67c30e36424e00b5a30dbdf68e62e492b1b",
+    "brake": "b6968684a6a25633dac9ba9a2cf10dfbc5ffb855ba4a87ca6254cfbf2f60a618",
+    "begin": "ef7bc9547659018dfad264c5030677f3a218fe938f4a83467aa7fe77a5a4f504",
+    "dual_motor_default_config": "eef6d22bb359a503572fbd540a41d8bcb8af6e40c46b573aa6eba8514181366c",
+    "dual_motor_config_valid": "beb745d6307d35a695fae865d228e59dfa58cda95544f7e9a42d09ec2241c0c3",
+    "car_motion_start_straight": "6727e427b5359861ac68fb5cb55126fd6543b1e8d3f4f14ca2d65f0f88bfd583",
+    "car_motion_start_pivot": "6093e0d9435ea9a2a22a491f9895403d3823573e55c2020fd019f24f9a524c86",
+    "car_motion_pivot_counts": "2964d926a60bbd0f6904eb59c3eaacc3c94c3c368ed4209dc7118abf8d262ff3",
+    "degrees_for_counts": "09e04dc552eee00c9050c7bda269e536a7c1a9712419ffa9bf57a6e1767326a6",
+    "nominal_counts": "44224fa02834690e321f7b3afbcaf5dacfc1c45550269de2309c8f49447151e8"
+  },
+  "tests": "all 3 test groups passed; target build without warnings",
+  "flash": "NOT FLASHED",
+  "version": "BOX_ALIGN_PD_V9",
+  "time": "2026-11-25T22:37:33.416241"
+}

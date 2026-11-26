@@ -1,0 +1,12 @@
+{
+  "firmware": "BOX_ALIGN_PD_V2",
+  "project": "F:\\STM32CUBEIDE\\find_box_and_shoot_cc",
+  "flash": "write and verify succeeded; reset completed",
+  "elf": "F:\\STM32CUBEIDE\\find_box_and_shoot_cc\\Debug\\stage1_pd\\box_stage1_pd.elf",
+  "flash_log": "F:\\STM32CUBEIDE\\find_box_and_shoot_cc\\work\\flash_paper_fit_v2_20261125_211645.log",
+  "capture_log": "F:\\STM32CUBEIDE\\find_box_and_shoot_cc\\work\\box_stage1_20261125_211656.log",
+  "capture_session": 82379,
+  "observed": "V2 marker confirmed; first S frame p0..p36 all zero, followed by NO_FACE; no motor fault",
+  "validation": "host tests passed; cross build without warnings; physical detection not yet validated",
+  "time": "2026-11-25T21:17:34.278255"
+}

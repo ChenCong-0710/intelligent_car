@@ -1,0 +1,22 @@
+{
+  "fw": "BOX_APPROACH_V1",
+  "flash": "NOT FLASHED",
+  "canonical_elf": "F:\\STM32CUBEIDE\\find_box_and_shoot_cc\\Debug\\find_box_and_shoot_cc.elf",
+  "isolated_elf": "F:\\STM32CUBEIDE\\find_box_and_shoot_cc\\Debug\\stage1_pd\\box_stage1_pd.elf",
+  "test_source_and_pd_core_hashes": "unchanged",
+  "tests": "3 host groups passed; full mock stops99.8mm, physical precision not validated",
+  "flow": [
+    "servo0 settle",
+    "wait front obstacle",
+    "fixed-servo straight",
+    "120mm plan to100mm with lead10",
+    "stop and wait500ms",
+    "scan+90..-90",
+    "existing edge/normal fit",
+    "side lock",
+    "both wheels opposite directions34",
+    "DONE"
+  ],
+  "inplace_calibration": "43mm diameter,132mm track,420 A dual edges/rev geometry; single-wheel empiric scale NOT reused",
+  "time": "2026-11-26T17:07:24.783787"
+}

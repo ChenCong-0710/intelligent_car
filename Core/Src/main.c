@@ -1,40 +1,31 @@
 #include "main.h"
 #include "lcd_font.h"
 #include "initial_align.h"
+#include "car_motion.h"
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <math.h>
-#define CONTROL_MS 10U
-#define COUNTS_PER_REV 840.0f
-#define WHEEL_MM 43.0f
-/* Effective left/right contact spacing: inherited project value, calibrate on floor. */
-#define TRACK_MM 130.0f
+#include <string.h>
 #define PWM_PERIOD 799U
-#define MAX_DUTY 0.75f
-#define KP 0.0030f
-#define KI 0.0120f
-#define I_LIMIT 0.60f
 #define MOTOR_SIGN_L 1
 #define MOTOR_SIGN_R 1
-#define PI 3.14159265359f
-typedef struct { float rpm,duty,integral,previous_rpm; uint16_t previous_count; } Wheel;
 static TIM_HandleTypeDef motor_pwm,enc_left,enc_right,us_trig_timer,us_echo_timer;
-static Wheel wheels[2];
-/* Visible in debugger; left-positive angles, physical left/centre/right servo mapping. */
 InitialAlign g_align;
-static uint32_t last_control_ms,us_trigger_ms,us_echo_ms,us_seq,last_step;
+CarMotion g_car;
+static volatile uint16_t a_edge_counter[2];
+static volatile bool a_capture_fault,cancel_requested;
+static volatile uint32_t irq_max_cycles;
+static uint32_t key_low_ms,last_step,us_trigger_ms,us_echo_ms,us_seq;
 static uint16_t us_mm;
 static bool us_valid,us_pending;
-static float heading_rad,command_rpm[2];
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
-static float clampf(float x,float lo,float hi) {return x<lo?lo:(x>hi?hi:x);}
-static void motor_off(void) {
-    HAL_GPIO_WritePin(GPIOD,GPIO_PIN_2,GPIO_PIN_RESET);
-    TIM1->CCR1=TIM1->CCR2=TIM1->CCR3=TIM1->CCR4=0;
-    for(unsigned i=0;i<2;++i) {wheels[i].duty=wheels[i].integral=command_rpm[i]=0;}
+void car_emergency_off(void){
+ if(RCC->AHB2ENR&RCC_AHB2ENR_GPIODEN)GPIOD->BSRR=(uint32_t)GPIO_PIN_2<<16;
+ if(RCC->APB2ENR&RCC_APB2ENR_TIM1EN)TIM1->CCR1=TIM1->CCR2=TIM1->CCR3=TIM1->CCR4=0;
 }
+static void motor_off(void){car_emergency_off();}
 static void gpio(GPIO_TypeDef *port,uint32_t pin,uint32_t mode,uint32_t pull,uint32_t af) {
     GPIO_InitTypeDef g={0};g.Pin=pin;g.Mode=mode;g.Pull=pull;
     g.Speed=GPIO_SPEED_FREQ_HIGH;g.Alternate=af;HAL_GPIO_Init(port,&g);
@@ -42,9 +33,11 @@ static void gpio(GPIO_TypeDef *port,uint32_t pin,uint32_t mode,uint32_t pull,uin
 static void require_ok(HAL_StatusTypeDef r) {if(r!=HAL_OK) Error_Handler();}
 static void motor_hardware_init(void)
 {
+  __HAL_RCC_PWR_CLK_ENABLE();
+  SET_BIT(PWR->CR3,PWR_CR3_UCPD_DBDIS);
   GPIO_InitTypeDef gpio = {0};
   TIM_OC_InitTypeDef oc = {0};
-  TIM_Encoder_InitTypeDef ec = {0};
+  TIM_IC_InitTypeDef ic = {0};
   TIM_HandleTypeDef *encoders[2] = {&enc_left, &enc_right};
 
   /* All four bridge inputs start low; PD2 stays disabled during setup. */
@@ -113,41 +106,78 @@ static void motor_hardware_init(void)
   HAL_GPIO_Init(GPIOA, &gpio);
   enc_left.Instance = TIM4;
   enc_right.Instance = TIM3;
-  ec.EncoderMode = TIM_ENCODERMODE_TI12;
-  ec.IC1Polarity = TIM_ICPOLARITY_FALLING;
-  ec.IC2Polarity = TIM_ICPOLARITY_RISING;
-  ec.IC1Selection = ec.IC2Selection = TIM_ICSELECTION_DIRECTTI;
-  ec.IC1Prescaler = ec.IC2Prescaler = TIM_ICPSC_DIV1;
-  ec.IC1Filter = ec.IC2Filter = 6U;
+  ic.ICPolarity=TIM_ICPOLARITY_BOTHEDGE;ic.ICSelection=TIM_ICSELECTION_DIRECTTI;
+  ic.ICPrescaler=TIM_ICPSC_DIV1;ic.ICFilter=6U;
   for (unsigned i = 0U; i < 2U; ++i) {
     TIM_HandleTypeDef *timer = encoders[i];
     timer->Init.Prescaler = 0U;
     timer->Init.CounterMode = TIM_COUNTERMODE_UP;
     timer->Init.Period = 65535U;
     timer->Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-    if (HAL_TIM_Encoder_Init(timer, &ec) != HAL_OK) Error_Handler();
-    if (HAL_TIM_Encoder_Start(timer, TIM_CHANNEL_ALL) != HAL_OK) Error_Handler();
+    if(HAL_TIM_IC_Init(timer)!=HAL_OK)Error_Handler();
+    if(HAL_TIM_IC_ConfigChannel(timer,&ic,TIM_CHANNEL_1)!=HAL_OK)Error_Handler();
+    IRQn_Type irq=i==0?TIM4_IRQn:TIM3_IRQn;
+    HAL_NVIC_SetPriority(irq,1,0);HAL_NVIC_EnableIRQ(irq);
+    if(HAL_TIM_IC_Start_IT(timer,TIM_CHANNEL_1)!=HAL_OK)Error_Handler();
   }
-  wheels[0].previous_count = (uint16_t)TIM4->CNT;
-  wheels[1].previous_count = (uint16_t)TIM3->CNT;
   motor_off();
 }
 
-static void apply_pwm(float left, float right)
-{
-  /* Coast PWM: IN1=PWM, IN2=0, with optional motor sign reversal. */
-  float command[2] = {left * MOTOR_SIGN_L, right * MOTOR_SIGN_R};
-  uint16_t ccr[4] = {0U, 0U, 0U, 0U};
-  for (unsigned i = 0U; i < 2U; ++i) {
-    float d = clampf(command[i], -MAX_DUTY, MAX_DUTY);
-    uint16_t value = (uint16_t)((d < 0.0f ? -d : d) * (PWM_PERIOD + 1U) + 0.5f);
-    ccr[2U * i + (d < 0.0f ? 1U : 0U)] = value;
-  }
-  TIM1->CCR1 = ccr[0]; TIM1->CCR2 = ccr[1];
-  TIM1->CCR3 = ccr[2]; TIM1->CCR4 = ccr[3];
-  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_2, GPIO_PIN_SET);
+static void output_apply(void){
+    if(!g_car.motor.enable){motor_off();return;}
+    const int signs[2]={MOTOR_SIGN_L,MOTOR_SIGN_R};
+    uint32_t value[4];
+    for(unsigned w=0;w<2;++w){
+        float d=car_motion_output_duty(&g_car,w)*signs[w];
+        /* Drive/brake PWM: both inputs high at zero effort. Braked wheels hold
+           independently while the other wheel reaches its encoder endpoint. */
+        uint32_t active=(uint32_t)lroundf(fminf(fabsf(d),g_car.motor.config.max_duty)*800.0f);
+        value[w*2]=800;value[w*2+1]=800;
+        if(!g_car.motor.braked[w]){
+            if(d>=0)value[w*2+1]=800-active;
+            else value[w*2]=800-active;
+        }
+    }
+    TIM1->CCR1=value[0];TIM1->CCR2=value[1];TIM1->CCR3=value[2];TIM1->CCR4=value[3];
+    HAL_GPIO_WritePin(GPIOD,GPIO_PIN_2,GPIO_PIN_SET);
 }
-
+static void a_edge_irq(TIM_TypeDef *tim,GPIO_TypeDef *port,uint32_t apin,uint32_t bpin,unsigned wheel){
+ uint32_t status=tim->SR;
+ if(status&TIM_SR_CC1IF){
+  (void)tim->CCR1;
+  if(status&TIM_SR_CC1OF){tim->SR=~TIM_SR_CC1OF;a_capture_fault=true;return;}
+  uint32_t input=port->IDR;
+  bool a=(input&apin)!=0,b=(input&bpin)!=0;
+  a_edge_counter[wheel]=(uint16_t)(a_edge_counter[wheel]+(a==b?1:-1));
+ }
+}
+void TIM4_IRQHandler(void){a_edge_irq(TIM4,GPIOB,GPIO_PIN_6,GPIO_PIN_7,0);}
+void TIM3_IRQHandler(void){a_edge_irq(TIM3,GPIOA,GPIO_PIN_6,GPIO_PIN_7,1);}
+static void sample_timer_init(void){
+    __HAL_RCC_TIM6_CLK_ENABLE();
+    TIM6->PSC=15;TIM6->ARR=999;TIM6->EGR=TIM_EGR_UG;TIM6->SR=0;TIM6->DIER=TIM_DIER_UIE;
+    CoreDebug->DEMCR|=CoreDebug_DEMCR_TRCENA_Msk;DWT->CYCCNT=0;DWT->CTRL|=DWT_CTRL_CYCCNTENA_Msk;
+    HAL_NVIC_SetPriority(TIM6_DAC_IRQn,2,0);HAL_NVIC_EnableIRQ(TIM6_DAC_IRQn);
+    TIM6->CR1=TIM_CR1_CEN;
+}
+void TIM6_DAC_IRQHandler(void){
+ if(!(TIM6->SR&TIM_SR_UIF))return;
+ TIM6->SR=~TIM_SR_UIF;uint32_t begin=DWT->CYCCNT;
+ if(!(GPIOD->IDR&GPIO_PIN_0)){if(key_low_ms<1000)++key_low_ms;}else key_low_ms=0;
+ if(key_low_ms>=20&&!cancel_requested){cancel_requested=true;car_motion_stop(&g_car);}
+ car_motion_tick_1ms(&g_car,a_edge_counter[0],a_edge_counter[1],(GPIOC->IDR&GPIO_PIN_4)!=0);
+ if(a_capture_fault)car_motion_trip(&g_car,DM_ENCODER);
+ output_apply();uint32_t elapsed=DWT->CYCCNT-begin;if(elapsed>irq_max_cycles)irq_max_cycles=elapsed;
+}
+typedef struct {DualMotorStatus status;bool done;float actual_deg,wheel_degrees[2];uint32_t irq_us;} MotorView;
+static MotorView motor_snapshot(void){
+ MotorView v;uint32_t saved=__get_PRIMASK();__disable_irq();
+ car_motion_get_status(&g_car,&v.status);v.done=car_motion_done(&g_car);
+ v.actual_deg=car_motion_estimated_angle(&g_car);
+ for(unsigned w=0;w<2;++w)v.wheel_degrees[w]=car_motion_wheel_angle(&g_car,w);
+ v.irq_us=irq_max_cycles/16U;
+ __set_PRIMASK(saved);return v;
+}
 static void ultrasonic_init(void) {
     /* 1. PB9 -> TIM17_CH1 (AF1) 硬件 45 us 单脉冲触发器 */
     __HAL_RCC_TIM17_CLK_ENABLE();
@@ -219,45 +249,12 @@ static void ultrasound(uint32_t now) {
             us_mm=(uint16_t)(((uint32_t)pulse*343U+1000U)/2000U);
         }
     }
-    if(us_pending && now-us_trigger_ms>25U) {us_pending=false;us_valid=false;}
+    if(us_pending && now-us_trigger_ms>25U) {us_pending=false;us_valid=false;us_mm=0;++us_seq;us_echo_ms=now;}
     if(now-us_trigger_ms>=60U) {
         us_trigger_ms=now;us_pending=true;us_valid=false;
         TIM8->SR=~(TIM_SR_CC2IF|TIM_SR_CC2OF);
         TIM17->CNT=0;SET_BIT(TIM17->CR1,TIM_CR1_CEN);
     }
-}
-static void speed_control(uint32_t now) {
-    uint32_t elapsed=now-last_control_ms;if(elapsed<CONTROL_MS)return;
-    last_control_ms=now;float dt=elapsed*0.001f;
-    if(elapsed>50U) {motor_off();g_align.phase=ALIGN_FAILED;g_align.error=ALIGN_HARDWARE;return;}
-    uint16_t counts[2]={(uint16_t)TIM4->CNT,(uint16_t)TIM3->CNT};
-    float step[2];
-    for(unsigned i=0;i<2;++i) {
-        int16_t delta=(int16_t)(counts[i]-wheels[i].previous_count);
-        wheels[i].previous_count=counts[i];
-        step[i]=(float)delta*PI*WHEEL_MM/COUNTS_PER_REV;
-        float rpm=(float)delta*60.0f/(COUNTS_PER_REV*dt);
-        wheels[i].rpm+=0.4f*(rpm-wheels[i].rpm);
-    }
-    heading_rad+=(step[1]-step[0])/TRACK_MM;
-    if(HAL_GPIO_ReadPin(GPIOC,GPIO_PIN_4)==GPIO_PIN_RESET) {
-        motor_off();g_align.phase=ALIGN_FAILED;g_align.error=ALIGN_HARDWARE;return;
-    }
-    if(g_align.phase!=ALIGN_TURN) {motor_off();return;}
-    for(unsigned i=0;i<2;++i) {
-        float requested=g_align.speed[i]*60.0f/(PI*WHEEL_MM);
-        command_rpm[i]+=clampf(requested-command_rpm[i],-200*dt,200*dt);
-        float target=command_rpm[i],error=target-wheels[i].rpm;
-        if(fabsf(target)<0.5f) {wheels[i].integral=wheels[i].duty=0;continue;}
-        float ff=copysignf(0.14f+fabsf(target)*0.0040f,target);
-        float ci=clampf(wheels[i].integral+KI*error*dt,-I_LIMIT,I_LIMIT);
-        float u=ff+KP*error+ci,limited=clampf(u,-MAX_DUTY,MAX_DUTY);
-        if((u-limited)*error<=0)wheels[i].integral=ci;
-        wheels[i].duty=clampf(ff+KP*error+wheels[i].integral,-MAX_DUTY,MAX_DUTY);
-        /* Never drive a wheel in the opposite direction to its turn target. */
-        if(wheels[i].duty*target<0)wheels[i].duty=0;
-    }
-    apply_pwm(wheels[0].duty,wheels[1].duty);
 }
 #define LCD_CS_LOW()    (GPIOD->BSRR = (uint32_t)GPIO_PIN_11 << 16U)
 #define LCD_CS_HIGH()   (GPIOD->BSRR = GPIO_PIN_11)
@@ -323,26 +320,6 @@ static void lcd_fill(uint16_t color)
     lcd_spi_byte((uint8_t)color);
   }
   lcd_spi_idle(); LCD_CS_HIGH();
-}
-
-static void lcd_text(uint16_t x, uint16_t y, const char *text, uint16_t color)
-{
-  for (const char *s = text; *s && x <= LCD_W - 6U; ++s, x += 6U)
-  {
-    uint8_t glyph = (*s >= ' ' && *s <= '~') ? (uint8_t)(*s - ' ') : 0U;
-    lcd_window(x, y, 6U, 12U);
-    LCD_CS_LOW();
-    for (uint8_t row = 0; row < 12U; ++row)
-    {
-      uint8_t bits = k_font_6x12[glyph][row];
-      for (uint8_t col = 0; col < 6U; ++col)
-      {
-        uint16_t pixel = (bits & (1U << col)) ? color : LCD_BG;
-        lcd_spi_byte((uint8_t)(pixel >> 8)); lcd_spi_byte((uint8_t)pixel);
-      }
-    }
-    lcd_spi_idle(); LCD_CS_HIGH();
-  }
 }
 
 static void lcd_text2(uint16_t x, uint16_t y, const char *text, uint16_t color)
@@ -416,68 +393,165 @@ static void Lcd_Init(void)
   lcd_cmd(0x29U); HAL_Delay(20U); /* display on */
   HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13, GPIO_PIN_SET);
   lcd_fill(LCD_BG);
-  lcd_text2(12U, 10U, "INITIAL ALIGN", LCD_WHITE);
-  lcd_text(12U, 262U, "PD0 STOP   RESET SCAN", LCD_GREEN);
+  /* Large, minimal status is drawn by screen_service. */
 }
 
 
-static void screen_service(uint32_t now) {
-    static char lines[12][37];static uint8_t row,col;static uint32_t updated;
-    if(row==0 && col==0) {
-        if(now-updated<250U)return;
-        updated=now;
-        snprintf(lines[0],37,"%-35s",align_phase_name(g_align.phase));
-        snprintf(lines[1],37,"SCAN %2u/37  SERVO %4u us",g_align.index,g_align.servo_us);
-        snprintf(lines[2],37,"RANGE %3u mm VALID %u",us_mm,(unsigned)us_valid);
-        snprintf(lines[3],37,"NORMAL %+4d deg",(int)g_align.normal_deg);
-        snprintf(lines[4],37,"SIDE %s",g_align.side_left?"LEFT":"RIGHT");
-        snprintf(lines[5],37,"TARGET %+4d  ACTUAL %+4d deg",(int)g_align.target_deg,(int)g_align.actual_deg);
-        snprintf(lines[6],37,"FIT %u pts RMS %u/10 mm",g_align.fit_last-g_align.fit_first+1,(unsigned)(g_align.rms_mm*10));
-        snprintf(lines[7],37,"L %+4d   R %+4d mm/s",(int)(wheels[0].rpm*PI*WHEEL_MM/60),(int)(wheels[1].rpm*PI*WHEEL_MM/60));
-        snprintf(lines[8],37,"EDGES L%u R%u",g_align.edge_left_seen,g_align.edge_right_seen);
-        snprintf(lines[9],37,"SIDE DIST %3u mm",g_align.side_mm);
-        snprintf(lines[10],37,"RESULT %s",align_error_name(g_align.error));
-        snprintf(lines[11],37,"STEP1 ONLY - NO LASER");
-        for(unsigned r=0;r<12;++r) {size_t n=0;while(n<36&&lines[r][n])++n;while(n<36)lines[r][n++]=' ';lines[r][36]=0;}
-    }
-    char ch[2]={lines[row][col],0};
-    lcd_text((uint16_t)(12+col*6),(uint16_t)(48+row*17),ch,g_align.error?LCD_RED:LCD_WHITE);
-    if(++col==36){col=0;if(++row==12)row=0;}
+#define BT_SIZE 2048U
+static char bt_data[BT_SIZE];static volatile unsigned bt_head,bt_tail;static uint32_t bt_drop;
+static void bt_init(void){
+    __HAL_RCC_USART1_CLK_ENABLE();MODIFY_REG(RCC->CCIPR,RCC_CCIPR_USART1SEL,0U);
+    GPIO_InitTypeDef p={0};p.Pin=GPIO_PIN_9|GPIO_PIN_10;p.Mode=GPIO_MODE_AF_PP;p.Pull=GPIO_PULLUP;
+    p.Speed=GPIO_SPEED_FREQ_HIGH;p.Alternate=GPIO_AF7_USART1;HAL_GPIO_Init(GPIOA,&p);
+    USART1->CR1=0;USART1->CR2=0;USART1->CR3=0;
+    USART1->BRR=(HAL_RCC_GetPCLK2Freq()+57600U)/115200U;
+    USART1->ICR=USART_ICR_ORECF|USART_ICR_FECF|USART_ICR_NECF;
+    USART1->CR1=USART_CR1_UE|USART_CR1_TE|USART_CR1_RE;
+    HAL_NVIC_SetPriority(USART1_IRQn,3,0);HAL_NVIC_EnableIRQ(USART1_IRQn);
 }
-int main(void) {
-    HAL_Init();SystemClock_Config();MX_GPIO_Init();motor_hardware_init();
-    /* Laser/buzzer/park outputs start low and are not used by this test. */
-    gpio(GPIOC,GPIO_PIN_8|GPIO_PIN_9,GPIO_MODE_OUTPUT_PP,GPIO_NOPULL,0);
-    HAL_GPIO_WritePin(GPIOC,GPIO_PIN_8|GPIO_PIN_9,GPIO_PIN_RESET);
-    gpio(GPIOD,GPIO_PIN_8,GPIO_MODE_OUTPUT_PP,GPIO_NOPULL,0);
-    HAL_GPIO_WritePin(GPIOD,GPIO_PIN_8,GPIO_PIN_SET);
-    ultrasonic_init();Lcd_Init();servo_init();
-    last_control_ms=HAL_GetTick();align_start(&g_align,last_control_ms);
-    /* Independent watchdog: fail stopped if the main loop locks. */
-    IWDG->KR=0x5555;IWDG->PR=4;IWDG->RLR=1250;IWDG->KR=0xCCCC;IWDG->KR=0xAAAA;
-    for(;;) {
-        uint32_t now=HAL_GetTick();ultrasound(now);speed_control(now);
-        if(now-last_step>=5U) {
-            last_step=now;
-            float measured[2]={wheels[0].rpm*PI*WHEEL_MM/60,wheels[1].rpm*PI*WHEEL_MM/60};
-            AlignPhase before=g_align.phase;
-            align_step(&g_align,now,us_seq,us_trigger_ms,us_echo_ms,us_valid,us_mm,heading_rad,measured);
-            if(before==ALIGN_FIT) {last_control_ms=HAL_GetTick();last_step=last_control_ms;}
-            if(HAL_GPIO_ReadPin(GPIOD,GPIO_PIN_0)==GPIO_PIN_RESET) {
-                g_align.phase=ALIGN_CANCELLED;motor_off();
-            }
-            if(g_align.phase!=ALIGN_TURN) {
-                motor_off();
-                if(g_align.phase==ALIGN_BRAKE) {
-                    TIM1->CCR1=TIM1->CCR2=TIM1->CCR3=TIM1->CCR4=PWM_PERIOD+1U;
-                    HAL_GPIO_WritePin(GPIOD,GPIO_PIN_2,GPIO_PIN_SET);
-                }
-            }
-            TIM2->CCR1=now-g_align.started>=10U?g_align.servo_us:0;
-            HAL_GPIO_WritePin(GPIOD,GPIO_PIN_8,g_align.phase==ALIGN_TURN?GPIO_PIN_RESET:GPIO_PIN_SET);
-        }
-        screen_service(now);IWDG->KR=0xAAAA;
+static void bt_queue(const char *s,size_t n){
+    unsigned used=(bt_head+BT_SIZE-bt_tail)%BT_SIZE;
+    if(n>BT_SIZE-used-1U){++bt_drop;return;}
+    for(size_t i=0;i<n;++i){bt_data[bt_head]=s[i];__DMB();bt_head=(bt_head+1U)%BT_SIZE;}
+    USART1->CR1|=USART_CR1_TXEIE_TXFNFIE;
+}
+void USART1_IRQHandler(void){
+    if(USART1->ISR&USART_ISR_TXE_TXFNF){
+        if(bt_head!=bt_tail){USART1->TDR=(uint8_t)bt_data[bt_tail];bt_tail=(bt_tail+1U)%BT_SIZE;}
+        else USART1->CR1&=~USART_CR1_TXEIE_TXFNFIE;
     }
+}
+static void bt_pump(void){
+    if(USART1->ISR&USART_ISR_RXNE_RXFNE)(void)USART1->RDR;
+    if(USART1->ISR&(USART_ISR_ORE|USART_ISR_NE|USART_ISR_FE))USART1->ICR=USART_ICR_ORECF|USART_ICR_NECF|USART_ICR_FECF;
+}
+static long x10(float v){return isfinite(v)?lroundf(v*10):0;}
+static const char *stage_action(void){
+ switch(g_align.phase){
+ case ALIGN_HOME:case ALIGN_SEEK:return "FRONT_HOME";
+ case ALIGN_APPROACH:case ALIGN_APPROACH_STOP:return "APPROACH100";
+ case ALIGN_PRE_SCAN_WAIT:return "STOP_BEFORE_SCAN";
+ case ALIGN_TURN:return "RIGHT_HALF_TURN";
+ case ALIGN_TURN_HALF_WAIT:return "TURN_STOP_WAIT";
+ case ALIGN_TURN_LEFT:return "LEFT_HALF_TURN";
+ default:return "SCAN_AND_ALIGN";
+ }
+}
+static void telemetry(uint32_t now,const MotorView *v){
+ static unsigned sent_points;
+ /* Log every accepted face sample, not only the 200ms status snapshot. */
+ while(sent_points<g_align.line_n){
+  unsigned i=sent_points++;char sample[128];
+  int n=snprintf(sample,sizeof(sample),"L,fw=BOX_APPROACH_V2,i=%u,x10=%ld,range10=%ld\r\n",i,x10(g_align.line_x[i]),x10(g_align.line_y[i]));
+  if(n>0&&(size_t)n<sizeof(sample))bt_queue(sample,(size_t)n);else ++bt_drop;
+ }
+ static uint32_t last,seq;static AlignPhase previous=(AlignPhase)255;char line[1024];
+ if(now-last<200&&g_align.phase==previous)return;
+ last=now;previous=g_align.phase;
+ int n=snprintf(line,sizeof(line),
+ "M,fw=BOX_APPROACH_V2,seq=%lu,ms=%lu,phase=%s,action=%s,error=%s,motorError=%s,scan=%u,servo=%u,range=%u,valid=%u,side=%s,normal10=%ld,target10=%ld,actual10=%ld,wheelLdeg10=%ld,wheelRdeg10=%ld,edgeL=%u,edgeR=%u,edgeLmm=%u,edgeRmm=%u,edgeNormal10=%ld,centreY10=%ld,moveWheel=%u,dir=%d,refL10=%ld,refR10=%ld,pulseL=%ld,pulseR=%ld,pwmL1000=%ld,pwmR1000=%ld,countL=%lu,countR=%lu,goalL=%ld,goalR=%ld,fitSupport=%u,fitTotal=%u,fitRms10=%ld,entry=%lu,entryInferred=%u,exit=%lu,lineN=%u,lineSupport=%u,lineRms10=%ld,fine10=%ld,fineNormal10=%ld,lineWarn=%u,front=%u,planMm=%u,stopMm=%u,stopHits=%u,remain=%ld,approachPlan=%u,echoLost=%u,txdrop=%lu,irqUs=%lu\r\n",
+ (unsigned long)seq++,(unsigned long)now,align_phase_name(g_align.phase),stage_action(),align_error_name(g_align.error),dual_motor_error_name(v->status.error),
+ g_align.index,g_align.servo_us,us_mm,us_valid,g_align.side_left?"LEFT":"RIGHT",x10(g_align.normal_deg),x10(g_align.target_deg),x10(g_align.actual_deg),x10(g_align.wheel_degrees[0]),x10(g_align.wheel_degrees[1]),
+ g_align.fit_first,g_align.fit_last,g_align.edge_left_mm,g_align.edge_right_mm,x10(g_align.edge_normal_deg),x10(g_align.centre_y_mm),g_align.moving_wheel,g_align.motor_direction,
+ x10(v->status.target[0]),x10(v->status.target[1]),lroundf(v->status.speed[0]),lroundf(v->status.speed[1]),lroundf(v->status.duty[0]*1000),lroundf(v->status.duty[1]*1000),
+ (unsigned long)v->status.counts[0],(unsigned long)v->status.counts[1],(long)v->status.goal[0],(long)v->status.goal[1],g_align.fit_support,g_align.fit_total,x10(g_align.rms_mm),(unsigned long)g_align.edge_entry,g_align.entry_inferred,(unsigned long)g_align.edge_exit,g_align.line_n,g_align.line_support,x10(g_align.line_rms),x10(g_align.fine_deg),x10(g_align.fine_normal_deg),g_align.line_warning,g_align.approach_range_mm,g_align.approach_plan_mm,g_align.approach_stop_mm,g_align.approach_stop_hits,(long)g_align.approach_remaining_counts,g_align.approach_plan_applied,g_align.approach_echo_lost,(unsigned long)bt_drop,(unsigned long)v->irq_us);
+ if(n>0&&(size_t)n<sizeof(line))bt_queue(line,(size_t)n);else ++bt_drop;
+}
+/* Dump the actual settled scan averages BEFORE fitting; live range telemetry
+   may be from a different servo position. One bounded frame, no RX commands. */
+static void scan_telemetry(void){
+ char line[384];int n=snprintf(line,sizeof(line),"S,fw=BOX_APPROACH_V2");
+ for(unsigned i=0;i<ALIGN_POINTS&&n>0&&(size_t)n<sizeof(line);++i){
+  int k=snprintf(line+n,sizeof(line)-(size_t)n,",p%u=%u",i,g_align.range[i]);
+  if(k<0||(size_t)k>=sizeof(line)-(size_t)n){++bt_drop;return;}n+=k;
+ }
+ if(n>0&&(size_t)n+2<sizeof(line)){line[n++]='\r';line[n++]='\n';bt_queue(line,(size_t)n);}
+}
+static void angle_text(char *out,const char *name,float degrees){
+ long tenth=x10(degrees);
+ if(tenth<-9999||tenth>9999){snprintf(out,19,"%s OVF",name);return;}
+ int v=(int)tenth,mag=v<0?-v:v;
+ snprintf(out,19,"%s %c%d.%d deg",name,v<0?'-':'+',mag/10,mag%10);
+}
+static void screen_service(uint32_t now,const MotorView *v){
+ static char lines[8][19];static uint8_t row,col;static uint32_t updated;
+ if(row==0&&col==0){
+  if(now-updated<150)return;
+  updated=now;
+  if(us_mm&&now-us_echo_ms<=300U)snprintf(lines[0],19,"DIST %u mm",us_mm);
+  else snprintf(lines[0],19,"DIST -- mm");
+  snprintf(lines[1],19,"L %lu",(unsigned long)v->status.counts[0]);
+  snprintf(lines[2],19,"R %lu",(unsigned long)v->status.counts[1]);
+  angle_text(lines[3],"TURN",g_align.target_deg);
+  angle_text(lines[4],"L DEG",g_align.wheel_degrees[0]);
+  angle_text(lines[5],"R DEG",g_align.wheel_degrees[1]);
+  snprintf(lines[6],19,"ERR");const char *reason=align_error_name(g_align.error);
+  if(v->status.error!=DM_OK)reason=dual_motor_error_name(v->status.error);
+  else if(g_align.phase==ALIGN_CANCELLED)reason="CANCELLED";
+  snprintf(lines[7],19,"%s",reason);
+  for(unsigned i=0;i<8;++i){size_t n=strlen(lines[i]);while(n<18)lines[i][n++]=' ';lines[i][18]=0;}
+ }
+ char ch[2]={lines[row][col],0};
+ uint16_t color=(g_align.error||v->status.error||g_align.phase==ALIGN_CANCELLED)?LCD_RED:LCD_WHITE;
+ lcd_text2((uint16_t)(12+col*12),(uint16_t)(12+row*32),ch,color);
+ if(++col==18){col=0;if(++row==8)row=0;}
+}
+int main(void){
+ HAL_Init();SystemClock_Config();MX_GPIO_Init();motor_hardware_init();
+ gpio(GPIOC,GPIO_PIN_8|GPIO_PIN_9,GPIO_MODE_OUTPUT_PP,GPIO_NOPULL,0);HAL_GPIO_WritePin(GPIOC,GPIO_PIN_8|GPIO_PIN_9,GPIO_PIN_RESET);
+ gpio(GPIOD,GPIO_PIN_8,GPIO_MODE_OUTPUT_PP,GPIO_NOPULL,0);HAL_GPIO_WritePin(GPIOD,GPIO_PIN_8,GPIO_PIN_SET);
+ ultrasonic_init();Lcd_Init();servo_init();bt_init();
+ if(!car_motion_init(&g_car,a_edge_counter[0],a_edge_counter[1]))Error_Handler();
+ align_start(&g_align,HAL_GetTick());
+ if(__HAL_RCC_GET_FLAG(RCC_FLAG_IWDGRST)){
+  car_motion_trip(&g_car,DM_WATCHDOG);g_align.phase=ALIGN_FAILED;g_align.error=ALIGN_HARDWARE;g_align.servo_us=ALIGN_CENTRE_US;
+ }
+ __HAL_RCC_CLEAR_RESET_FLAGS();sample_timer_init();
+ IWDG->KR=0x5555;IWDG->PR=4;IWDG->RLR=1250;IWDG->KR=0xCCCC;IWDG->KR=0xAAAA;
+ for(;;){
+  uint32_t now=HAL_GetTick();ultrasound(now);bt_pump();MotorView view=motor_snapshot();
+  if(now-last_step>=5){
+   last_step=now;
+   if(cancel_requested)align_cancel(&g_align);
+   AlignMotionFeedback motion={view.status.running,view.done,view.status.phase==DM_FAULT,view.actual_deg,(uint32_t)view.status.error,{view.status.counts[0],view.status.counts[1]},{view.wheel_degrees[0],view.wheel_degrees[1]}};
+   if(g_align.phase==ALIGN_FIT)scan_telemetry();
+   align_step(&g_align,now,us_seq,us_trigger_ms,us_echo_ms,us_valid,us_mm,&motion);
+   if((g_align.phase==ALIGN_APPROACH||g_align.phase==ALIGN_APPROACH_STOP)&&!g_align.approach_requested&&!cancel_requested){
+    uint32_t saved=__get_PRIMASK();__disable_irq();bool started=car_motion_start_scan(&g_car);__set_PRIMASK(saved);
+    if(started)g_align.approach_requested=true;
+    else {g_align.phase=ALIGN_FAILED;g_align.error=ALIGN_HARDWARE;}
+   }
+   if(g_align.approach_requested&&g_align.approach_plan_ready&&!g_align.approach_plan_applied&&!g_align.approach_hard_stop&&!cancel_requested){
+    uint32_t saved=__get_PRIMASK();__disable_irq();
+    bool planned=car_motion_finish_after_counts(&g_car,g_align.approach_remaining_counts);__set_PRIMASK(saved);
+    if(planned)g_align.approach_plan_applied=true;
+    else {g_align.phase=ALIGN_FAILED;g_align.error=ALIGN_HARDWARE;}
+   }
+   if(g_align.approach_requested&&g_align.approach_hard_stop&&!g_align.approach_hard_stop_applied&&!cancel_requested){
+    uint32_t saved=__get_PRIMASK();__disable_irq();bool stopped=car_motion_finish_straight(&g_car);__set_PRIMASK(saved);
+    if(stopped)g_align.approach_hard_stop_applied=true;
+    else {g_align.phase=ALIGN_FAILED;g_align.error=ALIGN_HARDWARE;}
+   }
+   if(g_align.phase==ALIGN_TURN&&!g_align.turn_requested&&!cancel_requested){
+    uint32_t saved=__get_PRIMASK();__disable_irq();bool started=car_motion_start_pivot(&g_car,1,g_align.target_deg>0?1:-1,fabsf(g_align.target_deg)*.5f);__set_PRIMASK(saved);
+    if(started)g_align.turn_requested=true;
+    else {g_align.phase=ALIGN_FAILED;g_align.error=ALIGN_HARDWARE;}
+   }
+   if(g_align.phase==ALIGN_TURN_LEFT&&!g_align.left_turn_requested&&!cancel_requested){
+    uint32_t saved=__get_PRIMASK();__disable_irq();
+    bool started=car_motion_start_pivot(&g_car,0,g_align.target_deg>0?-1:1,fabsf(g_align.target_deg)*.5f);__set_PRIMASK(saved);
+    if(started)g_align.left_turn_requested=true;
+    else {g_align.phase=ALIGN_FAILED;g_align.error=ALIGN_HARDWARE;}
+   }
+   if((g_align.phase==ALIGN_FAILED||g_align.phase==ALIGN_CANCELLED)&&g_car.motor.running){
+    uint32_t saved=__get_PRIMASK();__disable_irq();car_motion_stop(&g_car);__set_PRIMASK(saved);
+   }
+   TIM2->CCR1=now-g_align.started>=10?g_align.servo_us:0;
+   HAL_GPIO_WritePin(GPIOD,GPIO_PIN_8,(g_align.phase==ALIGN_TURN||g_align.phase==ALIGN_TURN_LEFT||g_align.phase==ALIGN_APPROACH||g_align.phase==ALIGN_APPROACH_STOP)?GPIO_PIN_RESET:GPIO_PIN_SET);
+  }
+  view=motor_snapshot(); /* Starts reset segment counts before status/rendering. */
+  telemetry(now,&view);screen_service(now,&view);bt_pump();IWDG->KR=0xAAAA;
+ }
 }
 void SystemClock_Config(void)
 {

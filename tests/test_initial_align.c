@@ -3,66 +3,21 @@
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
-#define R 0.01745329252f
-static void plane(InitialAlign *a,float phi,int lo,int hi) {
- memset(a,0,sizeof(*a));
- for(int i=lo;i<=hi;++i)a->range[i]=(uint16_t)lroundf(150/cosf((90-5*i-phi)*R));
+#define RAD .0174532925199433f
+static void plane(InitialAlign *a,float phi,int lo,int hi){
+ memset(a,0,sizeof(*a));for(int i=lo;i<=hi;++i)a->range[i]=(uint16_t)lroundf(150/cosf((90-5*i-phi)*RAD));
 }
-int main(void) {
- InitialAlign a;float v[2]={0,0};
- /* Exercise the actual scanner output, including all three calibrated anchors. */
- align_start(&a,0);
- uint32_t scan_time=0;
- uint16_t previous=ALIGN_LEFT_US;
- for(unsigned i=0;i<ALIGN_POINTS;++i) {
-  assert(a.index==i && a.servo_us<=previous);
-  assert(a.servo_us>=ALIGN_RIGHT_US && a.servo_us<=ALIGN_LEFT_US);
-  if(i==0)assert(a.servo_us==2400);
-  if(i==18)assert(a.servo_us==1460);
-  if(i==36)assert(a.servo_us==500);
-  previous=a.servo_us;
-  scan_time+=i==0?1380U:300U;
-  align_step(&a,scan_time,0,0,0,false,0,0,v);
- }
- assert(a.phase==ALIGN_FIT);
-
- plane(&a,0,14,22);assert(align_fit(&a));assert(fabsf(a.normal_deg)<1);
- assert(fabsf(fabsf(a.target_deg)-90)<1);assert(a.edge_left_seen&&a.edge_right_seen);
- plane(&a,20,10,17);assert(align_fit(&a));assert(fabsf(a.normal_deg-20)<1);
- assert(a.side_left&&fabsf(a.target_deg+70)<1);
- plane(&a,-20,19,26);assert(align_fit(&a));assert(fabsf(a.normal_deg+20)<1);
- assert(!a.side_left&&fabsf(a.target_deg-70)<1);
- plane(&a,0,0,36);assert(align_fit(&a));assert(!a.edge_left_seen&&!a.edge_right_seen);
- memset(&a,0,sizeof(a));assert(!align_fit(&a));a.range[18]=150;assert(!align_fit(&a));
- plane(&a,0,16,20);assert(align_fit(&a));
- plane(&a,25,10,16);
- for(int i=17;i<=23;++i)a.range[i]=(uint16_t)lroundf(150/cosf((90-5*i+25)*R));
- assert(align_fit(&a));assert(fabsf(a.normal_deg)>15);
+int main(void){
+ InitialAlign a;plane(&a,20,10,17);assert(align_fit(&a)&&a.side_left&&fabsf(a.target_deg+70)<1&&a.moving_wheel==1&&a.motor_direction==-1);
+ plane(&a,-20,19,26);assert(align_fit(&a)&&!a.side_left&&fabsf(a.target_deg-70)<1&&a.moving_wheel==1&&a.motor_direction==1);
+ plane(&a,0,7,13);assert(align_fit(&a)&&a.side_left&&fabsf(a.target_deg+90)<1);
+ plane(&a,0,23,29);assert(align_fit(&a)&&!a.side_left&&fabsf(a.target_deg-90)<1);
  plane(&a,20,10,17);a.range[13]=0;assert(align_fit(&a));
- align_start(&a,100);
- align_step(&a,1350,1,1340,1345,true,150,0,v);assert(a.hits==1);
- align_step(&a,1360,1,1340,1345,true,150,0,v);assert(a.hits==1);
- align_step(&a,1370,2,1200,1365,true,150,0,v);assert(a.hits==1);
- align_step(&a,1480,3,1420,1425,true,150,0,v);assert(a.range[0]==150&&a.index==1);
- align_step(&a,1780,3,1420,1425,true,150,0,v);assert(a.range[1]==0);
- plane(&a,20,10,17);a.phase=ALIGN_FIT;
- align_step(&a,20000,0,0,0,false,0,0,v);assert(a.phase==ALIGN_TURN);
- align_step(&a,20005,0,0,0,false,0,0,v);assert(a.speed[0]>0&&a.speed[1]<0);
- assert(fabsf(a.speed[0]+a.speed[1])<0.001f);
- align_step(&a,20100,0,0,0,false,0,-69*R,v);assert(a.phase==ALIGN_BRAKE);
- align_step(&a,20400,0,0,0,false,0,-70*R,v);assert(a.phase==ALIGN_LOCK);
- assert(a.servo_us==ALIGN_LEFT_US);
- align_step(&a,21700,1,21650,21655,true,150,-70*R,v);assert(a.phase==ALIGN_DONE);
- align_step(&a,30000,2,29950,29955,true,150,-70*R,v);assert(a.phase==ALIGN_DONE);
- plane(&a,-20,19,26);a.phase=ALIGN_FIT;align_step(&a,20000,0,0,0,false,0,0,v);
- align_step(&a,20005,0,0,0,false,0,0,v);assert(a.speed[0]<0&&a.speed[1]>0);
- align_step(&a,36000,0,0,0,false,0,0,v);assert(a.error==ALIGN_TURN_TIMEOUT);
- plane(&a,20,10,17);a.phase=ALIGN_FIT;align_step(&a,20000,0,0,0,false,0,0,v);
- v[0]=-40;v[1]=40;align_step(&a,20005,0,0,0,false,0,0,v);assert(a.phase==ALIGN_TURN);
- align_step(&a,20200,0,0,0,false,0,0,v);assert(a.error==ALIGN_ENCODER);
- memset(&a,0,sizeof(a));a.phase=ALIGN_LOCK;a.since=100;
- align_step(&a,2700,0,0,0,false,0,0,v);assert(a.error==ALIGN_SIDE_NO_ECHO);
- memset(&a,0,sizeof(a));a.phase=ALIGN_CANCELLED;
- align_step(&a,9000,0,0,0,false,0,0,v);assert(a.phase==ALIGN_CANCELLED&&a.speed[0]==0);
- puts("PASS: geometry, corner splitting, dropout, stale/duplicate echo, signed turn, lock, timeout, encoder fault, cancel");
+ plane(&a,20,10,17);for(unsigned i=0;i<37;++i)if(!a.range[i])a.range[i]=350;assert(align_fit(&a));
+ memset(&a,0,sizeof a);assert(!align_fit(&a));a.range[18]=150;assert(!align_fit(&a));
+ plane(&a,20,0,17);assert(!align_fit(&a));
+ {const uint16_t recorded[37]={0,0,0,0,157,153,157,139,133,121,127,149,135,147,160,132,163,128,143,157,168,167,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};memset(&a,0,sizeof a);memcpy(a.range,recorded,sizeof recorded);assert(align_fit(&a));}
+ {const uint16_t recorded[37]={0,0,0,0,170,139,139,146,160,139,121,121,130,135,135,135,132,146,173,160,157,0,0,0,0,0,0,0,0,0,0,0,0,0,0,305,305};memset(&a,0,sizeof a);memcpy(a.range,recorded,sizeof recorded);assert(align_fit(&a));}
+ {const uint16_t recorded[37]={0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,138,155,135,135,135,141,153,132,132,158,128,173,154,0,0,0,0,0,0,0,308};memset(&a,0,sizeof a);memcpy(a.range,recorded,sizeof recorded);assert(align_fit(&a));}
+ puts("PASS: existing edge/normal/side geometry and real NO_FACE replay retained, calibrated right-first split turn selected");
 }

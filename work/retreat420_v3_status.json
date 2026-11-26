@@ -1,0 +1,10 @@
+{
+  "firmware": "BOX_ALIGN_PD_V3",
+  "implementation": "After existing align and side echo lock, reverse both wheels 420 A dual edges, target40/50ms, existing PD/count sync, 300ms soft stop after each reaches goal; no fill or repeat",
+  "validation": "host integration and motor tests passed; cross build passed without warnings; diff check passed",
+  "flash": "FAILED: Unable to get core ID, no write started; under reset950kHz and100kHz plus NORMAL connection failed",
+  "observed_firmware": "BOX_ALIGN_PD_V2; DONE error OK",
+  "capture_session": 28939,
+  "capture_log": "F:\\STM32CUBEIDE\\find_box_and_shoot_cc\\work\\box_stage1_20261125_214102.log",
+  "time": "2026-11-25T21:42:13.273162"
+}

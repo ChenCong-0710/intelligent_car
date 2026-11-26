@@ -1,0 +1,22 @@
+{
+  "firmware": "BOX_ALIGN_PD_V1",
+  "project": "F:\\STM32CUBEIDE\\find_box_and_shoot_cc",
+  "user_confirmed_pose": "Side-facing ultrasound perpendicular to box plane, vehicle approximately parallel",
+  "sweep": {
+    "left_us": 2400,
+    "centre_us": 1460,
+    "right_us": 500,
+    "positions": 37,
+    "direction": "+90 to -90"
+  },
+  "geometry": "Paired range discontinuity/missing-echo boundaries; edge-chord normal cross-checked against plane fit; side from boundary-centre lateral coordinate",
+  "left_obstacle": "servo+90; wheel0 brake, wheel1 reverse; target=normal-90",
+  "right_obstacle": "servo-90; wheel1 brake, wheel0 reverse; target=normal+90",
+  "controller": "TEST positional PD no integral; forward/reverse40 raw A edges/50ms with gradual sync, single-wheel34 with hard endpoint brake; A both-edge interrupts and TIM6 1ms",
+  "state": "SCAN FIT SIDE_SETTLE TURN BRAKE LOCK DONE; stage1 only",
+  "tests": "tools/test_stage1.py passed; tools/build_stage1.py cross-compiled without warnings",
+  "artifact": "Debug/stage1_pd/box_stage1_pd.hex",
+  "deployment": "NOT FLASHED per user; all task capture processes stopped; no serial port opened",
+  "backup": "F:\\STM32CUBEIDE\\find_box_and_shoot_cc\\backups\\before_pd_stage1_20261125_204146",
+  "physical_validation": "Pending, including reverse pivot calibration, actual scan boundaries/normal and side echo."
+}
