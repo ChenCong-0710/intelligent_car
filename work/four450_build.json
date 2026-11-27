@@ -1,0 +1,8 @@
+{
+  "fw": "BOX_FOUR450_V20",
+  "elf": "F:\\STM32CUBEIDE\\find_box_and_shoot_cc\\Debug\\find_box_and_shoot_cc.elf",
+  "sha256": "7bb11bf1ed970d1c67901e74faafef3f734e4e0e79475b3093d9ca91f02a0447",
+  "flashed": true,
+  "flash_log": "F:\\STM32CUBEIDE\\find_box_and_shoot_cc\\work\\flash_four450_20261127_142245.log",
+  "clearance": 450
+}

@@ -3,6 +3,7 @@
 #include "initial_align.h"
 #include "car_motion.h"
 #include "box_center.h"
+#include "four_faces.h"
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -15,6 +16,7 @@ static TIM_HandleTypeDef motor_pwm,enc_left,enc_right,us_trig_timer,us_echo_time
 InitialAlign g_align;
 CarMotion g_car;
 BoxCenter g_box_center;
+FourFaces g_four_faces;
 static volatile uint16_t a_edge_counter[2];
 static volatile bool a_capture_fault,cancel_requested;
 static volatile uint32_t irq_max_cycles;
@@ -442,7 +444,28 @@ static void bt_pump(void){
     if(USART1->ISR&(USART_ISR_ORE|USART_ISR_NE|USART_ISR_FE))USART1->ICR=USART_ICR_ORECF|USART_ICR_NECF|USART_ICR_FECF;
 }
 static long x10(float v){return isfinite(v)?lroundf(v*10):0;}
+static const char *task_phase(void){
+ if(g_four_faces.phase!=FF_IDLE&&g_four_faces.phase!=FF_FACE)return four_faces_phase_name(g_four_faces.phase);
+ return g_box_center.phase==BC_IDLE?align_phase_name(g_align.phase):box_center_phase_name(g_box_center.phase);
+}
+static const char *task_error(void){
+ if(g_four_faces.phase==FF_FAILED||g_four_faces.phase==FF_CANCELLED)return g_four_faces.error;
+ return g_box_center.phase==BC_IDLE?align_error_name(g_align.error):g_box_center.error;
+}
+static void four_faces_telemetry(uint32_t now){
+ static uint32_t last;static FourFacesPhase previous=FF_IDLE;
+ FourFaces *t=&g_four_faces;if(t->phase==FF_IDLE)return;
+ if(now-last<1000U&&previous==t->phase)return;
+ last=now;previous=t->phase;char line[384];
+ int n=snprintf(line,sizeof(line),
+ "F,fw=BOX_EXIT30_V22,ms=%lu,phase=%s,face=%u,shots=%u,side=%s,clearL=%ld,clearR=%ld,clear=%ld,outN=%u,need=%u,inner=%u,outer=%u,turn10=%d,Ldeg10=%ld,Rdeg10=%ld,ref=%u,error=%s\r\n",
+ (unsigned long)now,four_faces_phase_name(t->phase),t->face_number,g_laser_shots,t->side_left?"LEFT":"RIGHT",
+ (long)t->clearance_counts[0],(long)t->clearance_counts[1],(long)t->clearance_mean,t->exit_samples,FOUR_EXIT_SAMPLES,t->inner_wheel,t->outer_wheel,
+ t->side_left?900:-900,x10(t->corner_wheel_degrees[0]),x10(t->corner_wheel_degrees[1]),t->new_reference,t->error);
+ if(n>0&&(size_t)n<sizeof(line))bt_queue(line,(size_t)n);else ++bt_drop;
+}
 static const char *stage_action(void){
+ if(g_four_faces.phase!=FF_IDLE&&g_four_faces.phase!=FF_FACE)return four_faces_phase_name(g_four_faces.phase);
  if(g_box_center.phase!=BC_IDLE)return box_center_phase_name(g_box_center.phase);
  switch(g_align.phase){
  case ALIGN_HOME:case ALIGN_SEEK:return "FRONT_HOME";
@@ -458,14 +481,19 @@ static void sonar_telemetry(uint32_t now,const MotorView *v){
  static uint32_t previous;
  if(!us_seq||us_seq==previous)return;
  previous=us_seq;const char *wait="IDLE";BoxCenter *b=&g_box_center;
- if(b->phase==BC_BACK_SEARCH||b->phase==BC_EDGE_MOVE||b->phase==BC_TRANSIT)
+ unsigned hits=b->confirm_hits;uint16_t reference=b->reference_mm;
+ if(g_four_faces.phase==FF_EXIT){wait=g_four_faces.exit_inside?"OUT30":"IN";hits=g_four_faces.hits;}
+ else if(g_four_faces.phase==FF_ACQUIRE){wait="NEW_FACE";hits=g_four_faces.hits;reference=0;}
+ else if(g_four_faces.phase==FF_EXIT_BRAKE)wait="BRAKE";
+ else if(g_four_faces.phase==FF_ACQUIRE_BRAKE)wait="BRAKE";
+ else if(b->phase==BC_BACK_SEARCH||b->phase==BC_EDGE_MOVE||b->phase==BC_TRANSIT)
   wait=!b->reference_mm?"REF":(b->phase==BC_TRANSIT&&!b->transit_inside)?"IN":b->expect_outside?"OUT":"IN";
  else if(b->phase==BC_BRAKE)wait="BRAKE";
  else if(g_align.phase==ALIGN_SCAN)wait="SCAN";
  char line[448];int n=snprintf(line,sizeof(line),
- "U,fw=BOX_OLDLCD_V18,seq=%lu,ms=%lu,trig=%lu,dt=%lu,echoUs=%u,mm=%u,ok=%u,why=%s,wait=%s,hits=%u,ref=%u,pos=%ld,brL=%u,brR=%u,pL=%ld,pR=%ld,uL=%ld,uR=%ld,kpL=%ld,kpR=%ld,kdL=%ld,kdR=%ld,boostL=%u,boostR=%u,lowL=%lu,lowR=%lu,drop=%lu\r\n",
+ "U,fw=BOX_EXIT30_V22,seq=%lu,ms=%lu,trig=%lu,dt=%lu,echoUs=%u,mm=%u,ok=%u,why=%s,wait=%s,hits=%u,ref=%u,pos=%ld,brL=%u,brR=%u,pL=%ld,pR=%ld,uL=%ld,uR=%ld,kpL=%ld,kpR=%ld,kdL=%ld,kdR=%ld,boostL=%u,boostR=%u,lowL=%lu,lowR=%lu,drop=%lu\r\n",
  (unsigned long)us_seq,(unsigned long)now,(unsigned long)us_result_trigger_ms,(unsigned long)us_result_period_ms,
- us_pulse_us,us_mm,us_valid,us_reason,wait,b->confirm_hits,b->reference_mm,(long)g_box_position,
+ us_pulse_us,us_mm,us_valid,us_reason,wait,hits,reference,(long)((g_four_faces.phase==FF_EXIT||g_four_faces.phase==FF_EXIT_BRAKE)?g_corner_progress:g_box_position),
  v->status.brake[0],v->status.brake[1],lroundf(v->status.speed[0]),lroundf(v->status.speed[1]),
  lroundf(v->status.duty[0]*1000),lroundf(v->status.duty[1]*1000),
  lroundf(v->status.effective_kp[0]*1000000.f),lroundf(v->status.effective_kp[1]*1000000.f),
@@ -479,7 +507,7 @@ static void center_telemetry(uint32_t now){
  if(now-last<500U&&previous==b->phase)return;
  last=now;previous=b->phase;char line[640];
  int n=snprintf(line,sizeof(line),
- "C,fw=BOX_OLDLCD_V18,id=%lu,ms=%lu,phase=%s,pos=%ld,refMm=%u,refHits=%u,edge=%u,visitsRear=%u,visitsFront=%u,armed=%u,rearMin=%ld,rearMax=%ld,frontMin=%ld,frontMax=%ld,target=%ld,dir=%d,laser=%u,buzzer=%u,error=%s,fine10=%ld,fineRms10=%ld,fineN=%u,fineDone=%u,fineWarn=%u,fineL10=%ld,fineR10=%ld,r0=%ld,r1=%ld,r2=%ld,r3=%ld,f0=%ld,f1=%ld,f2=%ld,f3=%ld\r\n",
+ "C,fw=BOX_EXIT30_V22,id=%lu,ms=%lu,phase=%s,pos=%ld,refMm=%u,refHits=%u,edge=%u,visitsRear=%u,visitsFront=%u,armed=%u,rearMin=%ld,rearMax=%ld,frontMin=%ld,frontMax=%ld,target=%ld,dir=%d,laser=%u,buzzer=%u,error=%s,fine10=%ld,fineRms10=%ld,fineN=%u,fineDone=%u,fineWarn=%u,fineL10=%ld,fineR10=%ld,r0=%ld,r1=%ld,r2=%ld,r3=%ld,f0=%ld,f1=%ld,f2=%ld,f3=%ld\r\n",
  (unsigned long)id++,(unsigned long)now,box_center_phase_name(b->phase),(long)b->position,b->reference_mm,b->reference_hits,b->edge,
  b->visits[0],b->visits[1],b->transit_inside,(long)b->minimum[0],(long)b->maximum[0],(long)b->minimum[1],(long)b->maximum[1],(long)b->target,b->direction,b->laser,b->buzzer,b->error,x10(b->fine_degrees),x10(b->fine_rms),b->fit_n,b->fine_done,b->fine_warning,x10(b->fine_wheel[0]),x10(b->fine_wheel[1]),
  (long)b->crossings[0][0],(long)b->crossings[0][1],(long)b->crossings[0][2],(long)b->crossings[0][3],
@@ -487,20 +515,20 @@ static void center_telemetry(uint32_t now){
  if(n>0&&(size_t)n<sizeof(line))bt_queue(line,(size_t)n);else ++bt_drop;
 }
 static void telemetry(uint32_t now,const MotorView *v){
- center_telemetry(now);
+ four_faces_telemetry(now);center_telemetry(now);
  static unsigned sent_points;
  /* Log every accepted face sample, not only the 200ms status snapshot. */
  while(sent_points<g_align.line_n){
   unsigned i=sent_points++;char sample[128];
-  int n=snprintf(sample,sizeof(sample),"L,fw=BOX_OLDLCD_V18,i=%u,x10=%ld,range10=%ld\r\n",i,x10(g_align.line_x[i]),x10(g_align.line_y[i]));
+  int n=snprintf(sample,sizeof(sample),"L,fw=BOX_EXIT30_V22,i=%u,x10=%ld,range10=%ld\r\n",i,x10(g_align.line_x[i]),x10(g_align.line_y[i]));
   if(n>0&&(size_t)n<sizeof(sample))bt_queue(sample,(size_t)n);else ++bt_drop;
  }
  static uint32_t last,seq;static AlignPhase previous=(AlignPhase)255;char line[1024];
  if(now-last<200&&g_align.phase==previous)return;
  last=now;previous=g_align.phase;
  int n=snprintf(line,sizeof(line),
- "M,fw=BOX_OLDLCD_V18,seq=%lu,ms=%lu,phase=%s,action=%s,error=%s,motorError=%s,scan=%u,servo=%u,range=%u,valid=%u,side=%s,normal10=%ld,target10=%ld,actual10=%ld,wheelLdeg10=%ld,wheelRdeg10=%ld,edgeL=%u,edgeR=%u,edgeLmm=%u,edgeRmm=%u,edgeNormal10=%ld,centreY10=%ld,moveWheel=%u,dir=%d,refL10=%ld,refR10=%ld,pulseL=%ld,pulseR=%ld,pwmL1000=%ld,pwmR1000=%ld,countL=%lu,countR=%lu,goalL=%ld,goalR=%ld,fitSupport=%u,fitTotal=%u,fitRms10=%ld,entry=%lu,entryInferred=%u,exit=%lu,lineN=%u,lineSupport=%u,lineRms10=%ld,fine10=%ld,fineNormal10=%ld,lineWarn=%u,front=%u,planMm=%u,stopMm=%u,stopHits=%u,remain=%ld,approachPlan=%u,echoLost=%u,txdrop=%lu,irqUs=%lu\r\n",
- (unsigned long)seq++,(unsigned long)now,g_box_center.phase==BC_IDLE?align_phase_name(g_align.phase):box_center_phase_name(g_box_center.phase),stage_action(),g_box_center.phase==BC_IDLE?align_error_name(g_align.error):g_box_center.error,dual_motor_error_name(v->status.error),
+ "M,fw=BOX_EXIT30_V22,seq=%lu,ms=%lu,phase=%s,action=%s,error=%s,motorError=%s,scan=%u,servo=%u,range=%u,valid=%u,side=%s,normal10=%ld,target10=%ld,actual10=%ld,wheelLdeg10=%ld,wheelRdeg10=%ld,edgeL=%u,edgeR=%u,edgeLmm=%u,edgeRmm=%u,edgeNormal10=%ld,centreY10=%ld,moveWheel=%u,dir=%d,refL10=%ld,refR10=%ld,pulseL=%ld,pulseR=%ld,pwmL1000=%ld,pwmR1000=%ld,countL=%lu,countR=%lu,goalL=%ld,goalR=%ld,fitSupport=%u,fitTotal=%u,fitRms10=%ld,entry=%lu,entryInferred=%u,exit=%lu,lineN=%u,lineSupport=%u,lineRms10=%ld,fine10=%ld,fineNormal10=%ld,lineWarn=%u,front=%u,planMm=%u,stopMm=%u,stopHits=%u,remain=%ld,approachPlan=%u,echoLost=%u,txdrop=%lu,irqUs=%lu\r\n",
+ (unsigned long)seq++,(unsigned long)now,task_phase(),stage_action(),task_error(),dual_motor_error_name(v->status.error),
  g_align.index,g_align.servo_us,us_mm,us_valid,g_align.side_left?"LEFT":"RIGHT",x10(g_align.normal_deg),x10(g_align.target_deg),x10(g_align.actual_deg),x10(g_align.wheel_degrees[0]),x10(g_align.wheel_degrees[1]),
  g_align.fit_first,g_align.fit_last,g_align.edge_left_mm,g_align.edge_right_mm,x10(g_align.edge_normal_deg),x10(g_align.centre_y_mm),g_align.moving_wheel,g_align.motor_direction,
  x10(v->status.target[0]),x10(v->status.target[1]),lroundf(v->status.speed[0]),lroundf(v->status.speed[1]),lroundf(v->status.duty[0]*1000),lroundf(v->status.duty[1]*1000),
@@ -510,7 +538,7 @@ static void telemetry(uint32_t now,const MotorView *v){
 /* Dump the actual settled scan averages BEFORE fitting; live range telemetry
    may be from a different servo position. One bounded frame, no RX commands. */
 static void scan_telemetry(void){
- char line[384];int n=snprintf(line,sizeof(line),"S,fw=BOX_OLDLCD_V18");
+ char line[384];int n=snprintf(line,sizeof(line),"S,fw=BOX_EXIT30_V22");
  for(unsigned i=0;i<ALIGN_POINTS&&n>0&&(size_t)n<sizeof(line);++i){
   int k=snprintf(line+n,sizeof(line)-(size_t)n,",p%u=%u",i,g_align.range[i]);
   if(k<0||(size_t)k>=sizeof(line)-(size_t)n){++bt_drop;return;}n+=k;
@@ -541,15 +569,26 @@ static void screen_service(uint32_t now,const MotorView *v){
    if(g_box_center.phase>=BC_FINE_RIGHT)angle_text(lines[3],"FINE",g_box_center.fine_degrees);
    snprintf(lines[5],19,"FRONT %u/3",g_box_center.visits[1]);
   }
+  if(g_four_faces.phase!=FF_IDLE){
+   if(g_four_faces.phase!=FF_FACE){
+    if(g_four_faces.phase==FF_EXIT||g_four_faces.phase==FF_EXIT_BRAKE||g_four_faces.phase==FF_CORNER_WAIT)
+     snprintf(lines[3],19,"OUT %u/%u",g_four_faces.exit_samples,FOUR_EXIT_SAMPLES);
+    else angle_text(lines[3],"TURN",g_four_faces.side_left?90.f:-90.f);
+    angle_text(lines[4],"L DEG",g_four_faces.corner_wheel_degrees[0]);
+    angle_text(lines[5],"R DEG",g_four_faces.corner_wheel_degrees[1]);
+   }
+  }
   snprintf(lines[6],19,"ERR");const char *reason=align_error_name(g_align.error);
   if(v->status.error!=DM_OK)reason=dual_motor_error_name(v->status.error);
   else if(g_align.phase==ALIGN_CANCELLED)reason="CANCELLED";
   if(g_box_center.phase!=BC_IDLE&&g_align.phase!=ALIGN_CANCELLED&&v->status.error==DM_OK)reason=g_box_center.phase==BC_FAILED?g_box_center.error:box_center_phase_name(g_box_center.phase);
+  if(g_four_faces.phase!=FF_IDLE){snprintf(lines[6],19,"SHOT %u/4 ERR",g_laser_shots);
+   reason=(g_four_faces.phase==FF_FAILED||g_four_faces.phase==FF_CANCELLED)?g_four_faces.error:task_phase();}
   snprintf(lines[7],19,"%s",reason);
   for(unsigned i=0;i<8;++i){size_t n=strlen(lines[i]);while(n<18)lines[i][n++]=' ';lines[i][18]=0;}
  }
  char ch[2]={lines[row][col],0};
- uint16_t color=(g_align.error||v->status.error||g_align.phase==ALIGN_CANCELLED||g_box_center.phase==BC_FAILED)?LCD_RED:LCD_WHITE;
+ uint16_t color=(g_align.error||v->status.error||g_align.phase==ALIGN_CANCELLED||g_box_center.phase==BC_FAILED||g_four_faces.phase==FF_FAILED)?LCD_RED:LCD_WHITE;
  lcd_text((uint16_t)(4+col*6),(uint16_t)(4+row*18),ch,color);
  if(++col==18){col=0;if(++row==8)row=0;}
 }
@@ -608,15 +647,27 @@ int main(void){
    if((g_align.phase==ALIGN_FAILED||g_align.phase==ALIGN_CANCELLED)&&g_car.motor.running){
     uint32_t saved=__get_PRIMASK();__disable_irq();car_motion_stop(&g_car);__set_PRIMASK(saved);
    }
-   if(g_align.phase==ALIGN_DONE&&g_box_center.phase==BC_IDLE&&!cancel_requested){
-    box_center_start(&g_box_center,now,us_seq);g_box_center.side_left=g_align.side_left;
+   if(g_align.phase==ALIGN_DONE&&g_four_faces.phase==FF_IDLE&&!cancel_requested){
+    four_faces_start(&g_four_faces,&g_box_center,g_align.side_left,now,us_seq);
    }
    if(g_box_center.phase==BC_FINE_RIGHT)g_box_center.fine_wheel[1]=view.wheel_degrees[1];
    if(g_box_center.phase==BC_FINE_LEFT)g_box_center.fine_wheel[0]=view.wheel_degrees[0];
-   box_center_step(&g_box_center,now,us_seq,us_result_trigger_ms,us_echo_ms,us_valid,us_mm,
+   if(g_four_faces.phase==FF_INNER)g_four_faces.corner_wheel_degrees[g_four_faces.inner_wheel]=view.wheel_degrees[g_four_faces.inner_wheel];
+   if(g_four_faces.phase==FF_OUTER)g_four_faces.corner_wheel_degrees[g_four_faces.outer_wheel]=view.wheel_degrees[g_four_faces.outer_wheel];
+   four_faces_step(&g_four_faces,&g_box_center,now,us_seq,us_result_trigger_ms,us_echo_ms,us_valid,us_mm,
     view.total,view.status.running,view.done,view.status.phase==DM_FAULT,cancel_requested);
+   FourFacesCommand corner_command=g_four_faces.command;
+   if(corner_command!=FF_CMD_NONE&&!cancel_requested){
+    uint32_t saved=__get_PRIMASK();__disable_irq();bool ok=false;
+    if(corner_command==FF_CMD_FORWARD)ok=g_four_faces.phase==FF_EXIT?car_motion_start_front_traverse(&g_car):car_motion_start_edge_scan(&g_car,1);
+    else if(corner_command==FF_CMD_STOP)ok=car_motion_finish_straight(&g_car);
+    else if(corner_command==FF_CMD_INNER)ok=car_motion_start_pivot(&g_car,g_four_faces.inner_wheel,-1,FOUR_CORNER_HALF_DEG);
+    else if(corner_command==FF_CMD_OUTER)ok=car_motion_start_pivot(&g_car,g_four_faces.outer_wheel,1,FOUR_CORNER_HALF_DEG);
+    __set_PRIMASK(saved);g_four_faces.command=FF_CMD_NONE;
+    if(!ok)four_faces_fail(&g_four_faces,&g_box_center,"MOTION_START");
+   }
    BoxCenterCommand command=g_box_center.command;
-   if(command!=BC_CMD_NONE&&!cancel_requested){
+   if(g_four_faces.phase==FF_FACE&&command!=BC_CMD_NONE&&!cancel_requested){
     uint32_t saved=__get_PRIMASK();__disable_irq();bool ok=false;
     if(command==BC_CMD_FORWARD&&g_box_center.phase==BC_TRANSIT)
      ok=car_motion_start_front_traverse(&g_car);
@@ -627,9 +678,9 @@ int main(void){
     else if(command==BC_CMD_FINE_RIGHT)ok=car_motion_start_pivot(&g_car,1,g_box_center.fine_degrees>0?1:-1,fabsf(g_box_center.fine_degrees)*.5f);
     else if(command==BC_CMD_FINE_LEFT)ok=car_motion_start_pivot(&g_car,0,g_box_center.fine_degrees>0?-1:1,fabsf(g_box_center.fine_degrees)*.5f);
     __set_PRIMASK(saved);g_box_center.command=BC_CMD_NONE;
-    if(!ok)box_center_fail(&g_box_center,"MOTION_START");
+    if(!ok){box_center_fail(&g_box_center,"MOTION_START");four_faces_fail(&g_four_faces,&g_box_center,"MOTION_START");}
    }
-   if(g_box_center.phase==BC_FAILED&&g_car.motor.running){
+   if((g_box_center.phase==BC_FAILED||g_four_faces.phase==FF_FAILED)&&g_car.motor.running){
     uint32_t saved=__get_PRIMASK();__disable_irq();car_motion_stop(&g_car);__set_PRIMASK(saved);
    }
    bool firing=g_box_center.laser&&!cancel_requested&&
@@ -638,7 +689,7 @@ int main(void){
    HAL_GPIO_WritePin(GPIOC,GPIO_PIN_9,GPIO_PIN_RESET); /* Buzzer disabled. */
    MotorView trace_view=motor_snapshot();sonar_telemetry(now,&trace_view);
    TIM2->CCR1=now-g_align.started>=10?g_align.servo_us:0;
-   HAL_GPIO_WritePin(GPIOD,GPIO_PIN_8,(g_align.phase==ALIGN_TURN||g_align.phase==ALIGN_TURN_LEFT||g_align.phase==ALIGN_APPROACH||g_align.phase==ALIGN_APPROACH_STOP||g_box_center.phase==BC_BACK_SEARCH||g_box_center.phase==BC_EDGE_MOVE||g_box_center.phase==BC_TRANSIT||g_box_center.phase==BC_CENTER_MOVE||g_box_center.phase==BC_FINE_RIGHT||g_box_center.phase==BC_FINE_LEFT)?GPIO_PIN_RESET:GPIO_PIN_SET);
+   HAL_GPIO_WritePin(GPIOD,GPIO_PIN_8,(g_align.phase==ALIGN_TURN||g_align.phase==ALIGN_TURN_LEFT||g_align.phase==ALIGN_APPROACH||g_align.phase==ALIGN_APPROACH_STOP||g_box_center.phase==BC_BACK_SEARCH||g_box_center.phase==BC_EDGE_MOVE||g_box_center.phase==BC_TRANSIT||g_box_center.phase==BC_CENTER_MOVE||g_box_center.phase==BC_FINE_RIGHT||g_box_center.phase==BC_FINE_LEFT||four_faces_moving(&g_four_faces))?GPIO_PIN_RESET:GPIO_PIN_SET);
   }
   view=motor_snapshot(); /* Starts reset segment counts before status/rendering. */
   telemetry(now,&view);screen_service(now,&view);bt_pump();IWDG->KR=0xAAAA;

@@ -1,0 +1,19 @@
+{
+  "fw": "BOX_FOUR_V19",
+  "elf": "F:\\STM32CUBEIDE\\find_box_and_shoot_cc\\Debug\\find_box_and_shoot_cc.elf",
+  "sha256": "dd50c931a5ed2fbfe06ab1d2162506de96544a17bde76ceff8f0181c8c2fa4ff",
+  "flashed": true,
+  "ide_project": "find_box_and_shoot_cc",
+  "launch": "find_box_and_shoot_cc Debug.launch",
+  "locked_files": {
+    "Core/Src/car_motion.c": "23ccf62fa38fb4d1a701b2dded29c7ba145c02bb68ed6217b6b646e07acf5e57",
+    "Core/Inc/car_motion.h": "2c1f767233cb51602ed5aecdf34f0b4783eb74ff96893c8ef9071a97b6bd80ee",
+    "Core/Src/box_center.c": "699b1dc6fa3a323d7cdbfc6f97266600281583411e4e1ead6a53b299a1c2b6ba",
+    "Core/Inc/box_center.h": "a1ce21e9645b77fd3cb40a6a9d525397186f8f38ef0c55e1e3565109303b760d",
+    "Core/Src/initial_align.c": "fbbdea424216cd75d6bad3af302bbed877a4421d9d71e8115ea8b0eddd4e9c06",
+    "Core/Inc/initial_align.h": "e24bbd5dac3ddc044fd43896e362678202b585bb3b14c3405c6ddbfaca81bdbf",
+    "portable/dual_motor/dual_motor.c": "b5bd3fd87ae4582fbaedaadd4d3a799ca514a947e7527203e3b551ca36d62311",
+    "portable/dual_motor/dual_motor.h": "48e9a2339ef87fd9c368c4f949e518a442e1af6cea96d0542b7181d4ca3982dc"
+  },
+  "flash_log": "F:\\STM32CUBEIDE\\find_box_and_shoot_cc\\work\\flash_four_faces_20261127_141731.log"
+}
