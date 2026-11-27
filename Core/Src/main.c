@@ -2,6 +2,7 @@
 #include "lcd_font.h"
 #include "initial_align.h"
 #include "car_motion.h"
+#include "box_center.h"
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -13,15 +14,23 @@
 static TIM_HandleTypeDef motor_pwm,enc_left,enc_right,us_trig_timer,us_echo_timer;
 InitialAlign g_align;
 CarMotion g_car;
+BoxCenter g_box_center;
 static volatile uint16_t a_edge_counter[2];
 static volatile bool a_capture_fault,cancel_requested;
 static volatile uint32_t irq_max_cycles;
 static uint32_t key_low_ms,last_step,us_trigger_ms,us_echo_ms,us_seq;
 static uint16_t us_mm;
 static bool us_valid,us_pending;
+/* Completed transaction is immutable until the next result. A new trigger
+   must not invalidate or relabel the preceding result before the task reads it. */
+static uint32_t us_result_trigger_ms,us_period_ms,us_result_period_ms;
+static uint16_t us_pulse_us;
+static const char *us_reason="INIT";
+
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 void car_emergency_off(void){
+ if(RCC->AHB2ENR&RCC_AHB2ENR_GPIOCEN)GPIOC->BSRR=(uint32_t)(GPIO_PIN_8|GPIO_PIN_9)<<16;
  if(RCC->AHB2ENR&RCC_AHB2ENR_GPIODEN)GPIOD->BSRR=(uint32_t)GPIO_PIN_2<<16;
  if(RCC->APB2ENR&RCC_APB2ENR_TIM1EN)TIM1->CCR1=TIM1->CCR2=TIM1->CCR3=TIM1->CCR4=0;
 }
@@ -169,12 +178,13 @@ void TIM6_DAC_IRQHandler(void){
  if(a_capture_fault)car_motion_trip(&g_car,DM_ENCODER);
  output_apply();uint32_t elapsed=DWT->CYCCNT-begin;if(elapsed>irq_max_cycles)irq_max_cycles=elapsed;
 }
-typedef struct {DualMotorStatus status;bool done;float actual_deg,wheel_degrees[2];uint32_t irq_us;} MotorView;
+typedef struct {DualMotorStatus status;int32_t total[2];bool done;float actual_deg,wheel_degrees[2];uint32_t irq_us;} MotorView;
 static MotorView motor_snapshot(void){
  MotorView v;uint32_t saved=__get_PRIMASK();__disable_irq();
  car_motion_get_status(&g_car,&v.status);v.done=car_motion_done(&g_car);
  v.actual_deg=car_motion_estimated_angle(&g_car);
  for(unsigned w=0;w<2;++w)v.wheel_degrees[w]=car_motion_wheel_angle(&g_car,w);
+ for(unsigned w=0;w<2;++w)v.total[w]=g_car.motor.wheel[w].total;
  v.irq_us=irq_max_cycles/16U;
  __set_PRIMASK(saved);return v;
 }
@@ -243,31 +253,39 @@ static void ultrasound(uint32_t now) {
     if(TIM8->SR&TIM_SR_CC2IF) {
         uint32_t sr=TIM8->SR;uint16_t pulse=(uint16_t)TIM8->CCR2;
         TIM8->SR=~(TIM_SR_CC2IF|TIM_SR_CC2OF);
-        if(us_pending && now-us_trigger_ms<=25U && !(sr&TIM_SR_CC2OF)) {
+        if(us_pending && now-us_trigger_ms<=25U) {
             ++us_seq;us_echo_ms=now;us_pending=false;
-            us_valid=pulse>=234U && pulse<=23324U; /* 40..4000 mm; retain far echoes for scan exits. */
+            us_result_trigger_ms=us_trigger_ms;us_result_period_ms=us_period_ms;
+            us_pulse_us=pulse;
+            us_valid=!(sr&TIM_SR_CC2OF)&&pulse>=234U&&pulse<=23324U;
             us_mm=(uint16_t)(((uint32_t)pulse*343U+1000U)/2000U);
+            us_reason=(sr&TIM_SR_CC2OF)?"OVERCAP":pulse<234U?"SHORT":pulse>23324U?"LONG":"OK";
         }
     }
-    if(us_pending && now-us_trigger_ms>25U) {us_pending=false;us_valid=false;us_mm=0;++us_seq;us_echo_ms=now;}
+    if(us_pending && now-us_trigger_ms>25U) {
+        us_pending=false;us_valid=false;us_mm=0;us_pulse_us=0;++us_seq;us_echo_ms=now;
+        us_result_trigger_ms=us_trigger_ms;us_result_period_ms=us_period_ms;us_reason="TIMEOUT";
+    }
     bool scan=g_align.phase==ALIGN_SCAN;
     bool due=scan?(g_align.scan_trigger_count<4U &&
         now-g_align.since>=60U*(1U+g_align.scan_trigger_count)):true;
     if(due && now-us_trigger_ms>=60U) {
         if(scan)++g_align.scan_trigger_count;
-        us_trigger_ms=now;us_pending=true;us_valid=false;
+        us_period_ms=now-us_trigger_ms;us_trigger_ms=now;us_pending=true;
         TIM8->SR=~(TIM_SR_CC2IF|TIM_SR_CC2OF);
         TIM17->CNT=0;SET_BIT(TIM17->CR1,TIM_CR1_CEN);
     }
 }
+
 #define LCD_CS_LOW()    (GPIOD->BSRR = (uint32_t)GPIO_PIN_11 << 16U)
 #define LCD_CS_HIGH()   (GPIOD->BSRR = GPIO_PIN_11)
 #define LCD_DC_CMD()    (GPIOD->BSRR = (uint32_t)GPIO_PIN_12 << 16U)
 #define LCD_DC_DATA()   (GPIOD->BSRR = GPIO_PIN_12)
-#define LCD_W 240U
-#define LCD_H 280U
-#define LCD_Y_OFFSET 20U /* 240x280 glass in 240x320 ST7789 GRAM */
-#define LCD_BG 0x0821U
+#define LCD_W 128U
+#define LCD_H 160U
+#define LCD_X_OFFSET 2U
+#define LCD_Y_OFFSET 1U /* Original ST7735S panel GRAM offsets. */
+#define LCD_BG 0x0000U
 #define LCD_WHITE 0xFFFFU
 #define LCD_GREEN 0x07E0U
 #define LCD_YELLOW 0xFFE0U
@@ -301,7 +319,7 @@ static void lcd_data(uint8_t data)
 
 static void lcd_window(uint16_t x, uint16_t y, uint16_t w, uint16_t h)
 {
-  uint16_t x0 = x, x1 = x0 + w - 1U;
+  uint16_t x0 = x + LCD_X_OFFSET, x1 = x0 + w - 1U;
   uint16_t y0 = (uint16_t)y + LCD_Y_OFFSET, y1 = y0 + h - 1U;
   lcd_cmd(0x2AU); LCD_CS_LOW();
   lcd_spi_byte((uint8_t)(x0 >> 8)); lcd_spi_byte((uint8_t)x0);
@@ -326,42 +344,33 @@ static void lcd_fill(uint16_t color)
   lcd_spi_idle(); LCD_CS_HIGH();
 }
 
-static void lcd_text2(uint16_t x, uint16_t y, const char *text, uint16_t color)
-{
-  for (const char *s = text; *s && x <= LCD_W - 12U; ++s, x += 12U)
-  {
-    uint8_t glyph = (*s >= ' ' && *s <= '~') ? (uint8_t)(*s - ' ') : 0U;
-    lcd_window(x, y, 12U, 24U);
-    LCD_CS_LOW();
-    for (uint8_t row = 0; row < 12U; ++row)
-    {
-      uint8_t bits = k_font_6x12[glyph][row];
-      for (uint8_t repeat_y = 0; repeat_y < 2U; ++repeat_y)
-        for (uint8_t col = 0; col < 6U; ++col)
-        {
-          uint16_t pixel = (bits & (1U << col)) ? color : LCD_BG;
-          for (uint8_t repeat_x = 0; repeat_x < 2U; ++repeat_x)
-          {
-            lcd_spi_byte((uint8_t)(pixel >> 8));
-            lcd_spi_byte((uint8_t)pixel);
-          }
-        }
-    }
-    lcd_spi_idle(); LCD_CS_HIGH();
+/* Original 6x12 font, eight rows fit the old128x160 display. */
+static void lcd_text(uint16_t x,uint16_t y,const char *text,uint16_t color){
+ for(const char *s=text;*s&&x+6U<=LCD_W&&y+12U<=LCD_H;++s,x+=6U){
+  uint8_t glyph=(*s>=' '&&*s<='~')?(uint8_t)(*s-' '):0;
+  lcd_window(x,y,6,12);LCD_CS_LOW();
+  for(uint8_t row=0;row<12;++row){uint8_t bits=k_font_6x12[glyph][row];
+   for(uint8_t col=0;col<6;++col){
+    uint16_t pixel=(bits&(1U<<col))?color:LCD_BG;
+    lcd_spi_byte((uint8_t)(pixel>>8));lcd_spi_byte((uint8_t)pixel);
+   }
   }
+  lcd_spi_idle();LCD_CS_HIGH();
+ }
 }
-
 static void Lcd_Init(void)
 {
   GPIO_InitTypeDef pin = {0};
+  static const uint8_t gamma_pos[16] =
+    {0x04U,0x22U,0x07U,0x0AU,0x2EU,0x30U,0x25U,0x2AU,0x28U,0x26U,0x2EU,0x3AU,0x00U,0x01U,0x03U,0x13U};
+  static const uint8_t gamma_neg[16] =
+    {0x04U,0x16U,0x06U,0x0DU,0x2DU,0x26U,0x23U,0x27U,0x27U,0x25U,0x2DU,0x3BU,0x00U,0x01U,0x04U,0x13U};
   __HAL_RCC_GPIOB_CLK_ENABLE();
   __HAL_RCC_GPIOD_CLK_ENABLE();
   __HAL_RCC_SPI1_CLK_ENABLE();
-  /* Core-board FPC: PB3=SCL PB5=SDA PD11=CS PD12=DC PD13=BL.
-   * Module RESET has its own RC circuit and is not connected to PD10. */
-  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_11 | GPIO_PIN_12, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_10 | GPIO_PIN_11 | GPIO_PIN_12, GPIO_PIN_SET);
   HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13, GPIO_PIN_RESET);
-  pin.Pin = GPIO_PIN_11 | GPIO_PIN_12 | GPIO_PIN_13;
+  pin.Pin = GPIO_PIN_10 | GPIO_PIN_11 | GPIO_PIN_12 | GPIO_PIN_13;
   pin.Mode = GPIO_MODE_OUTPUT_PP;
   pin.Pull = GPIO_NOPULL;
   pin.Speed = GPIO_SPEED_FREQ_HIGH;
@@ -373,31 +382,34 @@ static void Lcd_Init(void)
   HAL_GPIO_Init(GPIOB, &pin);
   SPI1->CR1 = 0U;
   SPI1->CR2 = (7U << SPI_CR2_DS_Pos) | SPI_CR2_FRXTH;
-  /* 16 MHz HSI / 2 = 8 MHz SPI, within the module's serial timing. */
-  SPI1->CR1 = SPI_CR1_BIDIMODE | SPI_CR1_BIDIOE |
-              SPI_CR1_SSM | SPI_CR1_SSI | SPI_CR1_MSTR;
+  SPI1->CR1 = SPI_CR1_BIDIMODE | SPI_CR1_BIDIOE | SPI_CR1_SSM | SPI_CR1_SSI | SPI_CR1_BR_0 | SPI_CR1_MSTR;
   SET_BIT(SPI1->CR1, SPI_CR1_SPE);
-  HAL_Delay(150U); /* wait for the module's RC reset and power rails */
-  lcd_cmd(0x01U); HAL_Delay(150U); /* software reset */
-  lcd_cmd(0x11U); HAL_Delay(120U); /* sleep out */
-  lcd_cmd(0x36U); lcd_data(0x08U); /* portrait, BGR order */
-  lcd_cmd(0x3AU); lcd_data(0x55U); /* RGB565, 16-bit per pixel */
-  lcd_cmd(0xB2U); lcd_data(0x0CU); lcd_data(0x0CU);
-  lcd_data(0x00U); lcd_data(0x33U); lcd_data(0x33U);
-  lcd_cmd(0xB7U); lcd_data(0x35U);
-  lcd_cmd(0xBBU); lcd_data(0x19U);
-  lcd_cmd(0xC0U); lcd_data(0x2CU);
-  lcd_cmd(0xC2U); lcd_data(0x01U);
-  lcd_cmd(0xC3U); lcd_data(0x12U);
-  lcd_cmd(0xC4U); lcd_data(0x20U);
-  lcd_cmd(0xC6U); lcd_data(0x0FU);
-  lcd_cmd(0xD0U); lcd_data(0xA4U); lcd_data(0xA1U);
-  lcd_cmd(0x21U); /* inversion on for this IPS panel */
-  lcd_cmd(0x13U); /* normal display mode */
-  lcd_cmd(0x29U); HAL_Delay(20U); /* display on */
+  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_10, GPIO_PIN_RESET);
+  HAL_Delay(60U);
+  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_10, GPIO_PIN_SET);
+  HAL_Delay(120U);
+  lcd_cmd(0x11U); HAL_Delay(120U);
+  lcd_cmd(0xB1U); lcd_data(0x05U); lcd_data(0x3CU); lcd_data(0x3CU);
+  lcd_cmd(0xB2U); lcd_data(0x05U); lcd_data(0x3CU); lcd_data(0x3CU);
+  lcd_cmd(0xB3U); lcd_data(0x05U); lcd_data(0x3CU); lcd_data(0x3CU);
+  lcd_data(0x05U); lcd_data(0x3CU); lcd_data(0x3CU);
+  lcd_cmd(0xB4U); lcd_data(0x03U);
+  lcd_cmd(0xC0U); lcd_data(0x28U); lcd_data(0x08U); lcd_data(0x04U);
+  lcd_cmd(0xC1U); lcd_data(0xC0U);
+  lcd_cmd(0xC2U); lcd_data(0x0DU); lcd_data(0x00U);
+  lcd_cmd(0xC3U); lcd_data(0x8DU); lcd_data(0x2AU);
+  lcd_cmd(0xC4U); lcd_data(0x8DU); lcd_data(0xEEU);
+  lcd_cmd(0xC5U); lcd_data(0x1AU);
+  lcd_cmd(0x36U); lcd_data(0xC0U); /* Rotate180 relative to V17, keeping pixel format/colours unchanged. */
+  lcd_cmd(0x3AU); lcd_data(0x05U); /* ST7735 RGB565. */
+  lcd_cmd(0x20U); /* Explicit inversion OFF: black background, white text. */
+  lcd_cmd(0x13U); /* Normal display mode. */
+  lcd_cmd(0xE0U); for (uint8_t i = 0U; i < 16U; ++i) lcd_data(gamma_pos[i]);
+  lcd_cmd(0xE1U); for (uint8_t i = 0U; i < 16U; ++i) lcd_data(gamma_neg[i]);
+  lcd_cmd(0x29U);
   HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13, GPIO_PIN_SET);
   lcd_fill(LCD_BG);
-  /* Large, minimal status is drawn by screen_service. */
+  /* Current motion/task strings are rendered incrementally below. */
 }
 
 
@@ -431,30 +443,64 @@ static void bt_pump(void){
 }
 static long x10(float v){return isfinite(v)?lroundf(v*10):0;}
 static const char *stage_action(void){
+ if(g_box_center.phase!=BC_IDLE)return box_center_phase_name(g_box_center.phase);
  switch(g_align.phase){
  case ALIGN_HOME:case ALIGN_SEEK:return "FRONT_HOME";
  case ALIGN_APPROACH:case ALIGN_APPROACH_STOP:return "APPROACH100";
  case ALIGN_PRE_SCAN_WAIT:return "STOP_BEFORE_SCAN";
- case ALIGN_TURN:return "RIGHT_HALF_TURN";
+ case ALIGN_TURN:return g_align.moving_wheel?"RIGHT_HALF_TURN":"LEFT_HALF_TURN";
  case ALIGN_TURN_HALF_WAIT:return "TURN_STOP_WAIT";
- case ALIGN_TURN_LEFT:return "LEFT_HALF_TURN";
+ case ALIGN_TURN_LEFT:return g_align.moving_wheel?"RIGHT_HALF_TURN":"LEFT_HALF_TURN";
  default:return "SCAN_AND_ALIGN";
  }
 }
+static void sonar_telemetry(uint32_t now,const MotorView *v){
+ static uint32_t previous;
+ if(!us_seq||us_seq==previous)return;
+ previous=us_seq;const char *wait="IDLE";BoxCenter *b=&g_box_center;
+ if(b->phase==BC_BACK_SEARCH||b->phase==BC_EDGE_MOVE||b->phase==BC_TRANSIT)
+  wait=!b->reference_mm?"REF":(b->phase==BC_TRANSIT&&!b->transit_inside)?"IN":b->expect_outside?"OUT":"IN";
+ else if(b->phase==BC_BRAKE)wait="BRAKE";
+ else if(g_align.phase==ALIGN_SCAN)wait="SCAN";
+ char line[448];int n=snprintf(line,sizeof(line),
+ "U,fw=BOX_OLDLCD_V18,seq=%lu,ms=%lu,trig=%lu,dt=%lu,echoUs=%u,mm=%u,ok=%u,why=%s,wait=%s,hits=%u,ref=%u,pos=%ld,brL=%u,brR=%u,pL=%ld,pR=%ld,uL=%ld,uR=%ld,kpL=%ld,kpR=%ld,kdL=%ld,kdR=%ld,boostL=%u,boostR=%u,lowL=%lu,lowR=%lu,drop=%lu\r\n",
+ (unsigned long)us_seq,(unsigned long)now,(unsigned long)us_result_trigger_ms,(unsigned long)us_result_period_ms,
+ us_pulse_us,us_mm,us_valid,us_reason,wait,b->confirm_hits,b->reference_mm,(long)g_box_position,
+ v->status.brake[0],v->status.brake[1],lroundf(v->status.speed[0]),lroundf(v->status.speed[1]),
+ lroundf(v->status.duty[0]*1000),lroundf(v->status.duty[1]*1000),
+ lroundf(v->status.effective_kp[0]*1000000.f),lroundf(v->status.effective_kp[1]*1000000.f),
+ lroundf(v->status.effective_kd[0]*1000000.f),lroundf(v->status.effective_kd[1]*1000000.f),v->status.kp_boost[0],v->status.kp_boost[1],
+ (unsigned long)v->status.low_speed_ms[0],(unsigned long)v->status.low_speed_ms[1],(unsigned long)bt_drop);
+ if(n>0&&(size_t)n<sizeof(line))bt_queue(line,(size_t)n);else ++bt_drop;
+}
+static void center_telemetry(uint32_t now){
+ static uint32_t last,id;static BoxCenterPhase previous=BC_IDLE;
+ BoxCenter *b=&g_box_center;if(b->phase==BC_IDLE)return;
+ if(now-last<500U&&previous==b->phase)return;
+ last=now;previous=b->phase;char line[640];
+ int n=snprintf(line,sizeof(line),
+ "C,fw=BOX_OLDLCD_V18,id=%lu,ms=%lu,phase=%s,pos=%ld,refMm=%u,refHits=%u,edge=%u,visitsRear=%u,visitsFront=%u,armed=%u,rearMin=%ld,rearMax=%ld,frontMin=%ld,frontMax=%ld,target=%ld,dir=%d,laser=%u,buzzer=%u,error=%s,fine10=%ld,fineRms10=%ld,fineN=%u,fineDone=%u,fineWarn=%u,fineL10=%ld,fineR10=%ld,r0=%ld,r1=%ld,r2=%ld,r3=%ld,f0=%ld,f1=%ld,f2=%ld,f3=%ld\r\n",
+ (unsigned long)id++,(unsigned long)now,box_center_phase_name(b->phase),(long)b->position,b->reference_mm,b->reference_hits,b->edge,
+ b->visits[0],b->visits[1],b->transit_inside,(long)b->minimum[0],(long)b->maximum[0],(long)b->minimum[1],(long)b->maximum[1],(long)b->target,b->direction,b->laser,b->buzzer,b->error,x10(b->fine_degrees),x10(b->fine_rms),b->fit_n,b->fine_done,b->fine_warning,x10(b->fine_wheel[0]),x10(b->fine_wheel[1]),
+ (long)b->crossings[0][0],(long)b->crossings[0][1],(long)b->crossings[0][2],(long)b->crossings[0][3],
+ (long)b->crossings[1][0],(long)b->crossings[1][1],(long)b->crossings[1][2],(long)b->crossings[1][3]);
+ if(n>0&&(size_t)n<sizeof(line))bt_queue(line,(size_t)n);else ++bt_drop;
+}
 static void telemetry(uint32_t now,const MotorView *v){
+ center_telemetry(now);
  static unsigned sent_points;
  /* Log every accepted face sample, not only the 200ms status snapshot. */
  while(sent_points<g_align.line_n){
   unsigned i=sent_points++;char sample[128];
-  int n=snprintf(sample,sizeof(sample),"L,fw=BOX_SCAN4_V3,i=%u,x10=%ld,range10=%ld\r\n",i,x10(g_align.line_x[i]),x10(g_align.line_y[i]));
+  int n=snprintf(sample,sizeof(sample),"L,fw=BOX_OLDLCD_V18,i=%u,x10=%ld,range10=%ld\r\n",i,x10(g_align.line_x[i]),x10(g_align.line_y[i]));
   if(n>0&&(size_t)n<sizeof(sample))bt_queue(sample,(size_t)n);else ++bt_drop;
  }
  static uint32_t last,seq;static AlignPhase previous=(AlignPhase)255;char line[1024];
  if(now-last<200&&g_align.phase==previous)return;
  last=now;previous=g_align.phase;
  int n=snprintf(line,sizeof(line),
- "M,fw=BOX_SCAN4_V3,seq=%lu,ms=%lu,phase=%s,action=%s,error=%s,motorError=%s,scan=%u,servo=%u,range=%u,valid=%u,side=%s,normal10=%ld,target10=%ld,actual10=%ld,wheelLdeg10=%ld,wheelRdeg10=%ld,edgeL=%u,edgeR=%u,edgeLmm=%u,edgeRmm=%u,edgeNormal10=%ld,centreY10=%ld,moveWheel=%u,dir=%d,refL10=%ld,refR10=%ld,pulseL=%ld,pulseR=%ld,pwmL1000=%ld,pwmR1000=%ld,countL=%lu,countR=%lu,goalL=%ld,goalR=%ld,fitSupport=%u,fitTotal=%u,fitRms10=%ld,entry=%lu,entryInferred=%u,exit=%lu,lineN=%u,lineSupport=%u,lineRms10=%ld,fine10=%ld,fineNormal10=%ld,lineWarn=%u,front=%u,planMm=%u,stopMm=%u,stopHits=%u,remain=%ld,approachPlan=%u,echoLost=%u,txdrop=%lu,irqUs=%lu\r\n",
- (unsigned long)seq++,(unsigned long)now,align_phase_name(g_align.phase),stage_action(),align_error_name(g_align.error),dual_motor_error_name(v->status.error),
+ "M,fw=BOX_OLDLCD_V18,seq=%lu,ms=%lu,phase=%s,action=%s,error=%s,motorError=%s,scan=%u,servo=%u,range=%u,valid=%u,side=%s,normal10=%ld,target10=%ld,actual10=%ld,wheelLdeg10=%ld,wheelRdeg10=%ld,edgeL=%u,edgeR=%u,edgeLmm=%u,edgeRmm=%u,edgeNormal10=%ld,centreY10=%ld,moveWheel=%u,dir=%d,refL10=%ld,refR10=%ld,pulseL=%ld,pulseR=%ld,pwmL1000=%ld,pwmR1000=%ld,countL=%lu,countR=%lu,goalL=%ld,goalR=%ld,fitSupport=%u,fitTotal=%u,fitRms10=%ld,entry=%lu,entryInferred=%u,exit=%lu,lineN=%u,lineSupport=%u,lineRms10=%ld,fine10=%ld,fineNormal10=%ld,lineWarn=%u,front=%u,planMm=%u,stopMm=%u,stopHits=%u,remain=%ld,approachPlan=%u,echoLost=%u,txdrop=%lu,irqUs=%lu\r\n",
+ (unsigned long)seq++,(unsigned long)now,g_box_center.phase==BC_IDLE?align_phase_name(g_align.phase):box_center_phase_name(g_box_center.phase),stage_action(),g_box_center.phase==BC_IDLE?align_error_name(g_align.error):g_box_center.error,dual_motor_error_name(v->status.error),
  g_align.index,g_align.servo_us,us_mm,us_valid,g_align.side_left?"LEFT":"RIGHT",x10(g_align.normal_deg),x10(g_align.target_deg),x10(g_align.actual_deg),x10(g_align.wheel_degrees[0]),x10(g_align.wheel_degrees[1]),
  g_align.fit_first,g_align.fit_last,g_align.edge_left_mm,g_align.edge_right_mm,x10(g_align.edge_normal_deg),x10(g_align.centre_y_mm),g_align.moving_wheel,g_align.motor_direction,
  x10(v->status.target[0]),x10(v->status.target[1]),lroundf(v->status.speed[0]),lroundf(v->status.speed[1]),lroundf(v->status.duty[0]*1000),lroundf(v->status.duty[1]*1000),
@@ -464,7 +510,7 @@ static void telemetry(uint32_t now,const MotorView *v){
 /* Dump the actual settled scan averages BEFORE fitting; live range telemetry
    may be from a different servo position. One bounded frame, no RX commands. */
 static void scan_telemetry(void){
- char line[384];int n=snprintf(line,sizeof(line),"S,fw=BOX_SCAN4_V3");
+ char line[384];int n=snprintf(line,sizeof(line),"S,fw=BOX_OLDLCD_V18");
  for(unsigned i=0;i<ALIGN_POINTS&&n>0&&(size_t)n<sizeof(line);++i){
   int k=snprintf(line+n,sizeof(line)-(size_t)n,",p%u=%u",i,g_align.range[i]);
   if(k<0||(size_t)k>=sizeof(line)-(size_t)n){++bt_drop;return;}n+=k;
@@ -489,15 +535,22 @@ static void screen_service(uint32_t now,const MotorView *v){
   angle_text(lines[3],"TURN",g_align.target_deg);
   angle_text(lines[4],"L DEG",g_align.wheel_degrees[0]);
   angle_text(lines[5],"R DEG",g_align.wheel_degrees[1]);
+  if(g_box_center.phase!=BC_IDLE){
+   snprintf(lines[3],19,"POS %+ld",(long)g_box_position);
+   snprintf(lines[4],19,"REAR %u/3",g_box_center.visits[0]);
+   if(g_box_center.phase>=BC_FINE_RIGHT)angle_text(lines[3],"FINE",g_box_center.fine_degrees);
+   snprintf(lines[5],19,"FRONT %u/3",g_box_center.visits[1]);
+  }
   snprintf(lines[6],19,"ERR");const char *reason=align_error_name(g_align.error);
   if(v->status.error!=DM_OK)reason=dual_motor_error_name(v->status.error);
   else if(g_align.phase==ALIGN_CANCELLED)reason="CANCELLED";
+  if(g_box_center.phase!=BC_IDLE&&g_align.phase!=ALIGN_CANCELLED&&v->status.error==DM_OK)reason=g_box_center.phase==BC_FAILED?g_box_center.error:box_center_phase_name(g_box_center.phase);
   snprintf(lines[7],19,"%s",reason);
   for(unsigned i=0;i<8;++i){size_t n=strlen(lines[i]);while(n<18)lines[i][n++]=' ';lines[i][18]=0;}
  }
  char ch[2]={lines[row][col],0};
- uint16_t color=(g_align.error||v->status.error||g_align.phase==ALIGN_CANCELLED)?LCD_RED:LCD_WHITE;
- lcd_text2((uint16_t)(12+col*12),(uint16_t)(12+row*32),ch,color);
+ uint16_t color=(g_align.error||v->status.error||g_align.phase==ALIGN_CANCELLED||g_box_center.phase==BC_FAILED)?LCD_RED:LCD_WHITE;
+ lcd_text((uint16_t)(4+col*6),(uint16_t)(4+row*18),ch,color);
  if(++col==18){col=0;if(++row==8)row=0;}
 }
 int main(void){
@@ -520,9 +573,9 @@ int main(void){
    AlignMotionFeedback motion={view.status.running,view.done,view.status.phase==DM_FAULT,view.actual_deg,(uint32_t)view.status.error,{view.status.counts[0],view.status.counts[1]},{view.wheel_degrees[0],view.wheel_degrees[1]}};
    if(g_align.phase==ALIGN_FIT)scan_telemetry();
    AlignPhase before_phase=g_align.phase;uint32_t before_since=g_align.since;
-   align_step(&g_align,now,us_seq,us_trigger_ms,us_echo_ms,us_valid,us_mm,&motion);
+   align_step(&g_align,now,us_seq,us_result_trigger_ms,us_echo_ms,us_valid,us_mm,&motion);
    if(g_align.phase==ALIGN_SCAN&&(before_phase!=ALIGN_SCAN||before_since!=g_align.since)){
-    us_pending=false;us_valid=false;us_trigger_ms=now;
+    us_pending=false;us_trigger_ms=now;
     TIM8->SR=~(TIM_SR_CC2IF|TIM_SR_CC2OF);
    }
    if((g_align.phase==ALIGN_APPROACH||g_align.phase==ALIGN_APPROACH_STOP)&&!g_align.approach_requested&&!cancel_requested){
@@ -542,21 +595,50 @@ int main(void){
     else {g_align.phase=ALIGN_FAILED;g_align.error=ALIGN_HARDWARE;}
    }
    if(g_align.phase==ALIGN_TURN&&!g_align.turn_requested&&!cancel_requested){
-    uint32_t saved=__get_PRIMASK();__disable_irq();bool started=car_motion_start_pivot(&g_car,1,g_align.target_deg>0?1:-1,fabsf(g_align.target_deg)*.5f);__set_PRIMASK(saved);
+    uint32_t saved=__get_PRIMASK();__disable_irq();bool started=car_motion_start_pivot(&g_car,g_align.moving_wheel,g_align.motor_direction,fabsf(g_align.target_deg)*.5f);__set_PRIMASK(saved);
     if(started)g_align.turn_requested=true;
     else {g_align.phase=ALIGN_FAILED;g_align.error=ALIGN_HARDWARE;}
    }
    if(g_align.phase==ALIGN_TURN_LEFT&&!g_align.left_turn_requested&&!cancel_requested){
     uint32_t saved=__get_PRIMASK();__disable_irq();
-    bool started=car_motion_start_pivot(&g_car,0,g_align.target_deg>0?-1:1,fabsf(g_align.target_deg)*.5f);__set_PRIMASK(saved);
+    bool started=car_motion_start_pivot(&g_car,g_align.moving_wheel,g_align.motor_direction,fabsf(g_align.target_deg)*.5f);__set_PRIMASK(saved);
     if(started)g_align.left_turn_requested=true;
     else {g_align.phase=ALIGN_FAILED;g_align.error=ALIGN_HARDWARE;}
    }
    if((g_align.phase==ALIGN_FAILED||g_align.phase==ALIGN_CANCELLED)&&g_car.motor.running){
     uint32_t saved=__get_PRIMASK();__disable_irq();car_motion_stop(&g_car);__set_PRIMASK(saved);
    }
+   if(g_align.phase==ALIGN_DONE&&g_box_center.phase==BC_IDLE&&!cancel_requested){
+    box_center_start(&g_box_center,now,us_seq);g_box_center.side_left=g_align.side_left;
+   }
+   if(g_box_center.phase==BC_FINE_RIGHT)g_box_center.fine_wheel[1]=view.wheel_degrees[1];
+   if(g_box_center.phase==BC_FINE_LEFT)g_box_center.fine_wheel[0]=view.wheel_degrees[0];
+   box_center_step(&g_box_center,now,us_seq,us_result_trigger_ms,us_echo_ms,us_valid,us_mm,
+    view.total,view.status.running,view.done,view.status.phase==DM_FAULT,cancel_requested);
+   BoxCenterCommand command=g_box_center.command;
+   if(command!=BC_CMD_NONE&&!cancel_requested){
+    uint32_t saved=__get_PRIMASK();__disable_irq();bool ok=false;
+    if(command==BC_CMD_FORWARD&&g_box_center.phase==BC_TRANSIT)
+     ok=car_motion_start_front_traverse(&g_car);
+    else if(command==BC_CMD_FORWARD||command==BC_CMD_REVERSE)
+     ok=car_motion_start_edge_scan(&g_car,command==BC_CMD_FORWARD?1:-1);
+    else if(command==BC_CMD_STOP)ok=car_motion_finish_straight(&g_car);
+    else if(command==BC_CMD_CENTER)ok=car_motion_start_center_back(&g_car,g_box_center.remaining);
+    else if(command==BC_CMD_FINE_RIGHT)ok=car_motion_start_pivot(&g_car,1,g_box_center.fine_degrees>0?1:-1,fabsf(g_box_center.fine_degrees)*.5f);
+    else if(command==BC_CMD_FINE_LEFT)ok=car_motion_start_pivot(&g_car,0,g_box_center.fine_degrees>0?-1:1,fabsf(g_box_center.fine_degrees)*.5f);
+    __set_PRIMASK(saved);g_box_center.command=BC_CMD_NONE;
+    if(!ok)box_center_fail(&g_box_center,"MOTION_START");
+   }
+   if(g_box_center.phase==BC_FAILED&&g_car.motor.running){
+    uint32_t saved=__get_PRIMASK();__disable_irq();car_motion_stop(&g_car);__set_PRIMASK(saved);
+   }
+   bool firing=g_box_center.laser&&!cancel_requested&&
+    g_car.motor.phase==DM_STOPPED&&!g_car.motor.running;
+   HAL_GPIO_WritePin(GPIOC,GPIO_PIN_8,firing?GPIO_PIN_SET:GPIO_PIN_RESET);
+   HAL_GPIO_WritePin(GPIOC,GPIO_PIN_9,GPIO_PIN_RESET); /* Buzzer disabled. */
+   MotorView trace_view=motor_snapshot();sonar_telemetry(now,&trace_view);
    TIM2->CCR1=now-g_align.started>=10?g_align.servo_us:0;
-   HAL_GPIO_WritePin(GPIOD,GPIO_PIN_8,(g_align.phase==ALIGN_TURN||g_align.phase==ALIGN_TURN_LEFT||g_align.phase==ALIGN_APPROACH||g_align.phase==ALIGN_APPROACH_STOP)?GPIO_PIN_RESET:GPIO_PIN_SET);
+   HAL_GPIO_WritePin(GPIOD,GPIO_PIN_8,(g_align.phase==ALIGN_TURN||g_align.phase==ALIGN_TURN_LEFT||g_align.phase==ALIGN_APPROACH||g_align.phase==ALIGN_APPROACH_STOP||g_box_center.phase==BC_BACK_SEARCH||g_box_center.phase==BC_EDGE_MOVE||g_box_center.phase==BC_TRANSIT||g_box_center.phase==BC_CENTER_MOVE||g_box_center.phase==BC_FINE_RIGHT||g_box_center.phase==BC_FINE_LEFT)?GPIO_PIN_RESET:GPIO_PIN_SET);
   }
   view=motor_snapshot(); /* Starts reset segment counts before status/rendering. */
   telemetry(now,&view);screen_service(now,&view);bt_pump();IWDG->KR=0xAAAA;

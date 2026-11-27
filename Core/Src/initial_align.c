@@ -169,7 +169,8 @@ bool align_fit(InitialAlign *a){
  a->centre_y_mm=.5f*(a->range[blo]*scan_sin[blo]+a->range[bhi]*scan_sin[bhi]);
  a->side_left=fabsf(a->centre_y_mm)<5.f?a->normal_deg>=0:a->centre_y_mm>0;
  a->target_deg=a->normal_deg+(a->side_left?-90.f:90.f);
- a->moving_wheel=1U;a->motor_direction=a->target_deg>=0?1:-1;
+ a->moving_wheel=a->side_left?1U:0U;
+ a->motor_direction=(a->target_deg>=0?1:-1)*(a->moving_wheel==1?1:-1);
  return true;
 }
 /* Side probe remains at calibrated +/-90 throughout the traverse.
@@ -332,8 +333,8 @@ void align_step(InitialAlign *a,uint32_t now,uint32_t seq,uint32_t trigger_ms,
   }
  }else if(a->phase==ALIGN_TURN_HALF_WAIT){
   if(elapsed>=ALIGN_SEGMENT_WAIT_MS){
-   a->phase=ALIGN_TURN_LEFT;a->since=now;a->moving_wheel=0;
-   a->motor_direction=a->target_deg>0?-1:1;
+   a->phase=ALIGN_TURN_LEFT;a->since=now;a->moving_wheel=1U-a->moving_wheel;
+   a->motor_direction=(a->target_deg>0?1:-1)*(a->moving_wheel==1?1:-1);
   }
  }else if(a->phase==ALIGN_TURN_LEFT){
   if(a->left_turn_requested&&motion){
@@ -346,7 +347,7 @@ void align_step(InitialAlign *a,uint32_t now,uint32_t seq,uint32_t trigger_ms,
  }
 }
 const char *align_phase_name(AlignPhase p) {
-    static const char *const n[]={"IDLE","SCAN","FIT","SIDE_SETTLE","TURN","BRAKE","LOCK","RETREAT","WAIT_FORWARD","FORWARD","SCAN_BRAKE","FINE_TURN","WAIT_FINAL","FINAL_BACK","DONE","FAILED","CANCELLED","HOME","SEEK","APPROACH","APPROACH_STOP","PRE_SCAN_WAIT","TURN_HALF_WAIT","TURN_LEFT"};
+    static const char *const n[]={"IDLE","SCAN","FIT","SIDE_SETTLE","TURN_FIRST","BRAKE","LOCK","RETREAT","WAIT_FORWARD","FORWARD","SCAN_BRAKE","FINE_TURN","WAIT_FINAL","FINAL_BACK","DONE","FAILED","CANCELLED","HOME","SEEK","APPROACH","APPROACH_STOP","PRE_SCAN_WAIT","TURN_HALF_WAIT","TURN_SECOND"};
     return (unsigned)p<sizeof(n)/sizeof(n[0])?n[p]:"UNKNOWN";
 }
 const char *align_error_name(AlignError e) {

@@ -3,14 +3,14 @@ import argparse,json,time,sys
 from pathlib import Path
 
 def parse(s):
- if not s.startswith(("M,","C,","S,","L,")):return None
+ if not s.startswith(("M,","C,","S,","L,","U,")):return None
  out={"type":s[0]}
  for part in s.strip().split(',')[1:]:
   if '=' not in part:return None
   k,v=part.split('=',1)
   try:out[k]=int(v)
   except ValueError:out[k]=v
- return out if out.get('fw') in ('BOX_ALIGN_PD_V1','BOX_ALIGN_PD_V2','BOX_ALIGN_PD_V3','BOX_ALIGN_PD_V4','BOX_ALIGN_PD_V5','BOX_ALIGN_PD_V6','BOX_ALIGN_PD_V7','BOX_ALIGN_PD_V8','BOX_ALIGN_PD_V9','BOX_ALIGN_PD_V10','BOX_APPROACH_V1','BOX_APPROACH_V2','BOX_SCAN4_V3') else None
+ return out if out.get('fw') in ('BOX_ALIGN_PD_V1','BOX_ALIGN_PD_V2','BOX_ALIGN_PD_V3','BOX_ALIGN_PD_V4','BOX_ALIGN_PD_V5','BOX_ALIGN_PD_V6','BOX_ALIGN_PD_V7','BOX_ALIGN_PD_V8','BOX_ALIGN_PD_V9','BOX_ALIGN_PD_V10','BOX_APPROACH_V1','BOX_APPROACH_V2','BOX_SCAN4_V3','BOX_CENTER_V4','BOX_FINE20_V5','BOX_REV25_V6','BOX_DIAG_V7','BOX_TRANSIT30_V8','BOX_SINGLEPASS_V9','BOX_EDGES3_V10','BOX_KP04_V11','BOX_KP02_V12','BOX_PD5_V13','BOX_ASSIST_V14','BOX_PDASSIST3_V15','BOX_OLDLCD_V16','BOX_OLDLCD_V17','BOX_OLDLCD_V18') else None
 
 def main():
  import serial
@@ -21,7 +21,7 @@ def main():
  conn=serial.Serial(port=None,baudrate=115200,timeout=.2);conn.port=opt.port;conn.dtr=False;conn.rts=False
  pending=bytearray();confirmed=False;seen={};previous=None;last_print=0;last_rx=time.monotonic();warned=False
  try:
-  conn.open();print(f'PORT_OPEN {opt.port}; awaiting BOX_SCAN4_V3 (accepting previous versions for identification); log={path}',flush=True)
+  conn.open();print(f'PORT_OPEN {opt.port}; awaiting BOX_OLDLCD_V18 (accepting previous versions for identification); log={path}',flush=True)
   with path.open('x',encoding='utf-8') as log,path.with_suffix('.jsonl').open('x',encoding='utf-8') as js,path.with_suffix('.bin').open('xb') as raw:
    while True:
     data=conn.read(1024)
@@ -39,7 +39,15 @@ def main():
       continue
      js.write(json.dumps(f)+'\n');js.flush();last_rx=time.monotonic();warned=False
      if confirmed!=f['fw']:print('CONFIRMED '+f['fw'],flush=True);confirmed=f['fw']
-     if f['type']=='L':
+     if f['type']=='U':
+      trig=f.get('trig');prior=getattr(main,'us_trigger',None)
+      delta=trig-prior if trig is not None and prior is not None else None
+      main.us_trigger=trig
+      state=(f.get('why'),f.get('wait'),f.get('hits'),f.get('boostL'),f.get('boostR'))
+      if state!=getattr(main,'us_state',None) or (delta is not None and delta>65 and f.get('wait')!='SCAN'):
+       print('SONAR '+json.dumps(f),flush=True)
+      main.us_state=state
+     elif f['type']=='L':
       print('FACE_SAMPLE '+json.dumps(f),flush=True)
      elif f['type']=='S':
       print('SCAN_AVERAGES '+json.dumps(f),flush=True)

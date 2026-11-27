@@ -11,8 +11,8 @@ static void commands(InitialAlign *a,CarMotion *c){
  if((a->phase==ALIGN_APPROACH||a->phase==ALIGN_APPROACH_STOP)&&!a->approach_requested){assert(car_motion_start_scan(c));a->approach_requested=true;}
  if(a->approach_requested&&a->approach_plan_ready&&!a->approach_plan_applied&&!a->approach_hard_stop){assert(car_motion_finish_after_counts(c,a->approach_remaining_counts));a->approach_plan_applied=true;}
  if(a->approach_requested&&a->approach_hard_stop&&!a->approach_hard_stop_applied){assert(car_motion_finish_straight(c));a->approach_hard_stop_applied=true;}
- if(a->phase==ALIGN_TURN&&!a->turn_requested){assert(car_motion_start_pivot(c,1,a->target_deg>0?1:-1,fabsf(a->target_deg)*.5f));a->turn_requested=true;}
- if(a->phase==ALIGN_TURN_LEFT&&!a->left_turn_requested){assert(car_motion_start_pivot(c,0,a->target_deg>0?-1:1,fabsf(a->target_deg)*.5f));a->left_turn_requested=true;}
+ if(a->phase==ALIGN_TURN&&!a->turn_requested){assert(car_motion_start_pivot(c,a->moving_wheel,a->motor_direction,fabsf(a->target_deg)*.5f));a->turn_requested=true;}
+ if(a->phase==ALIGN_TURN_LEFT&&!a->left_turn_requested){assert(car_motion_start_pivot(c,a->moving_wheel,a->motor_direction,fabsf(a->target_deg)*.5f));a->left_turn_requested=true;}
 }
 static void step(InitialAlign *a,CarMotion *c,uint32_t now,uint32_t seq,uint32_t trig,uint32_t echo,bool valid,uint16_t mm){
  AlignMotionFeedback f=feedback(c);align_step(a,now,seq,trig,echo,valid,mm,&f);commands(a,c);
@@ -63,9 +63,11 @@ static void run(float phi,int lo,int hi){
  float target=phi+(a.side_left?-90:90);assert(fabsf(a.target_deg-target)<1);
  step(&a,&c,now+1199,seq+1,0,0,false,0);assert(!c.motor.running);
  now+=1200;step(&a,&c,now,seq+1,0,0,false,0);
- assert(a.phase==ALIGN_TURN&&c.kind==CAR_PIVOT_RIGHT&&c.motor.braked[0]&&!c.motor.braked[1]);
- int sign=target>0?1:-1;assert(c.direction==sign&&c.frame_sign[0]==1&&c.frame_sign[1]==1);
- assert(c.motor.wheel_goal[1]==car_motion_pivot_counts(1,fabsf(a.target_deg)*.5f));
+ unsigned first=a.side_left?1U:0U,second=1U-first;
+ assert(a.phase==ALIGN_TURN&&c.pivot_wheel==first&&c.motor.braked[second]&&!c.motor.braked[first]);
+ int sign=target>0?1:-1,first_sign=first?sign:-sign;
+ assert(c.direction==first_sign&&c.frame_sign[0]==1&&c.frame_sign[1]==1);
+ assert(c.motor.wheel_goal[first]==car_motion_pivot_counts(first,fabsf(a.target_deg)*.5f));
  bool saw_wait=false,saw_left=false;uint32_t stopped_at=0;
  float first_right=0;
  for(unsigned t=0;t<5000&&a.phase!=ALIGN_DONE;++t){
@@ -73,13 +75,13 @@ static void run(float phi,int lo,int hi){
   car_motion_tick_1ms(&c,raw[0],raw[1],true);assert(c.motor.error==DM_OK);
   step(&a,&c,now,seq+1,0,0,false,0);
   if(a.phase==ALIGN_TURN_HALF_WAIT){
-   if(!saw_wait){stopped_at=now;first_right=a.wheel_degrees[1];}
+   if(!saw_wait){stopped_at=now;first_right=a.wheel_degrees[first];}
    saw_wait=true;assert(!c.motor.running&&c.motor.braked[0]&&c.motor.braked[1]);
-   assert(a.wheel_degrees[1]==first_right&&fabsf(first_right-sign*fabsf(target)*.5f)<.5f);
+   assert(a.wheel_degrees[first]==first_right&&fabsf(first_right-first_sign*fabsf(target)*.5f)<.5f);
   }
   if(a.phase==ALIGN_TURN_LEFT){
-   saw_left=true;assert(now-stopped_at>=500&&c.direction==-sign&&c.motor.braked[1]);
-   assert(c.motor.wheel_goal[0]==car_motion_pivot_counts(0,fabsf(a.target_deg)*.5f));
+   saw_left=true;assert(now-stopped_at>=500&&c.direction==-first_sign&&c.motor.braked[first]);
+   assert(c.pivot_wheel==second&&c.motor.wheel_goal[second]==car_motion_pivot_counts(second,fabsf(a.target_deg)*.5f));
   }
  }
  assert(saw_wait&&saw_left);

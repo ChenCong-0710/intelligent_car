@@ -28,6 +28,9 @@ typedef struct {
  int32_t sample_sum;
  float speed_pulses,target_pulses,previous_error,derivative,duty;
  uint32_t wrong_since,stall_since,overspeed_since;
+ uint32_t low_speed_since;
+ bool low_speed_tracking,kp_boost;
+ float effective_kp,effective_kd;
 } DualMotorWheel;
 typedef struct {
  DualMotorPhase phase;DualMotorError error;
@@ -49,6 +52,7 @@ typedef struct {
  bool enable,brake[2],running,decelerating[2];
  int direction;int32_t goal_trigger[2],goal[2];
  float duty[2],speed[2],target[2],sync_correction;
+ bool kp_boost[2];float effective_kp[2],effective_kd[2];uint32_t low_speed_ms[2];
  uint32_t counts[2];
  int32_t signed_counts[2],sync_error;
  DualMotorPhase phase;DualMotorError error;

@@ -9,6 +9,13 @@ void car_motion_tick_1ms(CarMotion *car,uint16_t left,uint16_t right,bool driver
 bool car_motion_start_straight(CarMotion *car,int direction,int32_t counts);
 bool car_motion_start_pivot(CarMotion *car,unsigned moving_wheel,int direction,float body_angle_deg);
 bool car_motion_start_scan(CarMotion *car);
+/* Same validated translation profile, open-ended in either direction. */
+bool car_motion_start_scan_direction(CarMotion *car,int direction);
+/* Post-approach translation: forward20/reverse25 A edges/50ms; same PD/sync/brake. */
+bool car_motion_start_edge_scan(CarMotion *car,int direction);
+/* Traverse from the rear edge toward the front edge: 30 A edges/50ms. */
+bool car_motion_start_front_traverse(CarMotion *car);
+bool car_motion_start_center_back(CarMotion *car,int32_t counts);
 bool car_motion_finish_after_counts(CarMotion *car,int32_t nominal_remaining);
 float car_motion_output_duty(const CarMotion *car,unsigned wheel);
 void car_motion_get_status(const CarMotion *car,DualMotorStatus *status);

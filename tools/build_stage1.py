@@ -8,7 +8,7 @@ def run(args):subprocess.run([str(x) for x in args],cwd=ROOT/"Debug",check=True)
 flags=["-mcpu=cortex-m4","-std=gnu11","-g3","-DUSE_HAL_DRIVER","-DSTM32G474xx","-O1","-ffunction-sections","-fdata-sections","-Wall","-Wextra","-mfpu=fpv4-sp-d16","-mfloat-abi=hard","-mthumb","--specs=nano.specs"]
 for inc in ["Core/Inc","Drivers/STM32G4xx_HAL_Driver/Inc","Drivers/STM32G4xx_HAL_Driver/Inc/Legacy","Drivers/CMSIS/Device/ST/STM32G4xx/Include","Drivers/CMSIS/Include"]:flags.extend(["-I",ROOT/inc])
 new=[]
-for name in ["main","initial_align","car_motion","stm32g4xx_it"]:
+for name in ["main","initial_align","car_motion","box_center","stm32g4xx_it"]:
  obj=OUT/(name+".o");run([BIN/"arm-none-eabi-gcc.exe",*flags,"-c",ROOT/f"Core/Src/{name}.c","-o",obj]);new.append(obj)
 obj=OUT/"dual_motor.o";run([BIN/"arm-none-eabi-gcc.exe",*flags,"-c",ROOT/"portable/dual_motor/dual_motor.c","-o",obj]);new.append(obj)
 objects=[]

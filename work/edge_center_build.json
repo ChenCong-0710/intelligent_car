@@ -1,0 +1,13 @@
+{
+  "fw": "BOX_CENTER_V4",
+  "flashed": true,
+  "elf": "F:\\STM32CUBEIDE\\find_box_and_shoot_cc\\Debug\\find_box_and_shoot_cc.elf",
+  "sha256": "cfa21521451eb3d9bbf754038eda9da82769dcde7643f23db9e09c10b29a528a",
+  "locked_files": {
+    "Core/Src/initial_align.c": "297e393b4d68ad2a4f40bb69f29b5306c77f1a2df125b2dcc3772afddbf54547",
+    "Core/Inc/initial_align.h": "e24bbd5dac3ddc044fd43896e362678202b585bb3b14c3405c6ddbfaca81bdbf",
+    "portable/dual_motor/dual_motor.c": "41b79c7d9aa9eb40160d7034d2b9cfd931962c4c0f2c34f70343fda3726978b8",
+    "portable/dual_motor/dual_motor.h": "9cf8a1cc9354a97f01f5cc5cece13879d50fab16b01298e6af1f63b4d5b1423c"
+  },
+  "flash_log": "F:\\STM32CUBEIDE\\find_box_and_shoot_cc\\work\\flash_center_20261126_215743.log"
+}

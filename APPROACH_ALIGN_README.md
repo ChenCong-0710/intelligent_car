@@ -1,3 +1,11 @@
+# 当前版本：BOX_FINE20_V5
+
+粗调后直行20双沿/50ms；首次前边界停车后按侧向距离拟合精调，右轮半角、左轮反向半角，随后重测两侧边界回中。详见EDGE_CENTER_README.md。以下为历史版本记录。
+
+# 当前版本：BOX_CENTER_V4
+
+新增粗调后的两侧四次穿越采样、回中心与激光/蜂鸣器同步10秒。详见EDGE_CENTER_README.md。本轮未烧录。以下V3记录描述沿用的前置扫描阶段。
+
 # 当前版本：BOX_SCAN4_V3
 
 本次仅更改目标识别、舵机扫描及超声采样；TEST、car_motion与portable/dual_motor的控制和标定未变。

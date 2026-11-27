@@ -1,0 +1,7 @@
+{
+  "fw": "BOX_PD5_V13",
+  "elf": "F:\\STM32CUBEIDE\\find_box_and_shoot_cc\\Debug\\find_box_and_shoot_cc.elf",
+  "sha256": "ff188e216743a9f2e573bb7aeaa2a28cfb4478d3d39d5e3b2981801d07036d6d",
+  "flashed": true,
+  "flash_log": "F:\\STM32CUBEIDE\\find_box_and_shoot_cc\\work\\flash_pd5_20261127_104241.log"
+}

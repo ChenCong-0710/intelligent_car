@@ -1,0 +1,7 @@
+{
+  "fw": "BOX_SINGLEPASS_V9",
+  "elf": "F:\\STM32CUBEIDE\\find_box_and_shoot_cc\\Debug\\find_box_and_shoot_cc.elf",
+  "sha256": "573ad8aaa36f923e3fdc3551e13cb9686a26a6172a3836dd423679abd4dcfdaa",
+  "flashed": true,
+  "flash_log": "F:\\STM32CUBEIDE\\find_box_and_shoot_cc\\work\\flash_singlepass_20261126_224105.log"
+}

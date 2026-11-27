@@ -1,0 +1,7 @@
+{
+  "fw": "BOX_DIAG_V7",
+  "elf": "F:\\STM32CUBEIDE\\find_box_and_shoot_cc\\Debug\\find_box_and_shoot_cc.elf",
+  "sha256": "4128ca2a649138ccfd54eb590b41817f05642eef3f694ee3b697c48755414255",
+  "flashed": true,
+  "flash_log": "F:\\STM32CUBEIDE\\find_box_and_shoot_cc\\work\\flash_diag7_20261126_222812.log"
+}

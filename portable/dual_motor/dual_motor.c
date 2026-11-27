@@ -7,6 +7,8 @@ static int direction(const DualMotor *m){return m->move_direction;}
 static void phase(DualMotor *m,DualMotorPhase p){m->phase=p;m->since=m->now;m->stopped_since=0;}
 static void brake(DualMotor *m,unsigned w){
  if(!m->braked[w])m->at_brake[w]=m->actual[w];
+ m->wheel[w].kp_boost=m->wheel[w].low_speed_tracking=false;
+ m->wheel[w].effective_kp=m->config.speed_kp;m->wheel[w].effective_kd=m->config.speed_kd;
  m->decelerating[w]=false;m->braked[w]=true;m->wheel[w].duty=m->wheel[w].target_pulses=0;
 }
 void dual_motor_trip(DualMotor *m,DualMotorError error){
@@ -18,6 +20,7 @@ bool dual_motor_init(DualMotor *m,const DualMotorConfig *config,uint16_t l,uint1
  memset(m,0,sizeof(*m));m->config=selected;m->move_direction=1;
  m->wheel[0].previous_counter=l;m->wheel[1].previous_counter=r;
  m->braked[0]=m->braked[1]=true;
+ for(unsigned w=0;w<2;++w){m->wheel[w].effective_kp=m->config.speed_kp;m->wheel[w].effective_kd=m->config.speed_kd;}
  if(!dual_motor_config_valid(&selected)){m->phase=DM_FAULT;m->error=DM_CONFIG;return false;}
  return true;
 }
@@ -30,6 +33,8 @@ static void begin(DualMotor *m){
   p->previous_error=p->derivative=p->duty=0;m->braked[w]=m->wheel_goal[w]==0;
   m->decelerating[w]=false;m->decel_since[w]=0;m->decel_start_duty[w]=0;m->goal_trigger[w]=0;
   p->wrong_since=p->stall_since=p->overspeed_since=m->now;
+  p->kp_boost=false;p->effective_kp=m->config.speed_kp;p->effective_kd=m->config.speed_kd;
+  p->low_speed_since=m->now;p->low_speed_tracking=true;
  }
  phase(m,DM_RUN);
 }
@@ -64,6 +69,24 @@ float dual_motor_pd_duty(const DualMotorConfig *config,unsigned wheel,float targ
  config->speed_kp*(target-measured)+config->speed_kd*error_delta;
  return sign*clip(sign*u,0,config->max_duty);
 }
+/* Independent per-wheel gain scheduling, not an integrator or PWM increment.
+   Speed is the absolute measured A-edge count in the existing 50ms window.
+   Exactly8 breaks the low-speed timer but retains the current gain mode. */
+static void update_low_speed_gain(DualMotor *m,unsigned w){
+ DualMotorWheel *p=&m->wheel[w];
+ bool active=m->phase==DM_RUN&&!m->braked[w]&&!m->decelerating[w];
+ if(!active){p->low_speed_tracking=p->kp_boost=false;}
+ else {
+  float speed=fabsf(p->speed_pulses);
+  if(speed>8.f){p->kp_boost=false;p->low_speed_tracking=false;}
+  else if(speed<8.f){
+   if(!p->low_speed_tracking){p->low_speed_since=m->now;p->low_speed_tracking=true;}
+   if(m->now-p->low_speed_since>500U)p->kp_boost=true;
+  }else p->low_speed_tracking=false;
+ }
+ float multiplier=p->kp_boost?3.f:1.f;
+ p->effective_kp=m->config.speed_kp*multiplier;p->effective_kd=m->config.speed_kd*multiplier;
+}
 static void update_pd(DualMotor *m){
  int sign=direction(m);
  float start=clip((float)(m->now-m->drive_since)/m->config.start_ramp_ms,0,1);
@@ -90,7 +113,8 @@ static void update_pd(DualMotor *m){
   float error=p->target_pulses-p->speed_pulses;
   p->derivative+=m->config.derivative_alpha*((error-p->previous_error)-p->derivative);p->previous_error=error;
   /* Absolute output: no PWM accumulation, no integral. */
-  float demand=dual_motor_pd_duty(&m->config,w,p->target_pulses,p->speed_pulses,p->derivative);
+  DualMotorConfig wheel_config=m->config;wheel_config.speed_kp=p->effective_kp;wheel_config.speed_kd=p->effective_kd;
+  float demand=dual_motor_pd_duty(&wheel_config,w,p->target_pulses,p->speed_pulses,p->derivative);
   p->duty+=clip(demand-p->duty,-m->config.duty_slew,m->config.duty_slew);
  }
 }
@@ -141,17 +165,16 @@ void dual_motor_tick_1ms(DualMotor *m,uint16_t left,uint16_t right,bool driver_o
    m->running=false;phase(m,DM_STOPPED); /* forward once; retain brake and results */
   }else if(m->now-m->since>=m->config.brake_timeout_ms){dual_motor_trip(m,DM_NOT_SETTLED);return;}
  }else if(m->phase==DM_STOPPING&&m->now-m->since>=m->config.manual_stop_ms){m->enable=false;phase(m,DM_STOPPED);}
+ for(unsigned w=0;w<2;++w)update_low_speed_gain(m,w);
  if(sampled)update_pd(m);
  for(unsigned w=0;w<2;++w){
   DualMotorWheel *p=&m->wheel[w];bool active=m->phase==DM_RUN&&!m->braked[w]&&!m->decelerating[w];
   bool wrong=active&&direction(m)*p->speed_pulses<=-m->config.direction_threshold;
-  bool stalled=active&&m->now-m->drive_since>=m->config.stall_grace_ms&&fabsf(p->speed_pulses)<m->config.stall_threshold;
+  /* STALL detection temporarily removed at the user's explicit request. */
   bool fast=active&&fabsf(p->speed_pulses)>m->config.overspeed_threshold;
   if(!wrong)p->wrong_since=m->now;
-  if(!stalled)p->stall_since=m->now;
   if(!fast)p->overspeed_since=m->now;
   if(wrong&&m->now-p->wrong_since>=m->config.direction_ms){dual_motor_trip(m,DM_DIRECTION);return;}
-  if(stalled&&m->now-p->stall_since>=m->config.stall_ms){dual_motor_trip(m,DM_STALL);return;}
   if(fast&&m->now-p->overspeed_since>=m->config.overspeed_ms){dual_motor_trip(m,DM_OVERSPEED);return;}
  }
 }
@@ -186,5 +209,5 @@ void dual_motor_get_status(const DualMotor *m,DualMotorStatus *s){
  s->enable=m->enable;s->running=m->running;s->phase=m->phase;s->error=m->error;
  s->direction=m->move_direction;
  s->sync_error=m->sync_error;s->sync_correction=m->sync_correction;
- for(unsigned w=0;w<2;++w){s->decelerating[w]=m->decelerating[w];s->goal_trigger[w]=m->goal_trigger[w];s->goal[w]=m->wheel_goal[w];s->brake[w]=m->braked[w];s->duty[w]=m->wheel[w].duty;s->speed[w]=m->wheel[w].speed_pulses;s->target[w]=m->wheel[w].target_pulses;s->counts[w]=m->counts[w];s->signed_counts[w]=m->actual[w];}
+ for(unsigned w=0;w<2;++w){s->kp_boost[w]=m->wheel[w].kp_boost;s->effective_kp[w]=m->wheel[w].effective_kp;s->effective_kd[w]=m->wheel[w].effective_kd;s->low_speed_ms[w]=m->wheel[w].low_speed_tracking?m->now-m->wheel[w].low_speed_since:0;s->decelerating[w]=m->decelerating[w];s->goal_trigger[w]=m->goal_trigger[w];s->goal[w]=m->wheel_goal[w];s->brake[w]=m->braked[w];s->duty[w]=m->wheel[w].duty;s->speed[w]=m->wheel[w].speed_pulses;s->target[w]=m->wheel[w].target_pulses;s->counts[w]=m->counts[w];s->signed_counts[w]=m->actual[w];}
 }

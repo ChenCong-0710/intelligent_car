@@ -9,7 +9,7 @@ static void plane(InitialAlign *a,float phi,int lo,int hi){
 }
 int main(void){
  InitialAlign a;plane(&a,20,10,17);assert(align_fit(&a)&&a.side_left&&fabsf(a.target_deg+70)<1&&a.moving_wheel==1&&a.motor_direction==-1);
- plane(&a,-20,19,26);assert(align_fit(&a)&&!a.side_left&&fabsf(a.target_deg-70)<1&&a.moving_wheel==1&&a.motor_direction==1);
+ plane(&a,-20,19,26);assert(align_fit(&a)&&!a.side_left&&fabsf(a.target_deg-70)<1&&a.moving_wheel==0&&a.motor_direction==-1);
  plane(&a,0,7,13);assert(align_fit(&a)&&a.side_left&&fabsf(a.target_deg+90)<1);
  plane(&a,0,23,29);assert(align_fit(&a)&&!a.side_left&&fabsf(a.target_deg-90)<1);
  plane(&a,20,10,17);a.range[13]=0;assert(align_fit(&a));

@@ -1,0 +1,7 @@
+{
+  "fw": "BOX_OLDLCD_V18",
+  "elf": "F:\\STM32CUBEIDE\\find_box_and_shoot_cc\\Debug\\find_box_and_shoot_cc.elf",
+  "sha256": "1e486c9499548a9a4f3c3a40d1bc0753585c5f24633cce6f62bfeb15922145c2",
+  "flashed": true,
+  "flash_log": "F:\\STM32CUBEIDE\\find_box_and_shoot_cc\\work\\flash_old_lcd_v18_20261127_125602.log"
+}

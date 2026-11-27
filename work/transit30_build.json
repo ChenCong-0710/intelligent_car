@@ -1,0 +1,7 @@
+{
+  "fw": "BOX_TRANSIT30_V8",
+  "elf": "F:\\STM32CUBEIDE\\find_box_and_shoot_cc\\Debug\\find_box_and_shoot_cc.elf",
+  "sha256": "2e5fb3b066d9e6dc444e1108b16d646fd3462f5cc0b085976d8b3aa995cb1c2c",
+  "flashed": true,
+  "flash_log": "F:\\STM32CUBEIDE\\find_box_and_shoot_cc\\work\\flash_transit30_20261126_223322.log"
+}

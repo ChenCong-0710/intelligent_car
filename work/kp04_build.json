@@ -1,0 +1,7 @@
+{
+  "fw": "BOX_KP04_V11",
+  "elf": "F:\\STM32CUBEIDE\\find_box_and_shoot_cc\\Debug\\find_box_and_shoot_cc.elf",
+  "sha256": "9f3a5d307eb5c7ef2a17e77c6a5f23c60d3ed09a946be45398a8d363a78ed1a6",
+  "flashed": true,
+  "flash_log": "F:\\STM32CUBEIDE\\find_box_and_shoot_cc\\work\\flash_kp04_20261127_103238.log"
+}

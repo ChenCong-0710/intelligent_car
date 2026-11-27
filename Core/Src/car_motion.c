@@ -53,11 +53,12 @@ bool car_motion_start_straight(CarMotion *c,int sign,int32_t counts){
  if(!dual_motor_start_direction(&c->motor,sign))return false;
  c->kind=CAR_STRAIGHT;c->direction=sign;c->cancelled=false;c->requested_deg=0;return true;
 }
-bool car_motion_start_scan(CarMotion *c){
- if(!ready(c))return false;
+bool car_motion_start_scan(CarMotion *c){return car_motion_start_scan_direction(c,1);}
+bool car_motion_start_scan_direction(CarMotion *c,int sign){
+ if(!ready(c)||(sign!=1&&sign!=-1))return false;
  straight_profile(&c->motor.config);frame(c,1,1);
- if(!dual_motor_start_continuous(&c->motor,1))return false;
- c->desired_counts=0;c->kind=CAR_STRAIGHT;c->direction=1;c->cancelled=false;c->requested_deg=0;return true;
+ if(!dual_motor_start_continuous(&c->motor,sign))return false;
+ c->desired_counts=0;c->kind=CAR_STRAIGHT;c->direction=sign;c->cancelled=false;c->requested_deg=0;return true;
 }
 /* When the range reaches about120mm, plan the remaining path to100mm with
    TEST's ten-edge early braking allowance. Preserve the existing ramp age. */
@@ -111,4 +112,19 @@ float car_motion_estimated_angle(const CarMotion *c){
 float car_motion_wheel_angle(const CarMotion *c,unsigned w){
  if(w>1||(c->kind!=CAR_PIVOT_LEFT&&c->kind!=CAR_PIVOT_RIGHT))return 0;
  return c->direction*degrees_for_counts(w,(float)c->motor.actual[w]);
+}
+
+/* Change only the requested cruise speed; preserve the validated controller. */
+bool car_motion_start_edge_scan(CarMotion *c,int sign){
+ if(!car_motion_start_scan_direction(c,sign))return false;
+ c->motor.config.cruise_target=20;return true;
+}
+bool car_motion_start_center_back(CarMotion *c,int32_t counts){
+ if(!car_motion_start_straight(c,-1,counts))return false;
+ c->motor.config.cruise_target=25;return true;
+}
+
+bool car_motion_start_front_traverse(CarMotion *c){
+ if(!car_motion_start_scan_direction(c,1))return false;
+ c->motor.config.cruise_target=30;return true;
 }
