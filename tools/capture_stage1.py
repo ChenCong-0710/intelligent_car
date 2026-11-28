@@ -10,7 +10,7 @@ def parse(s):
   k,v=part.split('=',1)
   try:out[k]=int(v)
   except ValueError:out[k]=v
- return out if out.get('fw') in ('BOX_ALIGN_PD_V1','BOX_ALIGN_PD_V2','BOX_ALIGN_PD_V3','BOX_ALIGN_PD_V4','BOX_ALIGN_PD_V5','BOX_ALIGN_PD_V6','BOX_ALIGN_PD_V7','BOX_ALIGN_PD_V8','BOX_ALIGN_PD_V9','BOX_ALIGN_PD_V10','BOX_APPROACH_V1','BOX_APPROACH_V2','BOX_SCAN4_V3','BOX_CENTER_V4','BOX_FINE20_V5','BOX_REV25_V6','BOX_DIAG_V7','BOX_TRANSIT30_V8','BOX_SINGLEPASS_V9','BOX_EDGES3_V10','BOX_KP04_V11','BOX_KP02_V12','BOX_PD5_V13','BOX_ASSIST_V14','BOX_PDASSIST3_V15','BOX_OLDLCD_V16','BOX_OLDLCD_V17','BOX_OLDLCD_V18','BOX_FOUR_V19','BOX_FOUR450_V20','BOX_EXIT10_V21','BOX_EXIT30_V22') else None
+ return out if out.get('fw') in ('BOX_ALIGN_PD_V1','BOX_ALIGN_PD_V2','BOX_ALIGN_PD_V3','BOX_ALIGN_PD_V4','BOX_ALIGN_PD_V5','BOX_ALIGN_PD_V6','BOX_ALIGN_PD_V7','BOX_ALIGN_PD_V8','BOX_ALIGN_PD_V9','BOX_ALIGN_PD_V10','BOX_APPROACH_V1','BOX_APPROACH_V2','BOX_SCAN4_V3','BOX_CENTER_V4','BOX_FINE20_V5','BOX_REV25_V6','BOX_DIAG_V7','BOX_TRANSIT30_V8','BOX_SINGLEPASS_V9','BOX_EDGES3_V10','BOX_KP04_V11','BOX_KP02_V12','BOX_PD5_V13','BOX_ASSIST_V14','BOX_PDASSIST3_V15','BOX_OLDLCD_V16','BOX_OLDLCD_V17','BOX_OLDLCD_V18','BOX_FOUR_V19','BOX_FOUR450_V20','BOX_EXIT10_V21','BOX_EXIT30_V22','BOX_SMALL2_V25','BOX_SMALL2LCD_V26','BOX_SMALLNOFINE_V27','BOX_REARSCAN_V28','BOX_FINE10_OUT24_V29') else None
 
 def main():
  import serial
@@ -21,7 +21,7 @@ def main():
  conn=serial.Serial(port=None,baudrate=115200,timeout=.2);conn.port=opt.port;conn.dtr=False;conn.rts=False
  pending=bytearray();confirmed=False;seen={};previous=None;last_print=0;last_rx=time.monotonic();warned=False
  try:
-  conn.open();print(f'PORT_OPEN {opt.port}; awaiting BOX_EXIT30_V22 (accepting previous versions for identification); log={path}',flush=True)
+  conn.open();print(f'PORT_OPEN {opt.port}; awaiting BOX_FINE10_OUT24_V29 (accepting previous versions for identification); log={path}',flush=True)
   with path.open('x',encoding='utf-8') as log,path.with_suffix('.jsonl').open('x',encoding='utf-8') as js,path.with_suffix('.bin').open('xb') as raw:
    while True:
     data=conn.read(1024)

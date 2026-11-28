@@ -1,0 +1,211 @@
+{
+  "definition": "M straight phases, both PWM nonzero; segment cumulative count difference; sample-weighted, not independent runs",
+  "by_fw": {
+    "BOX_EXIT30_V22": {
+      "n": 1496,
+      "median": 5,
+      "p75": 13,
+      "p90": 31,
+      "p95": 71,
+      "max": 444,
+      "le5_pct": 54.3,
+      "le10_pct": 70.6,
+      "le20_pct": 85.1,
+      "le30_pct": 89.9
+    },
+    "BOX_PDASSIST3_V15": {
+      "n": 1287,
+      "median": 4,
+      "p75": 10,
+      "p90": 24,
+      "p95": 39,
+      "max": 205,
+      "le5_pct": 57.7,
+      "le10_pct": 75.8,
+      "le20_pct": 87.5,
+      "le30_pct": 92.4
+    },
+    "BOX_ASSIST_V14": {
+      "n": 497,
+      "median": 5,
+      "p75": 12,
+      "p90": 29,
+      "p95": 48,
+      "max": 81,
+      "le5_pct": 52.9,
+      "le10_pct": 69.8,
+      "le20_pct": 85.1,
+      "le30_pct": 90.9
+    },
+    "BOX_PD5_V13": {
+      "n": 101,
+      "median": 6,
+      "p75": 16,
+      "p90": 43,
+      "p95": 47,
+      "max": 81,
+      "le5_pct": 48.5,
+      "le10_pct": 63.4,
+      "le20_pct": 79.2,
+      "le30_pct": 85.1
+    },
+    "BOX_KP02_V12": {
+      "n": 104,
+      "median": 7,
+      "p75": 21,
+      "p90": 46,
+      "p95": 55,
+      "max": 109,
+      "le5_pct": 42.3,
+      "le10_pct": 58.7,
+      "le20_pct": 74.0,
+      "le30_pct": 82.7
+    },
+    "BOX_KP04_V11": {
+      "n": 121,
+      "median": 7,
+      "p75": 27,
+      "p90": 51,
+      "p95": 104,
+      "max": 327,
+      "le5_pct": 43.8,
+      "le10_pct": 61.2,
+      "le20_pct": 71.9,
+      "le30_pct": 80.2
+    },
+    "BOX_EDGES3_V10": {
+      "n": 1675,
+      "median": 6,
+      "p75": 6,
+      "p90": 6,
+      "p95": 8,
+      "max": 66,
+      "le5_pct": 16.2,
+      "le10_pct": 96.1,
+      "le20_pct": 98.6,
+      "le30_pct": 99.8
+    },
+    "BOX_SINGLEPASS_V9": {
+      "n": 633,
+      "median": 5,
+      "p75": 11,
+      "p90": 22,
+      "p95": 36,
+      "max": 173,
+      "le5_pct": 52.0,
+      "le10_pct": 71.6,
+      "le20_pct": 88.6,
+      "le30_pct": 93.2
+    },
+    "BOX_TRANSIT30_V8": {
+      "n": 750,
+      "median": 16,
+      "p75": 31,
+      "p90": 31,
+      "p95": 31,
+      "max": 160,
+      "le5_pct": 28.8,
+      "le10_pct": 44.3,
+      "le20_pct": 50.8,
+      "le30_pct": 52.8
+    },
+    "BOX_DIAG_V7": {
+      "n": 1204,
+      "median": 12,
+      "p75": 17,
+      "p90": 17,
+      "p95": 17,
+      "max": 181,
+      "le5_pct": 6.3,
+      "le10_pct": 33.5,
+      "le20_pct": 96.6,
+      "le30_pct": 97.3
+    },
+    "BOX_REV25_V6": {
+      "n": 372,
+      "median": 6,
+      "p75": 13,
+      "p90": 21,
+      "p95": 32,
+      "max": 104,
+      "le5_pct": 49.7,
+      "le10_pct": 66.7,
+      "le20_pct": 89.5,
+      "le30_pct": 94.4
+    },
+    "BOX_FINE20_V5": {
+      "n": 75,
+      "median": 4,
+      "p75": 12,
+      "p90": 19,
+      "p95": 45,
+      "max": 195,
+      "le5_pct": 56.0,
+      "le10_pct": 70.7,
+      "le20_pct": 89.3,
+      "le30_pct": 90.7
+    },
+    "BOX_SCAN4_V3": {
+      "n": 30,
+      "median": 4,
+      "p75": 9,
+      "p90": 20,
+      "p95": 24,
+      "max": 37,
+      "le5_pct": 56.7,
+      "le10_pct": 80.0,
+      "le20_pct": 90.0,
+      "le30_pct": 96.7
+    },
+    "BOX_APPROACH_V2": {
+      "n": 122,
+      "median": 6,
+      "p75": 15,
+      "p90": 29,
+      "p95": 37,
+      "max": 57,
+      "le5_pct": 46.7,
+      "le10_pct": 65.6,
+      "le20_pct": 83.6,
+      "le30_pct": 89.3
+    }
+  },
+  "recent_files": {
+    "box_stage1_20261127_154721.jsonl": {
+      "n": 11,
+      "median": 1,
+      "p75": 7,
+      "p90": 8,
+      "p95": 8,
+      "max": 9,
+      "le5_pct": 63.6,
+      "le10_pct": 100.0,
+      "le20_pct": 100.0,
+      "le30_pct": 100.0
+    },
+    "box_stage1_20261127_151156.jsonl": {
+      "n": 1485,
+      "median": 5,
+      "p75": 13,
+      "p90": 31,
+      "p95": 71,
+      "max": 444,
+      "le5_pct": 54.2,
+      "le10_pct": 70.4,
+      "le20_pct": 85.0,
+      "le30_pct": 89.8
+    },
+    "box_stage1_20261127_105925.jsonl": {
+      "n": 1287,
+      "median": 4,
+      "p75": 10,
+      "p90": 24,
+      "p95": 39,
+      "max": 205,
+      "le5_pct": 57.7,
+      "le10_pct": 75.8,
+      "le20_pct": 87.5,
+      "le30_pct": 92.4
+    }
+  }
+}

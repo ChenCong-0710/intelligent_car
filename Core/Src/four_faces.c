@@ -10,11 +10,18 @@ void four_faces_fail(FourFaces *t,BoxCenter *b,const char *error){
  t->phase=FF_FAILED;t->error=error;t->command=FF_CMD_NONE;
  b->command=BC_CMD_NONE;b->laser=b->buzzer=false;
 }
+/* Bind every face's boundary count directly to completed laser shots. */
+static void start_current_face(FourFaces *t,BoxCenter *b,uint32_t now,uint32_t seq){
+ t->face_number=(uint8_t)(g_laser_shots+1U);
+ stage(t,FF_FACE,now);box_center_start(b,now,seq);b->side_left=t->side_left;
+ bool narrow=t->face_number==2U||t->face_number==4U;
+ b->crossings_required=narrow?2U:3U;b->fine_enabled=!narrow;b->side_scan.enabled=narrow;
+}
 void four_faces_start(FourFaces *t,BoxCenter *b,bool left,uint32_t now,uint32_t seq){
  memset(t,0,sizeof(*t));g_laser_shots=0;g_corner_progress=0;
  t->side_left=left;t->inner_wheel=left?0U:1U;t->outer_wheel=1U-t->inner_wheel;
- t->face_number=1;t->error="OK";t->last_seq=seq;
- stage(t,FF_FACE,now);box_center_start(b,now,seq);b->side_left=left;
+ t->error="OK";t->last_seq=seq;
+ start_current_face(t,b,now,seq);
 }
 static void record_face(FourFaces *t,const BoxCenter *b){
  FourFaceResult *r=&t->results[g_laser_shots];
@@ -85,7 +92,7 @@ void four_faces_step(FourFaces *t,BoxCenter *b,uint32_t now,uint32_t seq,
  }
  if(t->phase==FF_ACQUIRE_BRAKE){
   if(!busy&&done){
-   stage(t,FF_FACE,now);box_center_start(b,now,seq);b->side_left=t->side_left;
+   start_current_face(t,b,now,seq);
    /* The new face already supplied two fresh side echoes before braking. */
    b->reference_mm=t->new_reference;b->reference_hits=2;b->reference_sum=t->reference_sum;
   }
@@ -95,7 +102,7 @@ void four_faces_step(FourFaces *t,BoxCenter *b,uint32_t now,uint32_t seq,
  bool good=valid&&mm>=40U&&mm<=4000U;
  bool outside=!good||mm>300U;
  if(t->phase==FF_EXIT){
-  /* After entering the current face, continue forward until thirty consecutive
+  /* After entering the current face, continue forward until twenty-four consecutive
      completed60ms transactions indicate outside. There is NO pulse clearance. */
   if(!t->exit_inside){
    bool inside=good&&!outside&&abs((int)mm-(int)b->reference_mm)<=30;

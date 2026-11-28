@@ -9,6 +9,8 @@
 #define TIM_CR1_CEN 1U
 #define SET_BIT(r,b) ((r)|=(b))
 #define ALIGN_SCAN 1
+#define BC_SIDE_SCAN 14
+struct {int phase;struct {unsigned triggers;uint32_t since;} side_scan;} g_box_center;
 struct Timer {uint32_t SR,CCR2,CNT,CR1;} echo_timer,trigger_timer;
 #define TIM8 (&echo_timer)
 #define TIM17 (&trigger_timer)
@@ -34,11 +36,15 @@ static void ultrasound(uint32_t now) {
         us_pending=false;us_valid=false;us_mm=0;us_pulse_us=0;++us_seq;us_echo_ms=now;
         us_result_trigger_ms=us_trigger_ms;us_result_period_ms=us_period_ms;us_reason="TIMEOUT";
     }
+    bool side_scan=g_box_center.phase==BC_SIDE_SCAN;
     bool scan=g_align.phase==ALIGN_SCAN;
-    bool due=scan?(g_align.scan_trigger_count<4U &&
+    bool due=side_scan?(g_box_center.side_scan.triggers<4U&&
+        now-g_box_center.side_scan.since>=60U*(1U+g_box_center.side_scan.triggers)):
+        scan?(g_align.scan_trigger_count<4U &&
         now-g_align.since>=60U*(1U+g_align.scan_trigger_count)):true;
     if(due && now-us_trigger_ms>=60U) {
         if(scan)++g_align.scan_trigger_count;
+        if(side_scan)++g_box_center.side_scan.triggers;
         us_period_ms=now-us_trigger_ms;us_trigger_ms=now;us_pending=true;
         TIM8->SR=~(TIM_SR_CC2IF|TIM_SR_CC2OF);
         TIM17->CNT=0;SET_BIT(TIM17->CR1,TIM_CR1_CEN);
@@ -61,6 +67,10 @@ int main(void){
  for(unsigned t=360;t<=540;t+=60){TIM8->SR=0;ultrasound(t);assert(us_trigger_ms==t);}
  assert(g_align.scan_trigger_count==4);TIM8->SR=0;ultrasound(600);assert(us_trigger_ms==540);
  g_align.phase=0;TIM8->SR=0;ultrasound(600);assert(us_trigger_ms==600);
+ us_pending=false;us_trigger_ms=600;g_box_center.phase=BC_SIDE_SCAN;g_box_center.side_scan.since=600;
+ for(unsigned t=660;t<=840;t+=60){TIM8->SR=0;ultrasound(t);assert(us_trigger_ms==t);}
+ assert(g_box_center.side_scan.triggers==4);TIM8->SR=0;ultrasound(900);assert(us_trigger_ms==840);
+ g_box_center.phase=0;
  us_pending=false;us_trigger_ms=UINT32_MAX-29U;TIM8->SR=0;ultrasound(30);
  assert(us_trigger_ms==30&&us_period_ms==60);
  puts("PASS: 60ms scheduling, immutable completed echo across next trigger, timeout/overcapture results, four-slot scan and tick wrap");

@@ -10,7 +10,7 @@ static void commands(FourFaces *t,BoxCenter *b,CarMotion *c){
  if(cmd!=FF_CMD_NONE){
   if(cmd==FF_CMD_FORWARD)ok=t->phase==FF_EXIT?car_motion_start_front_traverse(c):car_motion_start_edge_scan(c,1);
   else if(cmd==FF_CMD_STOP){
-   if(t->phase==FF_EXIT_BRAKE){assert(t->exit_samples==30&&c->motor.continuous);++clear_calls;}
+   if(t->phase==FF_EXIT_BRAKE){assert(t->exit_samples==24&&c->motor.continuous);++clear_calls;}
    ok=car_motion_finish_straight(c);
   }else if(cmd==FF_CMD_INNER){
    assert(t->inner_wheel==(t->side_left?0U:1U));
@@ -29,8 +29,12 @@ static void commands(FourFaces *t,BoxCenter *b,CarMotion *c){
  else if(bc==BC_CMD_FORWARD||bc==BC_CMD_REVERSE)ok=car_motion_start_edge_scan(c,bc==BC_CMD_FORWARD?1:-1);
  else if(bc==BC_CMD_STOP)ok=car_motion_finish_straight(c);
  else if(bc==BC_CMD_CENTER)ok=car_motion_start_center_back(c,b->remaining);
- else if(bc==BC_CMD_FINE_RIGHT){ok=car_motion_start_pivot(c,1,b->fine_degrees>0?1:-1,fabsf(b->fine_degrees)*.5f);++fine_calls;}
- else if(bc==BC_CMD_FINE_LEFT){ok=car_motion_start_pivot(c,0,b->fine_degrees>0?-1:1,fabsf(b->fine_degrees)*.5f);++fine_calls;}
+ else if(bc==BC_CMD_FINE_RIGHT){assert((t->face_number%2==1U)||
+  (b->side_scan.finished&&b->visits[0]==2&&b->visits[1]==0));
+  if(b->fine_after_rear&&b->fine_completed==0)assert((bc==BC_CMD_FINE_LEFT)==b->side_left);ok=car_motion_start_pivot(c,1,b->fine_degrees>0?1:-1,fabsf(b->fine_degrees)*.5f);++fine_calls;}
+ else if(bc==BC_CMD_FINE_LEFT){assert((t->face_number%2==1U)||
+  (b->side_scan.finished&&b->visits[0]==2&&b->visits[1]==0));
+  if(b->fine_after_rear&&b->fine_completed==0)assert((bc==BC_CMD_FINE_LEFT)==b->side_left);ok=car_motion_start_pivot(c,0,b->fine_degrees>0?-1:1,fabsf(b->fine_degrees)*.5f);++fine_calls;}
  assert(ok);b->command=BC_CMD_NONE;
 }
 static void run(bool left,bool invalid_far,float slope){
@@ -54,13 +58,28 @@ static void run(bool left,bool invalid_far,float slope){
   car_motion_tick_1ms(&c,raw[0],raw[1],true);assert(c.motor.error==DM_OK);
   if(now%60==0){
    ++seq;trig=now;bool outside=physical<0||physical>width;
-   valid=!outside||!invalid_far;mm=outside?800:(uint16_t)lroundf(100+slope*physical*CAR_MM_PER_EDGE);
+   if(b.phase==BC_SIDE_SCAN){
+    float theta=(90.f-5.f*b.side_scan.index)*.01745329252f;
+    float denom=sinf(theta)-slope*cosf(theta);
+    float distance=denom>0?100.f/denom:4000.f;
+    float along=physical+distance*cosf(theta)/CAR_MM_PER_EDGE;
+    outside=distance>250.f||along>width;
+    mm=outside?800:(uint16_t)lroundf(distance);
+    assert(!c.motor.running&&b.visits[0]==2&&b.visits[1]==0);
+   }else mm=outside?800:(uint16_t)lroundf(100+slope*physical*CAR_MM_PER_EDGE);
+   valid=!outside||!invalid_far;
   }
   if(now%5)continue;
   int32_t total[2]={c.motor.wheel[0].total,c.motor.wheel[1].total};
   FourFacesPhase before=t.phase;unsigned before_shots=g_laser_shots;
   four_faces_step(&t,&b,now,seq,trig,trig,valid,mm,total,c.motor.running,car_motion_done(&c),false,false);
   assert(t.phase!=FF_FAILED&&t.phase!=FF_CANCELLED&&g_laser_shots<=4&&!b.buzzer);
+  if(t.phase==FF_FACE){
+   assert(t.face_number==g_laser_shots+1U);
+   assert(b.fine_enabled==(t.face_number%2==1U));
+   assert(b.side_scan.enabled==(t.face_number%2==0U));
+   assert(b.crossings_required==((g_laser_shots==1U||g_laser_shots==3U)?2U:3U));
+  }
   if(t.phase==FF_ACQUIRE&&before!=FF_ACQUIRE){
    /* Model the next side after the turn; this tests task sequencing,
       not the physical geometry of the corner or measured yaw accuracy. */
@@ -79,7 +98,10 @@ static void run(bool left,bool invalid_far,float slope){
   commands(&t,&b,&c);
   if(b.laser&&!prev_laser){
    assert(t.phase==FF_FACE&&b.phase==BC_FIRE&&!c.motor.running&&car_motion_done(&c));
-   assert(b.visits[0]==3&&b.visits[1]==3);fire_start=now;++shots_on;
+   assert(b.crossings_required==(t.face_number%2?3U:2U));
+   assert(b.visits[0]==b.crossings_required&&b.visits[1]==b.crossings_required);
+   if(t.face_number%2==0U)assert(b.side_scan.finished&&b.fine_after_rear);
+   fire_start=now;++shots_on;
   }
   if(t.phase!=FF_FACE)assert(!b.laser);
   prev_laser=b.laser;
@@ -89,7 +111,7 @@ static void run(bool left,bool invalid_far,float slope){
    if(slope!=0)assert(fine_calls>0);
    for(unsigned k=1;k<=100;++k)four_faces_step(&t,&b,now+k,seq,trig,trig,true,100,total,false,true,false,false);
    assert(g_laser_shots==4&&t.phase==FF_DONE&&t.command==FF_CMD_NONE);
-   printf("PASS four sides: %s, four complete10s shots, three thirty-sample exits, calibrated inner/outer45, fine calls=%u, no fifth action\n",left?"LEFT":"RIGHT",fine_calls);
+   printf("PASS four sides: %s, large faces3/small faces2 crossings each edge, four complete10s shots, three twenty-four-sample exits, calibrated inner/outer45, fine calls=%u, no fifth action\n",left?"LEFT":"RIGHT",fine_calls);
    return;
   }
  }
@@ -105,7 +127,7 @@ static void fresh_exit_check(void){
  assert(!t.exit_inside&&t.exit_samples==0);
  for(unsigned k=0;k<2;++k){now+=60;four_faces_step(&t,&b,now,++seq,now-1,now,true,100,total,true,false,false,false);}
  assert(t.exit_inside);
- for(unsigned k=1;k<=29;++k){
+ for(unsigned k=1;k<=23;++k){
   now+=60;four_faces_step(&t,&b,now,++seq,now-1,now,true,301,total,true,false,false,false);
   assert(t.phase==FF_EXIT&&t.exit_samples==k&&t.command==FF_CMD_NONE);
   four_faces_step(&t,&b,now+1,seq,now-1,now,true,301,total,true,false,false,false);
@@ -116,13 +138,13 @@ static void fresh_exit_check(void){
  for(unsigned k=0;k<4;++k){now+=60;four_faces_step(&t,&b,now,++seq,now-1,now,true,800,total,true,false,false,false);}
  now+=60;seq+=2;four_faces_step(&t,&b,now,seq,now-1,now,true,800,total,true,false,false,false);
  assert(t.exit_samples==1); /* A missing transaction breaks continuity. */
- for(unsigned k=2;k<=30;++k){
+ for(unsigned k=2;k<=24;++k){
   now+=60;total[0]+=10;total[1]+=10;
-  four_faces_step(&t,&b,now,++seq,now-1,now,k!=30,k==30?0:800,total,true,false,false,false);
-  if(k<30)assert(t.phase==FF_EXIT&&t.exit_samples==k&&t.command==FF_CMD_NONE);
+  four_faces_step(&t,&b,now,++seq,now-1,now,k!=24,k==24?0:800,total,true,false,false,false);
+  if(k<24)assert(t.phase==FF_EXIT&&t.exit_samples==k&&t.command==FF_CMD_NONE);
  }
- assert(t.phase==FF_EXIT_BRAKE&&t.exit_samples==30&&t.command==FF_CMD_STOP);
- assert(g_corner_progress==290); /* Count is diagnostic only, not450. */
+ assert(t.phase==FF_EXIT_BRAKE&&t.exit_samples==24&&t.command==FF_CMD_STOP);
+ assert(g_corner_progress==230); /* Count is diagnostic only, not450. */
  t.command=FF_CMD_NONE;
  now+=5;four_faces_step(&t,&b,now,seq,now-1,now,true,800,total,true,false,false,false);
  assert(t.phase==FF_EXIT_BRAKE);

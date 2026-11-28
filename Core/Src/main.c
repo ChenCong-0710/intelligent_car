@@ -268,11 +268,15 @@ static void ultrasound(uint32_t now) {
         us_pending=false;us_valid=false;us_mm=0;us_pulse_us=0;++us_seq;us_echo_ms=now;
         us_result_trigger_ms=us_trigger_ms;us_result_period_ms=us_period_ms;us_reason="TIMEOUT";
     }
+    bool side_scan=g_box_center.phase==BC_SIDE_SCAN;
     bool scan=g_align.phase==ALIGN_SCAN;
-    bool due=scan?(g_align.scan_trigger_count<4U &&
+    bool due=side_scan?(g_box_center.side_scan.triggers<4U&&
+        now-g_box_center.side_scan.since>=60U*(1U+g_box_center.side_scan.triggers)):
+        scan?(g_align.scan_trigger_count<4U &&
         now-g_align.since>=60U*(1U+g_align.scan_trigger_count)):true;
     if(due && now-us_trigger_ms>=60U) {
         if(scan)++g_align.scan_trigger_count;
+        if(side_scan)++g_box_center.side_scan.triggers;
         us_period_ms=now-us_trigger_ms;us_trigger_ms=now;us_pending=true;
         TIM8->SR=~(TIM_SR_CC2IF|TIM_SR_CC2OF);
         TIM17->CNT=0;SET_BIT(TIM17->CR1,TIM_CR1_CEN);
@@ -458,7 +462,7 @@ static void four_faces_telemetry(uint32_t now){
  if(now-last<1000U&&previous==t->phase)return;
  last=now;previous=t->phase;char line[384];
  int n=snprintf(line,sizeof(line),
- "F,fw=BOX_EXIT30_V22,ms=%lu,phase=%s,face=%u,shots=%u,side=%s,clearL=%ld,clearR=%ld,clear=%ld,outN=%u,need=%u,inner=%u,outer=%u,turn10=%d,Ldeg10=%ld,Rdeg10=%ld,ref=%u,error=%s\r\n",
+ "F,fw=BOX_FINE10_OUT24_V29,ms=%lu,phase=%s,face=%u,shots=%u,side=%s,clearL=%ld,clearR=%ld,clear=%ld,outN=%u,need=%u,inner=%u,outer=%u,turn10=%d,Ldeg10=%ld,Rdeg10=%ld,ref=%u,error=%s\r\n",
  (unsigned long)now,four_faces_phase_name(t->phase),t->face_number,g_laser_shots,t->side_left?"LEFT":"RIGHT",
  (long)t->clearance_counts[0],(long)t->clearance_counts[1],(long)t->clearance_mean,t->exit_samples,FOUR_EXIT_SAMPLES,t->inner_wheel,t->outer_wheel,
  t->side_left?900:-900,x10(t->corner_wheel_degrees[0]),x10(t->corner_wheel_degrees[1]),t->new_reference,t->error);
@@ -482,16 +486,18 @@ static void sonar_telemetry(uint32_t now,const MotorView *v){
  if(!us_seq||us_seq==previous)return;
  previous=us_seq;const char *wait="IDLE";BoxCenter *b=&g_box_center;
  unsigned hits=b->confirm_hits;uint16_t reference=b->reference_mm;
- if(g_four_faces.phase==FF_EXIT){wait=g_four_faces.exit_inside?"OUT30":"IN";hits=g_four_faces.hits;}
+ if(g_four_faces.phase==FF_EXIT){wait=g_four_faces.exit_inside?"OUT24":"IN";hits=g_four_faces.hits;}
  else if(g_four_faces.phase==FF_ACQUIRE){wait="NEW_FACE";hits=g_four_faces.hits;reference=0;}
  else if(g_four_faces.phase==FF_EXIT_BRAKE)wait="BRAKE";
  else if(g_four_faces.phase==FF_ACQUIRE_BRAKE)wait="BRAKE";
  else if(b->phase==BC_BACK_SEARCH||b->phase==BC_EDGE_MOVE||b->phase==BC_TRANSIT)
   wait=!b->reference_mm?"REF":(b->phase==BC_TRANSIT&&!b->transit_inside)?"IN":b->expect_outside?"OUT":"IN";
  else if(b->phase==BC_BRAKE)wait="BRAKE";
+ else if(g_box_center.phase==BC_SIDE_SCAN)wait="SIDE_SCAN";
+ else if(g_box_center.phase==BC_SIDE_RETURN)wait="SIDE_RETURN";
  else if(g_align.phase==ALIGN_SCAN)wait="SCAN";
  char line[448];int n=snprintf(line,sizeof(line),
- "U,fw=BOX_EXIT30_V22,seq=%lu,ms=%lu,trig=%lu,dt=%lu,echoUs=%u,mm=%u,ok=%u,why=%s,wait=%s,hits=%u,ref=%u,pos=%ld,brL=%u,brR=%u,pL=%ld,pR=%ld,uL=%ld,uR=%ld,kpL=%ld,kpR=%ld,kdL=%ld,kdR=%ld,boostL=%u,boostR=%u,lowL=%lu,lowR=%lu,drop=%lu\r\n",
+ "U,fw=BOX_FINE10_OUT24_V29,seq=%lu,ms=%lu,trig=%lu,dt=%lu,echoUs=%u,mm=%u,ok=%u,why=%s,wait=%s,hits=%u,ref=%u,pos=%ld,brL=%u,brR=%u,pL=%ld,pR=%ld,uL=%ld,uR=%ld,kpL=%ld,kpR=%ld,kdL=%ld,kdR=%ld,boostL=%u,boostR=%u,lowL=%lu,lowR=%lu,drop=%lu\r\n",
  (unsigned long)us_seq,(unsigned long)now,(unsigned long)us_result_trigger_ms,(unsigned long)us_result_period_ms,
  us_pulse_us,us_mm,us_valid,us_reason,wait,hits,reference,(long)((g_four_faces.phase==FF_EXIT||g_four_faces.phase==FF_EXIT_BRAKE)?g_corner_progress:g_box_position),
  v->status.brake[0],v->status.brake[1],lroundf(v->status.speed[0]),lroundf(v->status.speed[1]),
@@ -505,13 +511,13 @@ static void center_telemetry(uint32_t now){
  static uint32_t last,id;static BoxCenterPhase previous=BC_IDLE;
  BoxCenter *b=&g_box_center;if(b->phase==BC_IDLE)return;
  if(now-last<500U&&previous==b->phase)return;
- last=now;previous=b->phase;char line[640];
+ last=now;previous=b->phase;char line[768];
  int n=snprintf(line,sizeof(line),
- "C,fw=BOX_EXIT30_V22,id=%lu,ms=%lu,phase=%s,pos=%ld,refMm=%u,refHits=%u,edge=%u,visitsRear=%u,visitsFront=%u,armed=%u,rearMin=%ld,rearMax=%ld,frontMin=%ld,frontMax=%ld,target=%ld,dir=%d,laser=%u,buzzer=%u,error=%s,fine10=%ld,fineRms10=%ld,fineN=%u,fineDone=%u,fineWarn=%u,fineL10=%ld,fineR10=%ld,r0=%ld,r1=%ld,r2=%ld,r3=%ld,f0=%ld,f1=%ld,f2=%ld,f3=%ld\r\n",
+ "C,fw=BOX_FINE10_OUT24_V29,id=%lu,ms=%lu,phase=%s,pos=%ld,refMm=%u,refHits=%u,edge=%u,visitsRear=%u,visitsFront=%u,edgeNeed=%u,face=%u,shots=%u,armed=%u,rearMin=%ld,rearMax=%ld,frontMin=%ld,frontMax=%ld,target=%ld,dir=%d,laser=%u,buzzer=%u,error=%s,fine10=%ld,fineRms10=%ld,fineN=%u,fineDone=%u,fineWarn=%u,fineSkip=%u,fineL10=%ld,fineR10=%ld,r0=%ld,r1=%ld,r2=%ld,r3=%ld,f0=%ld,f1=%ld,f2=%ld,f3=%ld,sideIdx=%u,sideN=%u,sideUs=%u,sideOut=%u,sideLimit=%u,sideFit=%u\r\n",
  (unsigned long)id++,(unsigned long)now,box_center_phase_name(b->phase),(long)b->position,b->reference_mm,b->reference_hits,b->edge,
- b->visits[0],b->visits[1],b->transit_inside,(long)b->minimum[0],(long)b->maximum[0],(long)b->minimum[1],(long)b->maximum[1],(long)b->target,b->direction,b->laser,b->buzzer,b->error,x10(b->fine_degrees),x10(b->fine_rms),b->fit_n,b->fine_done,b->fine_warning,x10(b->fine_wheel[0]),x10(b->fine_wheel[1]),
+ b->visits[0],b->visits[1],b->crossings_required,g_four_faces.face_number,g_laser_shots,b->transit_inside,(long)b->minimum[0],(long)b->maximum[0],(long)b->minimum[1],(long)b->maximum[1],(long)b->target,b->direction,b->laser,b->buzzer,b->error,x10(b->fine_degrees),x10(b->fine_rms),b->fit_n,b->fine_done,b->fine_warning,b->fine_skipped,x10(b->fine_wheel[0]),x10(b->fine_wheel[1]),
  (long)b->crossings[0][0],(long)b->crossings[0][1],(long)b->crossings[0][2],(long)b->crossings[0][3],
- (long)b->crossings[1][0],(long)b->crossings[1][1],(long)b->crossings[1][2],(long)b->crossings[1][3]);
+ (long)b->crossings[1][0],(long)b->crossings[1][1],(long)b->crossings[1][2],(long)b->crossings[1][3],b->side_scan.index,b->side_scan.points,b->side_scan.servo_us,b->side_scan.outside,b->side_scan.limit,b->side_scan.fit_ok);
  if(n>0&&(size_t)n<sizeof(line))bt_queue(line,(size_t)n);else ++bt_drop;
 }
 static void telemetry(uint32_t now,const MotorView *v){
@@ -520,16 +526,16 @@ static void telemetry(uint32_t now,const MotorView *v){
  /* Log every accepted face sample, not only the 200ms status snapshot. */
  while(sent_points<g_align.line_n){
   unsigned i=sent_points++;char sample[128];
-  int n=snprintf(sample,sizeof(sample),"L,fw=BOX_EXIT30_V22,i=%u,x10=%ld,range10=%ld\r\n",i,x10(g_align.line_x[i]),x10(g_align.line_y[i]));
+  int n=snprintf(sample,sizeof(sample),"L,fw=BOX_FINE10_OUT24_V29,i=%u,x10=%ld,range10=%ld\r\n",i,x10(g_align.line_x[i]),x10(g_align.line_y[i]));
   if(n>0&&(size_t)n<sizeof(sample))bt_queue(sample,(size_t)n);else ++bt_drop;
  }
  static uint32_t last,seq;static AlignPhase previous=(AlignPhase)255;char line[1024];
  if(now-last<200&&g_align.phase==previous)return;
  last=now;previous=g_align.phase;
  int n=snprintf(line,sizeof(line),
- "M,fw=BOX_EXIT30_V22,seq=%lu,ms=%lu,phase=%s,action=%s,error=%s,motorError=%s,scan=%u,servo=%u,range=%u,valid=%u,side=%s,normal10=%ld,target10=%ld,actual10=%ld,wheelLdeg10=%ld,wheelRdeg10=%ld,edgeL=%u,edgeR=%u,edgeLmm=%u,edgeRmm=%u,edgeNormal10=%ld,centreY10=%ld,moveWheel=%u,dir=%d,refL10=%ld,refR10=%ld,pulseL=%ld,pulseR=%ld,pwmL1000=%ld,pwmR1000=%ld,countL=%lu,countR=%lu,goalL=%ld,goalR=%ld,fitSupport=%u,fitTotal=%u,fitRms10=%ld,entry=%lu,entryInferred=%u,exit=%lu,lineN=%u,lineSupport=%u,lineRms10=%ld,fine10=%ld,fineNormal10=%ld,lineWarn=%u,front=%u,planMm=%u,stopMm=%u,stopHits=%u,remain=%ld,approachPlan=%u,echoLost=%u,txdrop=%lu,irqUs=%lu\r\n",
+ "M,fw=BOX_FINE10_OUT24_V29,seq=%lu,ms=%lu,phase=%s,action=%s,error=%s,motorError=%s,scan=%u,servo=%u,range=%u,valid=%u,side=%s,normal10=%ld,target10=%ld,actual10=%ld,wheelLdeg10=%ld,wheelRdeg10=%ld,edgeL=%u,edgeR=%u,edgeLmm=%u,edgeRmm=%u,edgeNormal10=%ld,centreY10=%ld,moveWheel=%u,dir=%d,refL10=%ld,refR10=%ld,pulseL=%ld,pulseR=%ld,pwmL1000=%ld,pwmR1000=%ld,countL=%lu,countR=%lu,goalL=%ld,goalR=%ld,fitSupport=%u,fitTotal=%u,fitRms10=%ld,entry=%lu,entryInferred=%u,exit=%lu,lineN=%u,lineSupport=%u,lineRms10=%ld,fine10=%ld,fineNormal10=%ld,lineWarn=%u,front=%u,planMm=%u,stopMm=%u,stopHits=%u,remain=%ld,approachPlan=%u,echoLost=%u,txdrop=%lu,irqUs=%lu\r\n",
  (unsigned long)seq++,(unsigned long)now,task_phase(),stage_action(),task_error(),dual_motor_error_name(v->status.error),
- g_align.index,g_align.servo_us,us_mm,us_valid,g_align.side_left?"LEFT":"RIGHT",x10(g_align.normal_deg),x10(g_align.target_deg),x10(g_align.actual_deg),x10(g_align.wheel_degrees[0]),x10(g_align.wheel_degrees[1]),
+ g_align.index,box_center_servo_us(&g_box_center,g_align.servo_us),us_mm,us_valid,g_align.side_left?"LEFT":"RIGHT",x10(g_align.normal_deg),x10(g_align.target_deg),x10(g_align.actual_deg),x10(g_align.wheel_degrees[0]),x10(g_align.wheel_degrees[1]),
  g_align.fit_first,g_align.fit_last,g_align.edge_left_mm,g_align.edge_right_mm,x10(g_align.edge_normal_deg),x10(g_align.centre_y_mm),g_align.moving_wheel,g_align.motor_direction,
  x10(v->status.target[0]),x10(v->status.target[1]),lroundf(v->status.speed[0]),lroundf(v->status.speed[1]),lroundf(v->status.duty[0]*1000),lroundf(v->status.duty[1]*1000),
  (unsigned long)v->status.counts[0],(unsigned long)v->status.counts[1],(long)v->status.goal[0],(long)v->status.goal[1],g_align.fit_support,g_align.fit_total,x10(g_align.rms_mm),(unsigned long)g_align.edge_entry,g_align.entry_inferred,(unsigned long)g_align.edge_exit,g_align.line_n,g_align.line_support,x10(g_align.line_rms),x10(g_align.fine_deg),x10(g_align.fine_normal_deg),g_align.line_warning,g_align.approach_range_mm,g_align.approach_plan_mm,g_align.approach_stop_mm,g_align.approach_stop_hits,(long)g_align.approach_remaining_counts,g_align.approach_plan_applied,g_align.approach_echo_lost,(unsigned long)bt_drop,(unsigned long)v->irq_us);
@@ -538,7 +544,7 @@ static void telemetry(uint32_t now,const MotorView *v){
 /* Dump the actual settled scan averages BEFORE fitting; live range telemetry
    may be from a different servo position. One bounded frame, no RX commands. */
 static void scan_telemetry(void){
- char line[384];int n=snprintf(line,sizeof(line),"S,fw=BOX_EXIT30_V22");
+ char line[384];int n=snprintf(line,sizeof(line),"S,fw=BOX_FINE10_OUT24_V29");
  for(unsigned i=0;i<ALIGN_POINTS&&n>0&&(size_t)n<sizeof(line);++i){
   int k=snprintf(line+n,sizeof(line)-(size_t)n,",p%u=%u",i,g_align.range[i]);
   if(k<0||(size_t)k>=sizeof(line)-(size_t)n){++bt_drop;return;}n+=k;
@@ -565,9 +571,10 @@ static void screen_service(uint32_t now,const MotorView *v){
   angle_text(lines[5],"R DEG",g_align.wheel_degrees[1]);
   if(g_box_center.phase!=BC_IDLE){
    snprintf(lines[3],19,"POS %+ld",(long)g_box_position);
-   snprintf(lines[4],19,"REAR %u/3",g_box_center.visits[0]);
+   snprintf(lines[4],19,"REAR %u/%u",g_box_center.visits[0],g_box_center.crossings_required);
    if(g_box_center.phase>=BC_FINE_RIGHT)angle_text(lines[3],"FINE",g_box_center.fine_degrees);
-   snprintf(lines[5],19,"FRONT %u/3",g_box_center.visits[1]);
+   snprintf(lines[5],19,"FRONT %u/%u",g_box_center.visits[1],g_box_center.crossings_required);
+   if(g_box_center.phase==BC_SIDE_SCAN)snprintf(lines[3],19,"SCAN %c%u deg",g_box_center.side_left?'+':'-',90U-5U*g_box_center.side_scan.index);
   }
   if(g_four_faces.phase!=FF_IDLE){
    if(g_four_faces.phase!=FF_FACE){
@@ -654,8 +661,12 @@ int main(void){
    if(g_box_center.phase==BC_FINE_LEFT)g_box_center.fine_wheel[0]=view.wheel_degrees[0];
    if(g_four_faces.phase==FF_INNER)g_four_faces.corner_wheel_degrees[g_four_faces.inner_wheel]=view.wheel_degrees[g_four_faces.inner_wheel];
    if(g_four_faces.phase==FF_OUTER)g_four_faces.corner_wheel_degrees[g_four_faces.outer_wheel]=view.wheel_degrees[g_four_faces.outer_wheel];
+   uint32_t old_side_since=g_box_center.side_scan.since;BoxCenterPhase old_box_phase=g_box_center.phase;
    four_faces_step(&g_four_faces,&g_box_center,now,us_seq,us_result_trigger_ms,us_echo_ms,us_valid,us_mm,
     view.total,view.status.running,view.done,view.status.phase==DM_FAULT,cancel_requested);
+   if(g_box_center.phase==BC_SIDE_SCAN&&(old_box_phase!=BC_SIDE_SCAN||old_side_since!=g_box_center.side_scan.since)){
+    us_pending=false;us_trigger_ms=now;TIM8->SR=~(TIM_SR_CC2IF|TIM_SR_CC2OF);
+   }
    FourFacesCommand corner_command=g_four_faces.command;
    if(corner_command!=FF_CMD_NONE&&!cancel_requested){
     uint32_t saved=__get_PRIMASK();__disable_irq();bool ok=false;
@@ -688,7 +699,7 @@ int main(void){
    HAL_GPIO_WritePin(GPIOC,GPIO_PIN_8,firing?GPIO_PIN_SET:GPIO_PIN_RESET);
    HAL_GPIO_WritePin(GPIOC,GPIO_PIN_9,GPIO_PIN_RESET); /* Buzzer disabled. */
    MotorView trace_view=motor_snapshot();sonar_telemetry(now,&trace_view);
-   TIM2->CCR1=now-g_align.started>=10?g_align.servo_us:0;
+   TIM2->CCR1=now-g_align.started>=10?box_center_servo_us(&g_box_center,g_align.servo_us):0;
    HAL_GPIO_WritePin(GPIOD,GPIO_PIN_8,(g_align.phase==ALIGN_TURN||g_align.phase==ALIGN_TURN_LEFT||g_align.phase==ALIGN_APPROACH||g_align.phase==ALIGN_APPROACH_STOP||g_box_center.phase==BC_BACK_SEARCH||g_box_center.phase==BC_EDGE_MOVE||g_box_center.phase==BC_TRANSIT||g_box_center.phase==BC_CENTER_MOVE||g_box_center.phase==BC_FINE_RIGHT||g_box_center.phase==BC_FINE_LEFT||four_faces_moving(&g_four_faces))?GPIO_PIN_RESET:GPIO_PIN_SET);
   }
   view=motor_snapshot(); /* Starts reset segment counts before status/rendering. */

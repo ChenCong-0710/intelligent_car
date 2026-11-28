@@ -18,6 +18,7 @@ void box_center_fail(BoxCenter *b,const char *reason){
 }
 void box_center_start(BoxCenter *b,uint32_t now,uint32_t sequence){
  memset(b,0,sizeof(*b));b->phase=BC_BACK_SEARCH;b->since=now;b->last_seq=sequence;
+ b->fine_enabled=true;b->crossings_required=3; /* Standalone / large-face default. */
  b->direction=-1;b->expect_outside=true;b->command=BC_CMD_REVERSE;b->error="OK";
  g_box_position=0;
 }
@@ -28,7 +29,7 @@ static void move(BoxCenter *b,uint32_t now,BoxCenterPhase phase,int dir,bool out
 static void crossing(BoxCenter *b,uint32_t now,const int32_t total[2]){
  if(!b->origin_set){b->origin[0]=total[0];b->origin[1]=total[1];b->origin_set=true;position(b,total);}
  unsigned e=b->edge,n=b->visits[e];
- if(n>=3)return;
+ if(n>=b->crossings_required)return;
  int32_t p=b->position;b->crossings[e][n]=p;
  if(!n||p<b->minimum[e])b->minimum[e]=p;
  if(!n||p>b->maximum[e])b->maximum[e]=p;
@@ -57,8 +58,12 @@ static bool fit_fine(BoxCenter *b){
  b->fine_degrees=ok?line.fine_deg:0;b->fine_rms=ok?line.line_rms:0;
  return ok;
 }
+static bool fine_angle_allowed(BoxCenter *b){
+ b->fine_skipped=fabsf(b->fine_degrees)>BOX_FINE_MAX_DEG;
+ return !b->fine_skipped; /* Keep the computed angle; do not clamp it to10. */
+}
 static void return_to_center(BoxCenter *b,uint32_t now){
- /* Midpoint of the two edge estimates, each from three confirmed crossings. */
+ /* Midpoint of the two edge estimates, from the configured number of confirmed crossings. */
  int64_t sum=(int64_t)b->minimum[0]+b->maximum[0]+b->minimum[1]+b->maximum[1];
  b->target=(int32_t)(sum>=0?(sum+2)/4:-((-sum+2)/4));
  b->remaining=b->position-b->target;
@@ -74,7 +79,55 @@ static void finish_fine_and_sample(BoxCenter *b,uint32_t now,const int32_t total
   b->origin[w]=(int32_t)((uint32_t)b->origin[w]+turn_delta);
  }
  b->phase=BC_BRAKE;position(b,total);
- move(b,now,BC_EDGE_MOVE,-1,false); /* Front crossing #2, then forward #3. */
+ if(b->fine_after_rear){
+  b->edge=1;b->transit_inside=false;move(b,now,BC_TRANSIT,1,true);
+ }else move(b,now,BC_EDGE_MOVE,-1,false); /* Front #2, then #3 only on large faces. */
+}
+/* Narrow-face stationary scan: calibrated side90 toward centre0, never outward. */
+static uint16_t side_scan_pulse(const BoxCenter *b){
+ unsigned angle=90U-5U*b->side_scan.index;
+ if(b->side_left)return (uint16_t)(ALIGN_CENTRE_US+(ALIGN_LEFT_US-ALIGN_CENTRE_US)*angle/90U);
+ return (uint16_t)(ALIGN_CENTRE_US-(ALIGN_CENTRE_US-ALIGN_RIGHT_US)*angle/90U);
+}
+uint16_t box_center_servo_us(const BoxCenter *b,uint16_t fallback){
+ if(b->phase==BC_SIDE_SCAN||b->phase==BC_SIDE_RETURN)return b->side_scan.servo_us;
+ return fallback;
+}
+static void side_scan_begin(BoxCenter *b,uint32_t now){
+ b->side_scan.started=true;b->side_scan.index=0;b->side_scan.attempts=b->side_scan.triggers=0;
+ b->side_scan.since=now;b->side_scan.servo_us=side_scan_pulse(b);
+ b->fine_after_rear=true;b->fit_n=0;b->phase=BC_SIDE_SCAN;b->since=now;
+}
+static bool fit_side_scan(BoxCenter *b){
+ b->fit_n=0;
+ for(unsigned k=0;k<b->side_scan.points;++k){
+  uint16_t distance=b->side_scan.range[k];if(distance<40U||distance>250U)continue;
+  float angle=(90.f-5.f*k)*.0174532925199433f;
+  float x=distance*cosf(angle),y=distance*sinf(angle);
+  /* Sort Cartesian points before reusing the existing straight-line fit. */
+  unsigned n=b->fit_n++,j=n;
+  while(j&&b->fit_x[j-1]>x){b->fit_x[j]=b->fit_x[j-1];b->fit_y[j]=b->fit_y[j-1];--j;}
+  b->fit_x[j]=x;b->fit_y[j]=y;
+ }
+ return fit_fine(b);
+}
+static void side_scan_step(BoxCenter *b,uint32_t now,uint32_t trigger,bool fresh,bool valid,uint16_t mm){
+ BoxSideScan *s=&b->side_scan;uint32_t elapsed=now-s->since;
+ if(fresh&&s->attempts<4U&&(uint32_t)(trigger-s->since)>=60U&&
+    (uint32_t)(trigger-s->since)<=elapsed){
+  s->samples[s->attempts++]=valid&&mm>=40U&&mm<=4000U?mm:4000U;
+ }
+ if(elapsed<300U||s->attempts!=4U)return;
+ uint32_t sum=0;uint16_t lo=65535U,hi=0;
+ for(unsigned k=0;k<4;++k){uint16_t v=s->samples[k];sum+=v;if(v<lo)lo=v;if(v>hi)hi=v;}
+ uint16_t d=(uint16_t)((sum-lo-hi+1U)/2U);s->range[s->index]=d;s->points=s->index+1U;
+ if(d>250U||s->index==18U){
+  s->outside=d>250U;s->limit=s->index==18U;s->finished=true;
+  s->fit_ok=fit_side_scan(b);b->fine_done=true;
+  s->servo_us=b->side_left?ALIGN_LEFT_US:ALIGN_RIGHT_US;
+  b->phase=BC_SIDE_RETURN;b->since=now;return;
+ }
+ ++s->index;s->attempts=s->triggers=0;s->since=now;s->servo_us=side_scan_pulse(b);
 }
 void box_center_step(BoxCenter *b,uint32_t now,uint32_t sequence,
  uint32_t trigger_ms,uint32_t echo_ms,bool valid,uint16_t mm,
@@ -86,6 +139,20 @@ void box_center_step(BoxCenter *b,uint32_t now,uint32_t sequence,
  if(cancel){b->phase=BC_CANCELLED;b->error="CANCELLED";b->laser=b->buzzer=false;b->command=BC_CMD_NONE;return;}
  if(fault){box_center_fail(b,"MOTOR");return;}
  bool fresh=sequence!=b->last_seq;if(fresh)b->last_seq=sequence;
+ if(b->phase==BC_SIDE_SCAN){
+  side_scan_step(b,now,trigger_ms,fresh&&now-echo_ms<=100U,valid,mm);return;
+ }
+ if(b->phase==BC_SIDE_RETURN){
+  if(now-b->since<500U)return; /* Allow the probe to return to calibrated side90. */
+  if(b->side_scan.fit_ok&&fine_angle_allowed(b)&&car_motion_pivot_counts(0,fabsf(b->fine_degrees)*.5f)>0&&
+     car_motion_pivot_counts(1,fabsf(b->fine_degrees)*.5f)>0){
+   b->fine_begin_total[0]=total[0];b->fine_begin_total[1]=total[1];b->fine_completed=0;
+   b->phase=b->side_left?BC_FINE_LEFT:BC_FINE_RIGHT;
+   b->command=b->side_left?BC_CMD_FINE_LEFT:BC_CMD_FINE_RIGHT;
+   b->since=now;
+  }else {b->edge=1;b->transit_inside=false;move(b,now,BC_TRANSIT,1,true);}
+  return;
+ }
  if(b->phase==BC_FINE_RIGHT||b->phase==BC_FINE_LEFT){
   if(!busy&&done){
    ++b->fine_completed;b->phase=b->fine_completed==1?BC_FINE_WAIT:BC_FINE_SETTLE;b->since=now;
@@ -94,8 +161,14 @@ void box_center_step(BoxCenter *b,uint32_t now,uint32_t sequence,
  }
  if(b->phase==BC_FINE_WAIT){
   if(now-b->since>=500U){
-   b->phase=b->side_left?BC_FINE_LEFT:BC_FINE_RIGHT;b->since=now;
-   b->command=b->side_left?BC_CMD_FINE_LEFT:BC_CMD_FINE_RIGHT;
+   if(b->fine_after_rear){
+    b->phase=b->side_left?BC_FINE_RIGHT:BC_FINE_LEFT;
+    b->command=b->side_left?BC_CMD_FINE_RIGHT:BC_CMD_FINE_LEFT;
+   }else{
+    b->phase=b->side_left?BC_FINE_LEFT:BC_FINE_RIGHT;
+    b->command=b->side_left?BC_CMD_FINE_LEFT:BC_CMD_FINE_RIGHT;
+   }
+   b->since=now;
   }
   return;
  }
@@ -113,16 +186,19 @@ void box_center_step(BoxCenter *b,uint32_t now,uint32_t sequence,
  }
  if(b->phase==BC_BRAKE){
   if(busy||!done)return;
+  if(b->edge==0&&b->visits[0]>=b->crossings_required&&b->side_scan.enabled&&!b->side_scan.started){
+   side_scan_begin(b,now);return;
+  }
   if(b->edge==1&&b->visits[1]==1&&!b->fine_done){
    b->fine_done=true;
-   if(fit_fine(b)&&car_motion_pivot_counts(0,fabsf(b->fine_degrees)*.5f)>0&&
+   if(b->fine_enabled&&fit_fine(b)&&fine_angle_allowed(b)&&car_motion_pivot_counts(0,fabsf(b->fine_degrees)*.5f)>0&&
       car_motion_pivot_counts(1,fabsf(b->fine_degrees)*.5f)>0){
     b->fine_begin_total[0]=total[0];b->fine_begin_total[1]=total[1];
     b->fine_completed=0;b->phase=b->side_left?BC_FINE_RIGHT:BC_FINE_LEFT;b->since=now;
     b->command=b->side_left?BC_CMD_FINE_RIGHT:BC_CMD_FINE_LEFT;return;
    }
   }
-  if(b->visits[b->edge]<3){
+  if(b->visits[b->edge]<b->crossings_required){
    int dir=-b->direction;move(b,now,BC_EDGE_MOVE,dir,!b->expect_outside);
   }else if(b->edge==0){
    b->edge=1;b->transit_inside=false;if(!b->fine_done)b->fit_n=0;move(b,now,BC_TRANSIT,1,true);
@@ -143,7 +219,7 @@ void box_center_step(BoxCenter *b,uint32_t now,uint32_t sequence,
   }else {b->reference_sum=0;b->reference_hits=0;}
   b->confirm_hits=0;return;
  }
- if(b->phase==BC_TRANSIT&&!b->fine_done&&good&&!outside)sample_face(b,mm);
+ if(b->phase==BC_TRANSIT&&b->fine_enabled&&!b->fine_done&&good&&!outside)sample_face(b,mm);
  bool inside=good&&!outside&&abs((int)mm-(int)b->reference_mm)<=30;
  /* Rear crossing #3 ends outside the face. Arm the FRONT exit only after
     two near-face measurements on the forward traverse, otherwise the same
@@ -158,6 +234,6 @@ void box_center_step(BoxCenter *b,uint32_t now,uint32_t sequence,
  if(++b->confirm_hits==2)crossing(b,now,total);
 }
 const char *box_center_phase_name(BoxCenterPhase p){
- static const char *const names[]={"IDLE","BACK_SEARCH","EDGE_MOVE","EDGE_BRAKE","TO_FRONT","CENTER_BACK","FIRE10S","DONE","CANCELLED","FAILED","FINE_RIGHT","FINE_WAIT","FINE_LEFT","FINE_SETTLE"};
+ static const char *const names[]={"IDLE","BACK_SEARCH","EDGE_MOVE","EDGE_BRAKE","TO_FRONT","CENTER_BACK","FIRE10S","DONE","CANCELLED","FAILED","FINE_RIGHT","FINE_WAIT","FINE_LEFT","FINE_SETTLE","SIDE_SCAN","SIDE_RETURN"};
  return (unsigned)p<sizeof(names)/sizeof(names[0])?names[p]:"UNKNOWN";
 }
