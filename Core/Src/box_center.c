@@ -132,7 +132,7 @@ static void side_scan_step(BoxCenter *b,uint32_t now,uint32_t trigger,bool fresh
 void box_center_step(BoxCenter *b,uint32_t now,uint32_t sequence,
  uint32_t trigger_ms,uint32_t echo_ms,bool valid,uint16_t mm,
  const int32_t total[2],bool busy,bool done,bool fault,bool cancel){
- b->buzzer=false; /* User requested silent operation; laser timing retained. */
+ b->buzzer=b->phase==BC_FIRE; /* Synchronous10s laser/buzzer output. */
  if(b->phase==BC_IDLE)return;
  position(b,total); /* Includes braking coast, stopped motion, and all restarts. */
  if(b->phase==BC_DONE||b->phase==BC_CANCELLED||b->phase==BC_FAILED)return;
@@ -181,7 +181,7 @@ void box_center_step(BoxCenter *b,uint32_t now,uint32_t sequence,
   return;
  }
  if(b->phase==BC_CENTER_MOVE){
-  if(!busy&&done){b->phase=BC_FIRE;b->since=now;b->laser=true;b->buzzer=false;}
+  if(!busy&&done){b->phase=BC_FIRE;b->since=now;b->laser=b->buzzer=true;}
   return;
  }
  if(b->phase==BC_BRAKE){

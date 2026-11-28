@@ -73,7 +73,7 @@ static void run(bool left,bool invalid_far,float slope){
   int32_t total[2]={c.motor.wheel[0].total,c.motor.wheel[1].total};
   FourFacesPhase before=t.phase;unsigned before_shots=g_laser_shots;
   four_faces_step(&t,&b,now,seq,trig,trig,valid,mm,total,c.motor.running,car_motion_done(&c),false,false);
-  assert(t.phase!=FF_FAILED&&t.phase!=FF_CANCELLED&&g_laser_shots<=4&&!b.buzzer);
+  assert(t.phase!=FF_FAILED&&t.phase!=FF_CANCELLED&&g_laser_shots<=4);
   if(t.phase==FF_FACE){
    assert(t.face_number==g_laser_shots+1U);
    assert(b.fine_enabled==(t.face_number%2==1U));
@@ -104,6 +104,8 @@ static void run(bool left,bool invalid_far,float slope){
    fire_start=now;++shots_on;
   }
   if(t.phase!=FF_FACE)assert(!b.laser);
+  if(t.phase!=FF_SIGNAL)assert(b.buzzer==b.laser);
+  else assert(!c.motor.running&&g_laser_shots==4);
   prev_laser=b.laser;
   if(t.phase==FF_DONE){
    assert(g_laser_shots==4&&shots_on==4&&inner_calls==3&&outer_calls==3&&clear_calls==3);
@@ -162,4 +164,27 @@ static void cancel_fault_check(void){
   assert(t.phase==FF_CANCELLED&&g_laser_shots==1&&!b.laser&&t.command==FF_CMD_NONE);
  }
 }
-int main(void){fresh_exit_check();cancel_fault_check();run(true,false,0);run(false,true,0);run(true,true,.04f);run(false,false,-.04f);}
+static void beep_check(void){
+ for(unsigned wrap=0;wrap<2;++wrap){
+  FourFaces t;BoxCenter b;int32_t total[2]={0,0};uint32_t start=wrap?UINT32_MAX-1000U:100U;
+  four_faces_start(&t,&b,true,start,0);g_laser_shots=3;b.phase=BC_DONE;
+  four_faces_step(&t,&b,start,0,start,start,true,100,total,false,true,false,false);
+  assert(t.phase==FF_SIGNAL&&g_laser_shots==4&&!b.buzzer&&!b.laser);
+  unsigned rises=0,on=0;bool prior=false;
+  for(unsigned dt=0;dt<=9800;++dt){
+   unsigned slot=dt>=200U?(dt-200U)%2500U:0;bool expected=dt>=200U&&dt<7200U&&(slot<300U||(slot>=500U&&slot<800U)||(slot>=1000U&&slot<2000U));
+   four_faces_step(&t,&b,start+dt,0,start,start,true,100,total,false,true,false,false);
+   assert(b.buzzer==expected&&!b.laser&&t.command==FF_CMD_NONE&&g_laser_shots==4);
+   if(b.buzzer&&!prior)++rises;
+   if(b.buzzer)++on;
+   prior=b.buzzer;
+  }
+  assert(t.phase==FF_DONE&&rises==9&&on==4800);
+ }
+ FourFaces t;BoxCenter b;int32_t total[2]={0};four_faces_start(&t,&b,true,0,0);t.phase=FF_SIGNAL;b.buzzer=true;
+ four_faces_step(&t,&b,1,0,0,0,false,0,total,false,true,false,true);assert(!b.buzzer&&t.phase==FF_CANCELLED);
+ four_faces_start(&t,&b,true,0,0);t.phase=FF_SIGNAL;b.buzzer=true;
+ four_faces_step(&t,&b,1,0,0,0,false,0,total,false,true,true,false);assert(!b.buzzer&&t.phase==FF_FAILED);
+ puts("PASS completion buzzer: 200ms silence then nine pulses,300/300/1000ms x3, gaps, no motion/laser, timer wrap, cancel/fault silence");
+}
+int main(void){beep_check();fresh_exit_check();cancel_fault_check();run(true,false,0);run(false,true,0);run(true,true,.04f);run(false,false,-.04f);}

@@ -48,7 +48,7 @@ static void unit_checks(void){
  assert(b.visits[0]==2);
  b.phase=BC_FIRE;b.since=600;b.laser=b.buzzer=true;
  box_center_step(&b,10599,18,520,524,true,100,total,false,true,false,false);
- assert(b.laser&&!b.buzzer);
+ assert(b.laser&&b.buzzer);
  box_center_step(&b,10600,18,520,524,true,100,total,false,true,false,false);
  assert(b.phase==BC_DONE&&!b.laser&&!b.buzzer);
  box_center_start(&b,0,0);b.phase=BC_FIRE;b.laser=b.buzzer=true;
@@ -84,7 +84,7 @@ static void full_run(int32_t initial,int32_t width,bool missing_outside,float sl
    box_center_step(&b,now,seq,trigger,trigger,valid,mm,total,c.motor.running,car_motion_done(&c),false,false);
    assert(b.phase!=BC_FAILED);command(&b,&c);
    assert(b.visits[0]>=previous_rear);previous_rear=b.visits[0];
-   assert(!b.buzzer);
+   assert(b.buzzer==b.laser);
    if(b.phase==BC_FINE_RIGHT||b.phase==BC_FINE_LEFT){
     unsigned wheel=b.phase==BC_FINE_RIGHT?1U:0U;
     if(first_wheel<0)first_wheel=(int)wheel;
@@ -100,7 +100,7 @@ static void full_run(int32_t initial,int32_t width,bool missing_outside,float sl
    }
 
    if(b.phase==BC_FIRE){
-    assert(!c.motor.running&&car_motion_done(&c)&&b.laser&&!b.buzzer);
+    assert(!c.motor.running&&car_motion_done(&c)&&b.laser&&b.buzzer);
     if(!reached){fire=now;reached=true;
      if(slope!=0){
       assert(saw_right&&saw_left&&saw_resume&&b.fine_done);
@@ -145,4 +145,4 @@ static void no_stall_check(void){
  assert(c.motor.error==DM_OK&&c.motor.running);
  puts("PASS: zero encoder no longer trips STALL in reverse or pivot; driver fault retained");
 }
-int main(void){front_entry_check();no_stall_check();unit_checks();full_run(400,800,false,0,false);full_run(650,1300,true,0,true);full_run(400,800,false,.06f,false);full_run(400,800,true,-.06f,true);full_run(400,800,false,.06f,true);full_run(2500,5000,false,.01f,false);puts("PASS: rear3/front3, side-dependent pivot order, fine then front2/front3, no rear remeasurement, silent laser, signed position, encoder wrap and stopped firing");}
+int main(void){front_entry_check();no_stall_check();unit_checks();full_run(400,800,false,0,false);full_run(650,1300,true,0,true);full_run(400,800,false,.06f,false);full_run(400,800,true,-.06f,true);full_run(400,800,false,.06f,true);full_run(2500,5000,false,.01f,false);puts("PASS: rear3/front3, side-dependent pivot order, fine then front2/front3, no rear remeasurement, synchronous laser/buzzer, signed position, encoder wrap and stopped firing");}

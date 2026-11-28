@@ -39,6 +39,17 @@ void four_faces_step(FourFaces *t,BoxCenter *b,uint32_t now,uint32_t seq,
  }
  if(t->phase==FF_DONE||t->phase==FF_CANCELLED||t->phase==FF_FAILED)return;
  if(fault){four_faces_fail(t,b,"MOTOR");return;}
+ if(t->phase==FF_SIGNAL){
+  /*200ms silence after laser, then three groups of300/300/1000ms.
+     Sound gaps200ms; group gaps500ms. Final sound ends at7200ms. */
+  uint32_t elapsed=now-t->since;
+  uint32_t slot=elapsed>=200U?(elapsed-200U)%2500U:0;
+  b->laser=false;b->command=BC_CMD_NONE;t->command=FF_CMD_NONE;
+  b->buzzer=elapsed>=200U&&elapsed<7200U&&
+   (slot<300U||(slot>=500U&&slot<800U)||(slot>=1000U&&slot<2000U));
+  if(elapsed>=7200U){b->buzzer=false;stage(t,FF_DONE,now);}
+  return;
+ }
  uint32_t previous_seq=t->last_seq;
  bool fresh=seq!=previous_seq;if(fresh)t->last_seq=seq;
  if(t->phase==FF_FACE){
@@ -48,7 +59,7 @@ void four_faces_step(FourFaces *t,BoxCenter *b,uint32_t now,uint32_t seq,
   if(b->phase==BC_DONE){
    record_face(t,b);++g_laser_shots; /* Count only a completed10s shot. */
    b->laser=b->buzzer=false;b->command=BC_CMD_NONE;
-   if(g_laser_shots==FOUR_FACE_COUNT){stage(t,FF_DONE,now);return;}
+   if(g_laser_shots==FOUR_FACE_COUNT){stage(t,FF_SIGNAL,now);b->buzzer=false;return;}
    stage(t,FF_EXIT,now);t->exit_inside=false;t->exit_samples=0;t->command=FF_CMD_FORWARD;
   }
   return;
@@ -134,6 +145,6 @@ bool four_faces_moving(const FourFaces *t){
  return t->phase==FF_EXIT||t->phase==FF_INNER||t->phase==FF_OUTER||t->phase==FF_ACQUIRE;
 }
 const char *four_faces_phase_name(FourFacesPhase p){
- static const char *const names[]={"IDLE","FACE","EXIT_FACE","EXIT_BRAKE","CORNER_WAIT","INNER_45","TURN_GAP","OUTER_45","TURN_SETTLE","FIND_NEW_FACE","NEW_FACE_BRAKE","ALL_DONE","CANCELLED","FAILED"};
+ static const char *const names[]={"IDLE","FACE","EXIT_FACE","EXIT_BRAKE","CORNER_WAIT","INNER_45","TURN_GAP","OUTER_45","TURN_SETTLE","FIND_NEW_FACE","NEW_FACE_BRAKE","ALL_DONE","CANCELLED","FAILED","FINISH_BEEP"};
  return (unsigned)p<sizeof(names)/sizeof(names[0])?names[p]:"UNKNOWN";
 }

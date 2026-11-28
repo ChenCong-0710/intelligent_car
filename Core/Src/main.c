@@ -462,7 +462,7 @@ static void four_faces_telemetry(uint32_t now){
  if(now-last<1000U&&previous==t->phase)return;
  last=now;previous=t->phase;char line[384];
  int n=snprintf(line,sizeof(line),
- "F,fw=BOX_FINE10_OUT24_V29,ms=%lu,phase=%s,face=%u,shots=%u,side=%s,clearL=%ld,clearR=%ld,clear=%ld,outN=%u,need=%u,inner=%u,outer=%u,turn10=%d,Ldeg10=%ld,Rdeg10=%ld,ref=%u,error=%s\r\n",
+ "F,fw=BOX_BEEP031_V31,ms=%lu,phase=%s,face=%u,shots=%u,side=%s,clearL=%ld,clearR=%ld,clear=%ld,outN=%u,need=%u,inner=%u,outer=%u,turn10=%d,Ldeg10=%ld,Rdeg10=%ld,ref=%u,error=%s\r\n",
  (unsigned long)now,four_faces_phase_name(t->phase),t->face_number,g_laser_shots,t->side_left?"LEFT":"RIGHT",
  (long)t->clearance_counts[0],(long)t->clearance_counts[1],(long)t->clearance_mean,t->exit_samples,FOUR_EXIT_SAMPLES,t->inner_wheel,t->outer_wheel,
  t->side_left?900:-900,x10(t->corner_wheel_degrees[0]),x10(t->corner_wheel_degrees[1]),t->new_reference,t->error);
@@ -497,7 +497,7 @@ static void sonar_telemetry(uint32_t now,const MotorView *v){
  else if(g_box_center.phase==BC_SIDE_RETURN)wait="SIDE_RETURN";
  else if(g_align.phase==ALIGN_SCAN)wait="SCAN";
  char line[448];int n=snprintf(line,sizeof(line),
- "U,fw=BOX_FINE10_OUT24_V29,seq=%lu,ms=%lu,trig=%lu,dt=%lu,echoUs=%u,mm=%u,ok=%u,why=%s,wait=%s,hits=%u,ref=%u,pos=%ld,brL=%u,brR=%u,pL=%ld,pR=%ld,uL=%ld,uR=%ld,kpL=%ld,kpR=%ld,kdL=%ld,kdR=%ld,boostL=%u,boostR=%u,lowL=%lu,lowR=%lu,drop=%lu\r\n",
+ "U,fw=BOX_BEEP031_V31,seq=%lu,ms=%lu,trig=%lu,dt=%lu,echoUs=%u,mm=%u,ok=%u,why=%s,wait=%s,hits=%u,ref=%u,pos=%ld,brL=%u,brR=%u,pL=%ld,pR=%ld,uL=%ld,uR=%ld,kpL=%ld,kpR=%ld,kdL=%ld,kdR=%ld,boostL=%u,boostR=%u,lowL=%lu,lowR=%lu,drop=%lu\r\n",
  (unsigned long)us_seq,(unsigned long)now,(unsigned long)us_result_trigger_ms,(unsigned long)us_result_period_ms,
  us_pulse_us,us_mm,us_valid,us_reason,wait,hits,reference,(long)((g_four_faces.phase==FF_EXIT||g_four_faces.phase==FF_EXIT_BRAKE)?g_corner_progress:g_box_position),
  v->status.brake[0],v->status.brake[1],lroundf(v->status.speed[0]),lroundf(v->status.speed[1]),
@@ -513,7 +513,7 @@ static void center_telemetry(uint32_t now){
  if(now-last<500U&&previous==b->phase)return;
  last=now;previous=b->phase;char line[768];
  int n=snprintf(line,sizeof(line),
- "C,fw=BOX_FINE10_OUT24_V29,id=%lu,ms=%lu,phase=%s,pos=%ld,refMm=%u,refHits=%u,edge=%u,visitsRear=%u,visitsFront=%u,edgeNeed=%u,face=%u,shots=%u,armed=%u,rearMin=%ld,rearMax=%ld,frontMin=%ld,frontMax=%ld,target=%ld,dir=%d,laser=%u,buzzer=%u,error=%s,fine10=%ld,fineRms10=%ld,fineN=%u,fineDone=%u,fineWarn=%u,fineSkip=%u,fineL10=%ld,fineR10=%ld,r0=%ld,r1=%ld,r2=%ld,r3=%ld,f0=%ld,f1=%ld,f2=%ld,f3=%ld,sideIdx=%u,sideN=%u,sideUs=%u,sideOut=%u,sideLimit=%u,sideFit=%u\r\n",
+ "C,fw=BOX_BEEP031_V31,id=%lu,ms=%lu,phase=%s,pos=%ld,refMm=%u,refHits=%u,edge=%u,visitsRear=%u,visitsFront=%u,edgeNeed=%u,face=%u,shots=%u,armed=%u,rearMin=%ld,rearMax=%ld,frontMin=%ld,frontMax=%ld,target=%ld,dir=%d,laser=%u,buzzer=%u,error=%s,fine10=%ld,fineRms10=%ld,fineN=%u,fineDone=%u,fineWarn=%u,fineSkip=%u,fineL10=%ld,fineR10=%ld,r0=%ld,r1=%ld,r2=%ld,r3=%ld,f0=%ld,f1=%ld,f2=%ld,f3=%ld,sideIdx=%u,sideN=%u,sideUs=%u,sideOut=%u,sideLimit=%u,sideFit=%u\r\n",
  (unsigned long)id++,(unsigned long)now,box_center_phase_name(b->phase),(long)b->position,b->reference_mm,b->reference_hits,b->edge,
  b->visits[0],b->visits[1],b->crossings_required,g_four_faces.face_number,g_laser_shots,b->transit_inside,(long)b->minimum[0],(long)b->maximum[0],(long)b->minimum[1],(long)b->maximum[1],(long)b->target,b->direction,b->laser,b->buzzer,b->error,x10(b->fine_degrees),x10(b->fine_rms),b->fit_n,b->fine_done,b->fine_warning,b->fine_skipped,x10(b->fine_wheel[0]),x10(b->fine_wheel[1]),
  (long)b->crossings[0][0],(long)b->crossings[0][1],(long)b->crossings[0][2],(long)b->crossings[0][3],
@@ -526,14 +526,14 @@ static void telemetry(uint32_t now,const MotorView *v){
  /* Log every accepted face sample, not only the 200ms status snapshot. */
  while(sent_points<g_align.line_n){
   unsigned i=sent_points++;char sample[128];
-  int n=snprintf(sample,sizeof(sample),"L,fw=BOX_FINE10_OUT24_V29,i=%u,x10=%ld,range10=%ld\r\n",i,x10(g_align.line_x[i]),x10(g_align.line_y[i]));
+  int n=snprintf(sample,sizeof(sample),"L,fw=BOX_BEEP031_V31,i=%u,x10=%ld,range10=%ld\r\n",i,x10(g_align.line_x[i]),x10(g_align.line_y[i]));
   if(n>0&&(size_t)n<sizeof(sample))bt_queue(sample,(size_t)n);else ++bt_drop;
  }
  static uint32_t last,seq;static AlignPhase previous=(AlignPhase)255;char line[1024];
  if(now-last<200&&g_align.phase==previous)return;
  last=now;previous=g_align.phase;
  int n=snprintf(line,sizeof(line),
- "M,fw=BOX_FINE10_OUT24_V29,seq=%lu,ms=%lu,phase=%s,action=%s,error=%s,motorError=%s,scan=%u,servo=%u,range=%u,valid=%u,side=%s,normal10=%ld,target10=%ld,actual10=%ld,wheelLdeg10=%ld,wheelRdeg10=%ld,edgeL=%u,edgeR=%u,edgeLmm=%u,edgeRmm=%u,edgeNormal10=%ld,centreY10=%ld,moveWheel=%u,dir=%d,refL10=%ld,refR10=%ld,pulseL=%ld,pulseR=%ld,pwmL1000=%ld,pwmR1000=%ld,countL=%lu,countR=%lu,goalL=%ld,goalR=%ld,fitSupport=%u,fitTotal=%u,fitRms10=%ld,entry=%lu,entryInferred=%u,exit=%lu,lineN=%u,lineSupport=%u,lineRms10=%ld,fine10=%ld,fineNormal10=%ld,lineWarn=%u,front=%u,planMm=%u,stopMm=%u,stopHits=%u,remain=%ld,approachPlan=%u,echoLost=%u,txdrop=%lu,irqUs=%lu\r\n",
+ "M,fw=BOX_BEEP031_V31,seq=%lu,ms=%lu,phase=%s,action=%s,error=%s,motorError=%s,scan=%u,servo=%u,range=%u,valid=%u,side=%s,normal10=%ld,target10=%ld,actual10=%ld,wheelLdeg10=%ld,wheelRdeg10=%ld,edgeL=%u,edgeR=%u,edgeLmm=%u,edgeRmm=%u,edgeNormal10=%ld,centreY10=%ld,moveWheel=%u,dir=%d,refL10=%ld,refR10=%ld,pulseL=%ld,pulseR=%ld,pwmL1000=%ld,pwmR1000=%ld,countL=%lu,countR=%lu,goalL=%ld,goalR=%ld,fitSupport=%u,fitTotal=%u,fitRms10=%ld,entry=%lu,entryInferred=%u,exit=%lu,lineN=%u,lineSupport=%u,lineRms10=%ld,fine10=%ld,fineNormal10=%ld,lineWarn=%u,front=%u,planMm=%u,stopMm=%u,stopHits=%u,remain=%ld,approachPlan=%u,echoLost=%u,txdrop=%lu,irqUs=%lu\r\n",
  (unsigned long)seq++,(unsigned long)now,task_phase(),stage_action(),task_error(),dual_motor_error_name(v->status.error),
  g_align.index,box_center_servo_us(&g_box_center,g_align.servo_us),us_mm,us_valid,g_align.side_left?"LEFT":"RIGHT",x10(g_align.normal_deg),x10(g_align.target_deg),x10(g_align.actual_deg),x10(g_align.wheel_degrees[0]),x10(g_align.wheel_degrees[1]),
  g_align.fit_first,g_align.fit_last,g_align.edge_left_mm,g_align.edge_right_mm,x10(g_align.edge_normal_deg),x10(g_align.centre_y_mm),g_align.moving_wheel,g_align.motor_direction,
@@ -544,7 +544,7 @@ static void telemetry(uint32_t now,const MotorView *v){
 /* Dump the actual settled scan averages BEFORE fitting; live range telemetry
    may be from a different servo position. One bounded frame, no RX commands. */
 static void scan_telemetry(void){
- char line[384];int n=snprintf(line,sizeof(line),"S,fw=BOX_FINE10_OUT24_V29");
+ char line[384];int n=snprintf(line,sizeof(line),"S,fw=BOX_BEEP031_V31");
  for(unsigned i=0;i<ALIGN_POINTS&&n>0&&(size_t)n<sizeof(line);++i){
   int k=snprintf(line+n,sizeof(line)-(size_t)n,",p%u=%u",i,g_align.range[i]);
   if(k<0||(size_t)k>=sizeof(line)-(size_t)n){++bt_drop;return;}n+=k;
@@ -697,7 +697,9 @@ int main(void){
    bool firing=g_box_center.laser&&!cancel_requested&&
     g_car.motor.phase==DM_STOPPED&&!g_car.motor.running;
    HAL_GPIO_WritePin(GPIOC,GPIO_PIN_8,firing?GPIO_PIN_SET:GPIO_PIN_RESET);
-   HAL_GPIO_WritePin(GPIOC,GPIO_PIN_9,GPIO_PIN_RESET); /* Buzzer disabled. */
+   bool buzzing=!cancel_requested&&g_car.motor.phase==DM_STOPPED&&!g_car.motor.running&&
+    (firing||(g_four_faces.phase==FF_SIGNAL&&g_box_center.buzzer));
+   HAL_GPIO_WritePin(GPIOC,GPIO_PIN_9,buzzing?GPIO_PIN_SET:GPIO_PIN_RESET);
    MotorView trace_view=motor_snapshot();sonar_telemetry(now,&trace_view);
    TIM2->CCR1=now-g_align.started>=10?box_center_servo_us(&g_box_center,g_align.servo_us):0;
    HAL_GPIO_WritePin(GPIOD,GPIO_PIN_8,(g_align.phase==ALIGN_TURN||g_align.phase==ALIGN_TURN_LEFT||g_align.phase==ALIGN_APPROACH||g_align.phase==ALIGN_APPROACH_STOP||g_box_center.phase==BC_BACK_SEARCH||g_box_center.phase==BC_EDGE_MOVE||g_box_center.phase==BC_TRANSIT||g_box_center.phase==BC_CENTER_MOVE||g_box_center.phase==BC_FINE_RIGHT||g_box_center.phase==BC_FINE_LEFT||four_faces_moving(&g_four_faces))?GPIO_PIN_RESET:GPIO_PIN_SET);
